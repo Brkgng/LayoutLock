@@ -1,0 +1,1012 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000002 /* LayoutLockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* LayoutLockApp.swift */; };
+		A0000000000000000000001C /* MenuBarContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* MenuBarContentView.swift */; };
+		A0000000000000000000001E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001F /* SettingsView.swift */; };
+		A00000000000000000000020 /* AppSupportDirectoryBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* AppSupportDirectoryBootstrapper.swift */; };
+		A00000000000000000000022 /* AccessibilityAuthorizationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* AccessibilityAuthorizationState.swift */; };
+		A00000000000000000000024 /* AccessibilityTrustChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* AccessibilityTrustChecker.swift */; };
+		A00000000000000000000026 /* PermissionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* PermissionCoordinator.swift */; };
+		A00000000000000000000032 /* AXAttributeReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* AXAttributeReader.swift */; };
+		A00000000000000000000034 /* WindowDiscoveryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000035 /* WindowDiscoveryEngine.swift */; };
+		A00000000000000000000036 /* CGWindowMetadataReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000037 /* CGWindowMetadataReader.swift */; };
+		A00000000000000000000038 /* GeometryCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000039 /* GeometryCodable.swift */; };
+		A0000000000000000000003A /* SnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003B /* SnapshotModels.swift */; };
+		A0000000000000000000003C /* RestoreResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003D /* RestoreResult.swift */; };
+		A0000000000000000000003E /* SnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003F /* SnapshotStore.swift */; };
+		A00000000000000000000040 /* DisplayResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000041 /* DisplayResolver.swift */; };
+		A00000000000000000000042 /* SnapshotCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000043 /* SnapshotCaptureService.swift */; };
+		A00000000000000000000044 /* SnapshotNamePrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000045 /* SnapshotNamePrompt.swift */; };
+		A00000000000000000000046 /* SnapshotMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000047 /* SnapshotMenuController.swift */; };
+		A00000000000000000000048 /* DisplayResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000004A /* DisplayResolverTests.swift */; };
+		A00000000000000000000055 /* PermissionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000056 /* PermissionCoordinatorTests.swift */; };
+		A00000000000000000000061 /* RestoreEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000062 /* RestoreEngine.swift */; };
+		A00000000000000000000063 /* RestoreWindowMatchPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000064 /* RestoreWindowMatchPlannerTests.swift */; };
+		A00000000000000000000065 /* HotkeyBindingValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* HotkeyBindingValidation.swift */; };
+		A00000000000000000000067 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000068 /* HotkeyManager.swift */; };
+		A00000000000000000000069 /* HotkeyCapturePrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* HotkeyCapturePrompt.swift */; };
+		A0000000000000000000006B /* HotkeyBindingValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */; };
+		A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */; };
+		A00000000000000000000070 /* HotkeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000071 /* HotkeyManagerTests.swift */; };
+		A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */; };
+		A00000000000000000000074 /* LaunchAtLoginController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000075 /* LaunchAtLoginController.swift */; };
+		A00000000000000000000077 /* LaunchAtLoginControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000078 /* LaunchAtLoginControllerTests.swift */; };
+		A00000000000000000000079 /* TelemetryLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000007A /* TelemetryLogger.swift */; };
+		A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000007C /* TelemetryLoggerTests.swift */; };
+		A00000000000000000000080 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000081 /* DashboardView.swift */; };
+		A00000000000000000000083 /* DashboardAppIdentityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000084 /* DashboardAppIdentityResolver.swift */; };
+		A00000000000000000000085 /* DashboardPresentationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000086 /* DashboardPresentationModels.swift */; };
+		A00000000000000000000087 /* DashboardAppListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000088 /* DashboardAppListView.swift */; };
+		A00000000000000000000089 /* DashboardSnapshotPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000008A /* DashboardSnapshotPreviewView.swift */; };
+		A0000000000000000000009B /* DashboardVisualStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009C /* DashboardVisualStyle.swift */; };
+		A0000000000000000000008B /* DashboardPresentationModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000008C /* DashboardPresentationModelsTests.swift */; };
+		A0000000000000000000008D /* OperationOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000008E /* OperationOverlayController.swift */; };
+		A0000000000000000000008F /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000090 /* AppLogger.swift */; };
+		A00000000000000000000091 /* ValueExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000092 /* ValueExtensions.swift */; };
+		A00000000000000000000093 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000094 /* TestSupport.swift */; };
+		A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */; };
+		A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */; };
+		A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009A /* AXAttributeReaderTests.swift */; };
+		B00000000000000000000001 /* OnboardingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* OnboardingStore.swift */; };
+		B00000000000000000000003 /* OnboardingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* OnboardingController.swift */; };
+		B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* PermissionInterventionRouter.swift */; };
+		B00000000000000000000007 /* OnboardingPermissionEducationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000008 /* OnboardingPermissionEducationView.swift */; };
+		B00000000000000000000009 /* OnboardingWelcomeStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* OnboardingWelcomeStep.swift */; };
+		B0000000000000000000000B /* OnboardingAuthorizedReadyStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000C /* OnboardingAuthorizedReadyStep.swift */; };
+		B0000000000000000000000D /* OnboardingReadyStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000E /* OnboardingReadyStep.swift */; };
+		B0000000000000000000000F /* OnboardingContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* OnboardingContainerView.swift */; };
+		B00000000000000000000011 /* OnboardingControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* OnboardingControllerTests.swift */; };
+		B00000000000000000000013 /* PermissionInterventionRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* PermissionInterventionRouterTests.swift */; };
+		C00000000000000000000001 /* DisplayConfigurationMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* DisplayConfigurationMatcher.swift */; };
+		C00000000000000000000003 /* DisplayChangeRestoreController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* DisplayChangeRestoreController.swift */; };
+		C00000000000000000000005 /* LayoutLockSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* LayoutLockSettings.swift */; };
+		C00000000000000000000007 /* DisplayChangeRestoreControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* DisplayChangeRestoreControllerTests.swift */; };
+		C00000000000000000000009 /* LayoutLockSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000A /* LayoutLockSettingsTests.swift */; };
+		D00000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000002 /* Assets.xcassets */; };
+		E00000000000000000000001 /* EntitlementModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000002 /* EntitlementModels.swift */; };
+		E00000000000000000000003 /* LicenseActivationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000004 /* LicenseActivationClient.swift */; };
+		E00000000000000000000005 /* EntitlementStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000006 /* EntitlementStore.swift */; };
+		E00000000000000000000007 /* EntitlementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000008 /* EntitlementController.swift */; };
+		E00000000000000000000009 /* EntitlementControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000A /* EntitlementControllerTests.swift */; };
+		E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */; };
+		E0000000000000000000000F /* EntitlementReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000E /* EntitlementReceipt.swift */; };
+		F00000000000000000000001 /* AppUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* AppUpdateController.swift */; };
+		F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* AppUpdateControllerTests.swift */; };
+		F00000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F00000000000000000000007 /* Sparkle */; };
+		F00000000000000000000009 /* AppUpdatePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000B /* AppUpdatePresentation.swift */; };
+		F0000000000000000000000A /* AppUpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* AppUpdateView.swift */; };
+		F0000000000000000000000D /* AppUpdateUserDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000E /* AppUpdateUserDriverTests.swift */; };
+		G00000000000000000000001 /* BrowserAutomationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000011 /* BrowserAutomationModels.swift */; };
+		G00000000000000000000002 /* BrowserAutomationPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000012 /* BrowserAutomationPermission.swift */; };
+		G00000000000000000000003 /* BrowserTabCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000013 /* BrowserTabCapture.swift */; };
+		G00000000000000000000004 /* BrowserWindowTargetEnricher.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000014 /* BrowserWindowTargetEnricher.swift */; };
+		G00000000000000000000005 /* BrowserAutomationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000015 /* BrowserAutomationTests.swift */; };
+		G00000000000000000000006 /* BrowserWindowRestore.swift in Sources */ = {isa = PBXBuildFile; fileRef = G00000000000000000000016 /* BrowserWindowRestore.swift */; };
+		H00000000000000000000001 /* AppLaunchPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = H00000000000000000000004 /* AppLaunchPresentation.swift */; };
+		H00000000000000000000002 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = H00000000000000000000005 /* main.swift */; };
+		H00000000000000000000003 /* LayoutLockLoginHelper.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = H00000000000000000000006 /* LayoutLockLoginHelper.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A0000000000000000000004B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000006 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A0000000000000000000000F;
+			remoteInfo = LayoutLock;
+		};
+		H00000000000000000000007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000006 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = H0000000000000000000000D;
+			remoteInfo = LayoutLockLoginHelper;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		H00000000000000000000008 /* Embed Login Items */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LoginItems;
+			dstSubfolderSpec = 1;
+			files = (
+				H00000000000000000000003 /* LayoutLockLoginHelper.app in Embed Login Items */,
+			);
+			name = "Embed Login Items";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A0000000000000000000000A /* LayoutLock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLock.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000012 /* LayoutLockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLockApp.swift; sourceTree = "<group>"; };
+		A0000000000000000000001D /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
+		A0000000000000000000001F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A00000000000000000000021 /* AppSupportDirectoryBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSupportDirectoryBootstrapper.swift; sourceTree = "<group>"; };
+		A00000000000000000000023 /* AccessibilityAuthorizationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuthorizationState.swift; sourceTree = "<group>"; };
+		A00000000000000000000025 /* AccessibilityTrustChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTrustChecker.swift; sourceTree = "<group>"; };
+		A00000000000000000000027 /* PermissionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCoordinator.swift; sourceTree = "<group>"; };
+		A00000000000000000000033 /* AXAttributeReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXAttributeReader.swift; sourceTree = "<group>"; };
+		A00000000000000000000035 /* WindowDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryEngine.swift; sourceTree = "<group>"; };
+		A00000000000000000000037 /* CGWindowMetadataReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGWindowMetadataReader.swift; sourceTree = "<group>"; };
+		A00000000000000000000039 /* GeometryCodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryCodable.swift; sourceTree = "<group>"; };
+		A0000000000000000000003B /* SnapshotModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotModels.swift; sourceTree = "<group>"; };
+		A0000000000000000000003D /* RestoreResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreResult.swift; sourceTree = "<group>"; };
+		A0000000000000000000003F /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000041 /* DisplayResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayResolver.swift; sourceTree = "<group>"; };
+		A00000000000000000000043 /* SnapshotCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCaptureService.swift; sourceTree = "<group>"; };
+		A00000000000000000000045 /* SnapshotNamePrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotNamePrompt.swift; sourceTree = "<group>"; };
+		A00000000000000000000047 /* SnapshotMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuController.swift; sourceTree = "<group>"; };
+		A00000000000000000000049 /* LayoutLockTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LayoutLockTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0000000000000000000004A /* DisplayResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayResolverTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000056 /* PermissionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCoordinatorTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000062 /* RestoreEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreEngine.swift; sourceTree = "<group>"; };
+		A00000000000000000000064 /* RestoreWindowMatchPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreWindowMatchPlannerTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000066 /* HotkeyBindingValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyBindingValidation.swift; sourceTree = "<group>"; };
+		A00000000000000000000068 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
+		A0000000000000000000006A /* HotkeyCapturePrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyCapturePrompt.swift; sourceTree = "<group>"; };
+		A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyBindingValidatorTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStoreHotkeyTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000071 /* HotkeyManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManagerTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuControllerHotkeyTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000075 /* LaunchAtLoginController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginController.swift; sourceTree = "<group>"; };
+		A00000000000000000000078 /* LaunchAtLoginControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginControllerTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000007A /* TelemetryLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryLogger.swift; sourceTree = "<group>"; };
+		A0000000000000000000007C /* TelemetryLoggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryLoggerTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000081 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A00000000000000000000084 /* DashboardAppIdentityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardAppIdentityResolver.swift; sourceTree = "<group>"; };
+		A00000000000000000000086 /* DashboardPresentationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardPresentationModels.swift; sourceTree = "<group>"; };
+		A00000000000000000000088 /* DashboardAppListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardAppListView.swift; sourceTree = "<group>"; };
+		A0000000000000000000008A /* DashboardSnapshotPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshotPreviewView.swift; sourceTree = "<group>"; };
+		A0000000000000000000009C /* DashboardVisualStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardVisualStyle.swift; sourceTree = "<group>"; };
+		A0000000000000000000008C /* DashboardPresentationModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardPresentationModelsTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000008E /* OperationOverlayController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationOverlayController.swift; sourceTree = "<group>"; };
+		A00000000000000000000090 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
+		A00000000000000000000092 /* ValueExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValueExtensions.swift; sourceTree = "<group>"; };
+		A00000000000000000000094 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCaptureServiceTests.swift; sourceTree = "<group>"; };
+		A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryEngineTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000009A /* AXAttributeReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXAttributeReaderTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000002 /* OnboardingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000004 /* OnboardingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingController.swift; sourceTree = "<group>"; };
+		B00000000000000000000006 /* PermissionInterventionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionInterventionRouter.swift; sourceTree = "<group>"; };
+		B00000000000000000000008 /* OnboardingPermissionEducationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingPermissionEducationView.swift; sourceTree = "<group>"; };
+		B0000000000000000000000A /* OnboardingWelcomeStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingWelcomeStep.swift; sourceTree = "<group>"; };
+		B0000000000000000000000C /* OnboardingAuthorizedReadyStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingAuthorizedReadyStep.swift; sourceTree = "<group>"; };
+		B0000000000000000000000E /* OnboardingReadyStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingReadyStep.swift; sourceTree = "<group>"; };
+		B00000000000000000000010 /* OnboardingContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingContainerView.swift; sourceTree = "<group>"; };
+		B00000000000000000000012 /* OnboardingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingControllerTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000014 /* PermissionInterventionRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionInterventionRouterTests.swift; sourceTree = "<group>"; };
+		C00000000000000000000002 /* DisplayConfigurationMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayConfigurationMatcher.swift; sourceTree = "<group>"; };
+		C00000000000000000000004 /* DisplayChangeRestoreController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayChangeRestoreController.swift; sourceTree = "<group>"; };
+		C00000000000000000000006 /* LayoutLockSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLockSettings.swift; sourceTree = "<group>"; };
+		C00000000000000000000008 /* DisplayChangeRestoreControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayChangeRestoreControllerTests.swift; sourceTree = "<group>"; };
+		C0000000000000000000000A /* LayoutLockSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLockSettingsTests.swift; sourceTree = "<group>"; };
+		D00000000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E00000000000000000000002 /* EntitlementModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementModels.swift; sourceTree = "<group>"; };
+		E00000000000000000000004 /* LicenseActivationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseActivationClient.swift; sourceTree = "<group>"; };
+		E00000000000000000000006 /* EntitlementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementStore.swift; sourceTree = "<group>"; };
+		E00000000000000000000008 /* EntitlementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementController.swift; sourceTree = "<group>"; };
+		E0000000000000000000000A /* EntitlementControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementControllerTests.swift; sourceTree = "<group>"; };
+		E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuControllerMonetizationTests.swift; sourceTree = "<group>"; };
+		E0000000000000000000000E /* EntitlementReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementReceipt.swift; sourceTree = "<group>"; };
+		F00000000000000000000004 /* AppUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateController.swift; sourceTree = "<group>"; };
+		F00000000000000000000005 /* AppUpdateControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateControllerTests.swift; sourceTree = "<group>"; };
+		F0000000000000000000000B /* AppUpdatePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdatePresentation.swift; sourceTree = "<group>"; };
+		F0000000000000000000000C /* AppUpdateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateView.swift; sourceTree = "<group>"; };
+		F0000000000000000000000E /* AppUpdateUserDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateUserDriverTests.swift; sourceTree = "<group>"; };
+		G00000000000000000000011 /* BrowserAutomationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAutomationModels.swift; sourceTree = "<group>"; };
+		G00000000000000000000012 /* BrowserAutomationPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAutomationPermission.swift; sourceTree = "<group>"; };
+		G00000000000000000000013 /* BrowserTabCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTabCapture.swift; sourceTree = "<group>"; };
+		G00000000000000000000014 /* BrowserWindowTargetEnricher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWindowTargetEnricher.swift; sourceTree = "<group>"; };
+		G00000000000000000000015 /* BrowserAutomationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAutomationTests.swift; sourceTree = "<group>"; };
+		G00000000000000000000016 /* BrowserWindowRestore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWindowRestore.swift; sourceTree = "<group>"; };
+		H00000000000000000000004 /* AppLaunchPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchPresentation.swift; sourceTree = "<group>"; };
+		H00000000000000000000005 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		H00000000000000000000006 /* LayoutLockLoginHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLockLoginHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A0000000000000000000000E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F00000000000000000000003 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A0000000000000000000004C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		H0000000000000000000000A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000003 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000004 /* LayoutLock */,
+				H00000000000000000000009 /* LayoutLockLoginHelper */,
+				A0000000000000000000004D /* LayoutLockTests */,
+				A00000000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000004 /* LayoutLock */ = {
+			isa = PBXGroup;
+			children = (
+				D00000000000000000000002 /* Assets.xcassets */,
+				A00000000000000000000057 /* App */,
+				F00000000000000000000006 /* Updates */,
+				A00000000000000000000058 /* MenuBar */,
+				A00000000000000000000082 /* Dashboard */,
+				B00000000000000000000015 /* Onboarding */,
+				A00000000000000000000059 /* Settings */,
+				G00000000000000000000020 /* BrowserAutomation */,
+				A00000000000000000000076 /* LaunchAtLogin */,
+				E0000000000000000000000D /* Monetization */,
+				A0000000000000000000005A /* Permissions */,
+				A0000000000000000000005B /* WindowDiscovery */,
+				A0000000000000000000005C /* Snapshots */,
+				A0000000000000000000005D /* Displays */,
+				A0000000000000000000005E /* Restore */,
+				A0000000000000000000006F /* Hotkeys */,
+				A0000000000000000000005F /* Infrastructure */,
+				A00000000000000000000060 /* Shared */,
+			);
+			path = LayoutLock;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000000A /* LayoutLock.app */,
+				H00000000000000000000006 /* LayoutLockLoginHelper.app */,
+				A00000000000000000000049 /* LayoutLockTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000004D /* LayoutLockTests */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000005 /* AppUpdateControllerTests.swift */,
+				F0000000000000000000000E /* AppUpdateUserDriverTests.swift */,
+				A0000000000000000000009A /* AXAttributeReaderTests.swift */,
+				G00000000000000000000015 /* BrowserAutomationTests.swift */,
+				C00000000000000000000008 /* DisplayChangeRestoreControllerTests.swift */,
+				A0000000000000000000004A /* DisplayResolverTests.swift */,
+				C0000000000000000000000A /* LayoutLockSettingsTests.swift */,
+				A0000000000000000000008C /* DashboardPresentationModelsTests.swift */,
+				E0000000000000000000000A /* EntitlementControllerTests.swift */,
+				A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */,
+				A00000000000000000000071 /* HotkeyManagerTests.swift */,
+				A00000000000000000000078 /* LaunchAtLoginControllerTests.swift */,
+				B00000000000000000000012 /* OnboardingControllerTests.swift */,
+				A00000000000000000000056 /* PermissionCoordinatorTests.swift */,
+				B00000000000000000000014 /* PermissionInterventionRouterTests.swift */,
+				A00000000000000000000064 /* RestoreWindowMatchPlannerTests.swift */,
+				A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */,
+				A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */,
+				E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */,
+				A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */,
+				A0000000000000000000007C /* TelemetryLoggerTests.swift */,
+				A00000000000000000000094 /* TestSupport.swift */,
+				A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */,
+			);
+			path = LayoutLockTests;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000057 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				H00000000000000000000004 /* AppLaunchPresentation.swift */,
+				A00000000000000000000012 /* LayoutLockApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		H00000000000000000000009 /* LayoutLockLoginHelper */ = {
+			isa = PBXGroup;
+			children = (
+				H00000000000000000000005 /* main.swift */,
+			);
+			path = LayoutLockLoginHelper;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000058 /* MenuBar */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000001D /* MenuBarContentView.swift */,
+				A00000000000000000000047 /* SnapshotMenuController.swift */,
+				A00000000000000000000045 /* SnapshotNamePrompt.swift */,
+			);
+			path = MenuBar;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000059 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000001F /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005A /* Permissions */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000023 /* AccessibilityAuthorizationState.swift */,
+				A00000000000000000000025 /* AccessibilityTrustChecker.swift */,
+				A00000000000000000000027 /* PermissionCoordinator.swift */,
+			);
+			path = Permissions;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005B /* WindowDiscovery */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000033 /* AXAttributeReader.swift */,
+				A00000000000000000000037 /* CGWindowMetadataReader.swift */,
+				A00000000000000000000035 /* WindowDiscoveryEngine.swift */,
+			);
+			path = WindowDiscovery;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005C /* Snapshots */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000043 /* SnapshotCaptureService.swift */,
+				A0000000000000000000003B /* SnapshotModels.swift */,
+				A0000000000000000000003F /* SnapshotStore.swift */,
+			);
+			path = Snapshots;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005D /* Displays */ = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000004 /* DisplayChangeRestoreController.swift */,
+				C00000000000000000000002 /* DisplayConfigurationMatcher.swift */,
+				A00000000000000000000041 /* DisplayResolver.swift */,
+			);
+			path = Displays;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005E /* Restore */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000062 /* RestoreEngine.swift */,
+				A0000000000000000000003D /* RestoreResult.swift */,
+			);
+			path = Restore;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000005F /* Infrastructure */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000090 /* AppLogger.swift */,
+				A00000000000000000000021 /* AppSupportDirectoryBootstrapper.swift */,
+				A0000000000000000000008E /* OperationOverlayController.swift */,
+				A0000000000000000000007A /* TelemetryLogger.swift */,
+			);
+			path = Infrastructure;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000060 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000039 /* GeometryCodable.swift */,
+				C00000000000000000000006 /* LayoutLockSettings.swift */,
+				A00000000000000000000092 /* ValueExtensions.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000006F /* Hotkeys */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000006A /* HotkeyCapturePrompt.swift */,
+				A00000000000000000000066 /* HotkeyBindingValidation.swift */,
+				A00000000000000000000068 /* HotkeyManager.swift */,
+			);
+			path = Hotkeys;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000076 /* LaunchAtLogin */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000075 /* LaunchAtLoginController.swift */,
+			);
+			path = LaunchAtLogin;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000082 /* Dashboard */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000088 /* DashboardAppListView.swift */,
+				A00000000000000000000084 /* DashboardAppIdentityResolver.swift */,
+				A00000000000000000000086 /* DashboardPresentationModels.swift */,
+				A0000000000000000000008A /* DashboardSnapshotPreviewView.swift */,
+				A0000000000000000000009C /* DashboardVisualStyle.swift */,
+				A00000000000000000000081 /* DashboardView.swift */,
+			);
+			path = Dashboard;
+			sourceTree = "<group>";
+		};
+		B00000000000000000000015 /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000004 /* OnboardingController.swift */,
+				B00000000000000000000002 /* OnboardingStore.swift */,
+				B00000000000000000000010 /* OnboardingContainerView.swift */,
+				B0000000000000000000000A /* OnboardingWelcomeStep.swift */,
+				B0000000000000000000000C /* OnboardingAuthorizedReadyStep.swift */,
+				B00000000000000000000008 /* OnboardingPermissionEducationView.swift */,
+				B0000000000000000000000E /* OnboardingReadyStep.swift */,
+				B00000000000000000000006 /* PermissionInterventionRouter.swift */,
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000000D /* Monetization */ = {
+			isa = PBXGroup;
+			children = (
+				E00000000000000000000008 /* EntitlementController.swift */,
+				E00000000000000000000002 /* EntitlementModels.swift */,
+				E0000000000000000000000E /* EntitlementReceipt.swift */,
+				E00000000000000000000006 /* EntitlementStore.swift */,
+				E00000000000000000000004 /* LicenseActivationClient.swift */,
+			);
+			path = Monetization;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000006 /* Updates */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000004 /* AppUpdateController.swift */,
+				F0000000000000000000000B /* AppUpdatePresentation.swift */,
+				F0000000000000000000000C /* AppUpdateView.swift */,
+			);
+			path = Updates;
+			sourceTree = "<group>";
+		};
+		G00000000000000000000020 /* BrowserAutomation */ = {
+			isa = PBXGroup;
+			children = (
+				G00000000000000000000011 /* BrowserAutomationModels.swift */,
+				G00000000000000000000012 /* BrowserAutomationPermission.swift */,
+				G00000000000000000000013 /* BrowserTabCapture.swift */,
+				G00000000000000000000014 /* BrowserWindowTargetEnricher.swift */,
+				G00000000000000000000016 /* BrowserWindowRestore.swift */,
+			);
+			path = BrowserAutomation;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A0000000000000000000000F /* LayoutLock */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000019 /* Build configuration list for PBXNativeTarget "LayoutLock" */;
+			buildPhases = (
+				A0000000000000000000000D /* Sources */,
+				A0000000000000000000000E /* Frameworks */,
+				A00000000000000000000010 /* Resources */,
+				H00000000000000000000008 /* Embed Login Items */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				H00000000000000000000011 /* PBXTargetDependency */,
+			);
+			name = LayoutLock;
+			packageProductDependencies = (
+				F00000000000000000000007 /* Sparkle */,
+			);
+			productName = LayoutLock;
+			productReference = A0000000000000000000000A /* LayoutLock.app */;
+			productType = "com.apple.product-type.application";
+		};
+		H0000000000000000000000D /* LayoutLockLoginHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H00000000000000000000010 /* Build configuration list for PBXNativeTarget "LayoutLockLoginHelper" */;
+			buildPhases = (
+				H0000000000000000000000C /* Sources */,
+				H0000000000000000000000A /* Frameworks */,
+				H0000000000000000000000B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LayoutLockLoginHelper;
+			packageProductDependencies = (
+			);
+			productName = LayoutLockLoginHelper;
+			productReference = H00000000000000000000006 /* LayoutLockLoginHelper.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A0000000000000000000004E /* LayoutLockTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000054 /* Build configuration list for PBXNativeTarget "LayoutLockTests" */;
+			buildPhases = (
+				A00000000000000000000050 /* Sources */,
+				A0000000000000000000004C /* Frameworks */,
+				A0000000000000000000004F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A00000000000000000000051 /* PBXTargetDependency */,
+			);
+			name = LayoutLockTests;
+			productName = LayoutLockTests;
+			productReference = A00000000000000000000049 /* LayoutLockTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000006 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					A0000000000000000000000F = {
+						CreatedOnToolsVersion = 26.2;
+						SystemCapabilities = {
+							com.apple.Keychain = {
+								enabled = 1;
+							};
+						};
+					};
+					A0000000000000000000004E = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = A0000000000000000000000F;
+					};
+					H0000000000000000000000D = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000016 /* Build configuration list for PBXProject "LayoutLock" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000003;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F00000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A00000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A0000000000000000000000F /* LayoutLock */,
+				H0000000000000000000000D /* LayoutLockLoginHelper */,
+				A0000000000000000000004E /* LayoutLockTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D00000000000000000000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A0000000000000000000004F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		H0000000000000000000000B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A0000000000000000000000D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				H00000000000000000000001 /* AppLaunchPresentation.swift in Sources */,
+				F00000000000000000000001 /* AppUpdateController.swift in Sources */,
+				F00000000000000000000009 /* AppUpdatePresentation.swift in Sources */,
+				F0000000000000000000000A /* AppUpdateView.swift in Sources */,
+				G00000000000000000000001 /* BrowserAutomationModels.swift in Sources */,
+				G00000000000000000000002 /* BrowserAutomationPermission.swift in Sources */,
+				G00000000000000000000003 /* BrowserTabCapture.swift in Sources */,
+				G00000000000000000000004 /* BrowserWindowTargetEnricher.swift in Sources */,
+				G00000000000000000000006 /* BrowserWindowRestore.swift in Sources */,
+				A00000000000000000000032 /* AXAttributeReader.swift in Sources */,
+				A00000000000000000000022 /* AccessibilityAuthorizationState.swift in Sources */,
+				A00000000000000000000024 /* AccessibilityTrustChecker.swift in Sources */,
+				A0000000000000000000008F /* AppLogger.swift in Sources */,
+				A00000000000000000000020 /* AppSupportDirectoryBootstrapper.swift in Sources */,
+				A00000000000000000000036 /* CGWindowMetadataReader.swift in Sources */,
+				A00000000000000000000083 /* DashboardAppIdentityResolver.swift in Sources */,
+				A00000000000000000000087 /* DashboardAppListView.swift in Sources */,
+				A00000000000000000000085 /* DashboardPresentationModels.swift in Sources */,
+				A00000000000000000000089 /* DashboardSnapshotPreviewView.swift in Sources */,
+				A0000000000000000000009B /* DashboardVisualStyle.swift in Sources */,
+				A00000000000000000000080 /* DashboardView.swift in Sources */,
+				C00000000000000000000003 /* DisplayChangeRestoreController.swift in Sources */,
+				C00000000000000000000001 /* DisplayConfigurationMatcher.swift in Sources */,
+				A00000000000000000000040 /* DisplayResolver.swift in Sources */,
+				E00000000000000000000007 /* EntitlementController.swift in Sources */,
+				E0000000000000000000000F /* EntitlementReceipt.swift in Sources */,
+				E00000000000000000000001 /* EntitlementModels.swift in Sources */,
+				E00000000000000000000005 /* EntitlementStore.swift in Sources */,
+				A00000000000000000000038 /* GeometryCodable.swift in Sources */,
+				A00000000000000000000065 /* HotkeyBindingValidation.swift in Sources */,
+				A00000000000000000000069 /* HotkeyCapturePrompt.swift in Sources */,
+				A00000000000000000000067 /* HotkeyManager.swift in Sources */,
+				A00000000000000000000074 /* LaunchAtLoginController.swift in Sources */,
+				A00000000000000000000002 /* LayoutLockApp.swift in Sources */,
+				C00000000000000000000005 /* LayoutLockSettings.swift in Sources */,
+				E00000000000000000000003 /* LicenseActivationClient.swift in Sources */,
+				A0000000000000000000001C /* MenuBarContentView.swift in Sources */,
+				A0000000000000000000008D /* OperationOverlayController.swift in Sources */,
+				B00000000000000000000003 /* OnboardingController.swift in Sources */,
+				B0000000000000000000000F /* OnboardingContainerView.swift in Sources */,
+				B0000000000000000000000B /* OnboardingAuthorizedReadyStep.swift in Sources */,
+				B00000000000000000000007 /* OnboardingPermissionEducationView.swift in Sources */,
+				B0000000000000000000000D /* OnboardingReadyStep.swift in Sources */,
+				B00000000000000000000001 /* OnboardingStore.swift in Sources */,
+				B00000000000000000000009 /* OnboardingWelcomeStep.swift in Sources */,
+				A00000000000000000000026 /* PermissionCoordinator.swift in Sources */,
+				B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */,
+				A00000000000000000000061 /* RestoreEngine.swift in Sources */,
+				A0000000000000000000003C /* RestoreResult.swift in Sources */,
+				A0000000000000000000001E /* SettingsView.swift in Sources */,
+				A00000000000000000000042 /* SnapshotCaptureService.swift in Sources */,
+				A00000000000000000000046 /* SnapshotMenuController.swift in Sources */,
+				A0000000000000000000003A /* SnapshotModels.swift in Sources */,
+				A00000000000000000000044 /* SnapshotNamePrompt.swift in Sources */,
+				A0000000000000000000003E /* SnapshotStore.swift in Sources */,
+				A00000000000000000000079 /* TelemetryLogger.swift in Sources */,
+				A00000000000000000000091 /* ValueExtensions.swift in Sources */,
+				A00000000000000000000034 /* WindowDiscoveryEngine.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */,
+				F0000000000000000000000D /* AppUpdateUserDriverTests.swift in Sources */,
+				A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */,
+				G00000000000000000000005 /* BrowserAutomationTests.swift in Sources */,
+				C00000000000000000000007 /* DisplayChangeRestoreControllerTests.swift in Sources */,
+				A00000000000000000000048 /* DisplayResolverTests.swift in Sources */,
+				C00000000000000000000009 /* LayoutLockSettingsTests.swift in Sources */,
+				A0000000000000000000008B /* DashboardPresentationModelsTests.swift in Sources */,
+				E00000000000000000000009 /* EntitlementControllerTests.swift in Sources */,
+				A0000000000000000000006B /* HotkeyBindingValidatorTests.swift in Sources */,
+				A00000000000000000000070 /* HotkeyManagerTests.swift in Sources */,
+				A00000000000000000000077 /* LaunchAtLoginControllerTests.swift in Sources */,
+				B00000000000000000000011 /* OnboardingControllerTests.swift in Sources */,
+				A00000000000000000000055 /* PermissionCoordinatorTests.swift in Sources */,
+				B00000000000000000000013 /* PermissionInterventionRouterTests.swift in Sources */,
+				A00000000000000000000063 /* RestoreWindowMatchPlannerTests.swift in Sources */,
+				A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */,
+				A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */,
+				E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */,
+				A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */,
+				A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */,
+				A00000000000000000000093 /* TestSupport.swift in Sources */,
+				A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		H0000000000000000000000C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				H00000000000000000000002 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000051 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A0000000000000000000000F /* LayoutLock */;
+			targetProxy = A0000000000000000000004B /* PBXContainerItemProxy */;
+		};
+		H00000000000000000000011 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = H0000000000000000000000D /* LayoutLockLoginHelper */;
+			targetProxy = H00000000000000000000007 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A00000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A0000000000000000000001A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LayoutLock/LayoutLock.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LayoutLock/Info.plist;
+				LAYOUTLOCK_CREEM_PRODUCT_ID = prod_4kKRRbopJu2qSEXsnnFJ79;
+				LAYOUTLOCK_LICENSE_PROXY_BASE_URL = "https://layoutlock-license-proxy-test.berkergng457.workers.dev";
+				LAYOUTLOCK_PAYMENTS_ENVIRONMENT = test;
+				LAYOUTLOCK_PRO_PURCHASE_URL = "https://www.creem.io/test/payment/prod_4kKRRbopJu2qSEXsnnFJ79";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A0000000000000000000001B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = LayoutLock/LayoutLock.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LayoutLock/Info.plist;
+				LAYOUTLOCK_CREEM_PRODUCT_ID = prod_2uX8wPSHxfQhZcaiSILQFH;
+				LAYOUTLOCK_LICENSE_PROXY_BASE_URL = "https://layoutlock-license-proxy.berkergng457.workers.dev";
+				LAYOUTLOCK_PAYMENTS_ENVIRONMENT = live;
+				LAYOUTLOCK_PRO_PURCHASE_URL = "https://www.creem.io/payment/prod_2uX8wPSHxfQhZcaiSILQFH";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A00000000000000000000052 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LayoutLock.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LayoutLock";
+			};
+			name = Debug;
+		};
+		A00000000000000000000053 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LayoutLock.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LayoutLock";
+			};
+			name = Release;
+		};
+		H0000000000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		H0000000000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 894AUNHU54;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000016 /* Build configuration list for PBXProject "LayoutLock" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000017 /* Debug */,
+				A00000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000019 /* Build configuration list for PBXNativeTarget "LayoutLock" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A0000000000000000000001A /* Debug */,
+				A0000000000000000000001B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000054 /* Build configuration list for PBXNativeTarget "LayoutLockTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000052 /* Debug */,
+				A00000000000000000000053 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		H00000000000000000000010 /* Build configuration list for PBXNativeTarget "LayoutLockLoginHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				H0000000000000000000000E /* Debug */,
+				H0000000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F00000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F00000000000000000000007 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F00000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A00000000000000000000006 /* Project object */;
+}

@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+.DerivedData/
+build/
+xcuserdata/
+*.xcarchive
+*.ipa
+*.dSYM
+
+# Generated release artifacts
+/release/
+
+# Swift profiling / coverage
+*.profraw
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Internal (not published)
+.docs/
+AGENTS.md
+
+# AI tooling
+.agents
+.claude
+skills-lock.json
+.plans/
+opencode.json

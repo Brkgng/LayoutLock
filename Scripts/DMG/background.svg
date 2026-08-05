@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="420" viewBox="0 0 660 420">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef5ff"/>
+    </linearGradient>
+    <linearGradient id="arrow" gradientUnits="userSpaceOnUse" x1="277" y1="220" x2="373" y2="220">
+      <stop offset="0" stop-color="#2478ff"/>
+      <stop offset="1" stop-color="#18a9ea"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#2478ff" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="660" height="420" fill="url(#background)"/>
+  <circle cx="66" cy="35" r="150" fill="#62a5ff" opacity="0.06"/>
+  <circle cx="614" cy="396" r="175" fill="#20c6e8" opacity="0.06"/>
+
+  <text x="330" y="55" text-anchor="middle" fill="#152033"
+        font-family="Helvetica Neue, Helvetica, sans-serif" font-size="24" font-weight="600">
+    Install LayoutLock
+  </text>
+  <text x="330" y="84" text-anchor="middle" fill="#5d6878"
+        font-family="Helvetica Neue, Helvetica, sans-serif" font-size="15" font-weight="400">
+    Drag LayoutLock to Applications
+  </text>
+
+  <path d="M277 220 H369 M347 198 L373 220 L347 242"
+        fill="none" stroke="url(#arrow)" stroke-width="10"
+        stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)"/>
+
+  <text x="330" y="372" text-anchor="middle" fill="#647186"
+        font-family="Helvetica Neue, Helvetica, sans-serif" font-size="13" font-weight="400">
+    Then open LayoutLock from your Applications folder
+  </text>
+</svg>

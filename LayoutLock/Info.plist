@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>LayoutLock</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LayoutLockCreemProductID</key>
+	<string>$(LAYOUTLOCK_CREEM_PRODUCT_ID)</string>
+	<key>LayoutLockLicenseProxyBaseURL</key>
+	<string>$(LAYOUTLOCK_LICENSE_PROXY_BASE_URL)</string>
+	<key>LayoutLockPaymentsEnvironment</key>
+	<string>$(LAYOUTLOCK_PAYMENTS_ENVIRONMENT)</string>
+	<key>LayoutLockProPurchaseURL</key>
+	<string>$(LAYOUTLOCK_PRO_PURCHASE_URL)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>LayoutLock uses Automation access only when you connect Safari or Chrome, so it can save browser tabs with your layouts.</string>
+	<key>SUFeedURL</key>
+	<string>https://layoutlock.app/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>jhJbePYXlugNOGSv5jx3P6cPlzhJtoZNyf9Mv0VyMBc=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+</dict>
+</plist>
