@@ -6,6 +6,9 @@ import Foundation
 private let restoreRoleMatchOriginTolerance: CGFloat = 160
 private let restoreRoleMatchSizeRatioTolerance: CGFloat = 0.25
 private let restoreRoleMatchMinimumSizeTolerance: CGFloat = 80
+private let restoreFrameVerificationTolerance: CGFloat = 2
+private let restoreWindowApplyAttemptLimit = 4
+private let restoreWindowSettleNanoseconds: UInt64 = 100_000_000
 
 enum RestoreEngineError: LocalizedError {
     case accessibilityPermissionDenied
@@ -301,7 +304,7 @@ struct RestoreEngine {
                 from: snapshot.sourceDisplayState,
                 to: currentDisplayState
             )
-            let result = windowApplier.apply(
+            let result = try await windowApplier.apply(
                 savedWindow: plan.savedWindow,
                 targetFrame: restoreDisplayPlan.targetFrame,
                 to: liveWindow
@@ -1323,13 +1326,22 @@ protocol RestoreWindowApplying {
         savedWindow: WindowRecord,
         targetFrame: CGRect,
         to discoveredWindow: DiscoveredWindow
-    ) -> RestoreWindowApplyResult
+    ) async throws -> RestoreWindowApplyResult
 
     @discardableResult
     func raise(_ discoveredWindow: DiscoveredWindow) -> Bool
 
     func focus(_ discoveredWindow: DiscoveredWindow) -> RestoreWindowFocusResult
 }
+
+protocol RestoreWindowGeometryAccessing {
+    func point(from element: AXUIElement, attribute: CFString) -> CGPoint?
+    func size(from element: AXUIElement, attribute: CFString) -> CGSize?
+    func setPoint(_ point: CGPoint, on element: AXUIElement, attribute: CFString) -> Bool
+    func setSize(_ size: CGSize, on element: AXUIElement, attribute: CFString) -> Bool
+}
+
+extension AXAttributeReader: RestoreWindowGeometryAccessing {}
 
 struct RestoreWindowApplyResult {
     let didRestore: Bool
@@ -1360,17 +1372,33 @@ struct RestoreWindowFocusResult {
 }
 
 struct AXRestoreWindowApplier: RestoreWindowApplying {
+    private let geometryAccessor: RestoreWindowGeometryAccessing
     private let attributeReader: AXAttributeReader
+    private let attemptLimit: Int
+    private let settleNanoseconds: UInt64
+    private let sleeper: (UInt64) async throws -> Void
 
-    init(attributeReader: AXAttributeReader = AXAttributeReader()) {
+    init(
+        geometryAccessor: RestoreWindowGeometryAccessing = AXAttributeReader(),
+        attributeReader: AXAttributeReader = AXAttributeReader(),
+        attemptLimit: Int = restoreWindowApplyAttemptLimit,
+        settleNanoseconds: UInt64 = restoreWindowSettleNanoseconds,
+        sleeper: @escaping (UInt64) async throws -> Void = Task.sleep(nanoseconds:)
+    ) {
+        self.geometryAccessor = geometryAccessor
         self.attributeReader = attributeReader
+        self.attemptLimit = attemptLimit
+        self.settleNanoseconds = settleNanoseconds
+        self.sleeper = sleeper
     }
 
     func apply(
         savedWindow: WindowRecord,
         targetFrame: CGRect,
         to discoveredWindow: DiscoveredWindow
-    ) -> RestoreWindowApplyResult {
+    ) async throws -> RestoreWindowApplyResult {
+        try Task.checkCancellation()
+
         if discoveredWindow.isMinimized,
            !attributeReader.setBool(
             false,
@@ -1380,24 +1408,59 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
             return .failed(reason: RestoreSkipReason.restoreFailed)
         }
 
-        guard attributeReader.setPoint(
-            targetFrame.origin,
-            on: discoveredWindow.axElement,
-            attribute: kAXPositionAttribute as CFString
-        ) else {
-            return .failed(reason: RestoreSkipReason.restoreFailed)
+        var lastObservedFrame: CGRect?
+        for _ in 0..<attemptLimit {
+            try Task.checkCancellation()
+            applyGeometry(targetFrame, to: discoveredWindow.axElement)
+
+            lastObservedFrame = observedFrame(of: discoveredWindow.axElement)
+            try await sleeper(settleNanoseconds)
+            try Task.checkCancellation()
+
+            lastObservedFrame = observedFrame(of: discoveredWindow.axElement)
+            if lastObservedFrame?.approximatelyMatchesRestoreFrame(targetFrame) == true {
+                return .restored(downgrade: fullscreenDowngrade(for: savedWindow))
+            }
         }
 
-        guard attributeReader.setSize(
-            targetFrame.size,
-            on: discoveredWindow.axElement,
+        let actualFrameDescription = lastObservedFrame.map(String.init(describing:)) ?? "unavailable"
+        AppLogger.app.error(
+            "Window geometry did not settle for \(savedWindow.bundleIdentifier). Expected \(String(describing: targetFrame)); observed \(actualFrameDescription)."
+        )
+        return .failed(reason: RestoreSkipReason.windowGeometryDidNotSettle)
+    }
+
+    private func applyGeometry(_ frame: CGRect, to element: AXUIElement) {
+        _ = geometryAccessor.setPoint(
+            frame.origin,
+            on: element,
+            attribute: kAXPositionAttribute as CFString
+        )
+        _ = geometryAccessor.setSize(
+            frame.size,
+            on: element,
+            attribute: kAXSizeAttribute as CFString
+        )
+        _ = geometryAccessor.setPoint(
+            frame.origin,
+            on: element,
+            attribute: kAXPositionAttribute as CFString
+        )
+    }
+
+    private func observedFrame(of element: AXUIElement) -> CGRect? {
+        guard let position = geometryAccessor.point(
+            from: element,
+            attribute: kAXPositionAttribute as CFString
+        ),
+        let size = geometryAccessor.size(
+            from: element,
             attribute: kAXSizeAttribute as CFString
         ) else {
-            return .failed(reason: RestoreSkipReason.restoreFailed)
+            return nil
         }
 
-        let downgrade = fullscreenDowngrade(for: savedWindow)
-        return .restored(downgrade: downgrade)
+        return CGRect(origin: position, size: size)
     }
 
     @discardableResult
@@ -1448,9 +1511,17 @@ enum RestoreSkipReason {
     static let appNotRunning = "app not running"
     static let windowNotFound = "window not found"
     static let restoreFailed = "restore failed"
+    static let windowGeometryDidNotSettle = "window geometry did not settle"
 }
 
 private extension CGRect {
+    func approximatelyMatchesRestoreFrame(_ other: CGRect) -> Bool {
+        abs(minX - other.minX) <= restoreFrameVerificationTolerance &&
+            abs(minY - other.minY) <= restoreFrameVerificationTolerance &&
+            abs(width - other.width) <= restoreFrameVerificationTolerance &&
+            abs(height - other.height) <= restoreFrameVerificationTolerance
+    }
+
     func restoreDistance(to other: CGRect) -> CGFloat {
         abs(minX - other.minX) +
         abs(minY - other.minY) +

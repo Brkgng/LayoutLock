@@ -600,7 +600,7 @@ private final class RecordingRestoreWindowApplier: RestoreWindowApplying {
         savedWindow: WindowRecord,
         targetFrame: CGRect,
         to discoveredWindow: DiscoveredWindow
-    ) -> RestoreWindowApplyResult {
+    ) async throws -> RestoreWindowApplyResult {
         .restored()
     }
 
@@ -708,6 +708,46 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertTrue(result.skippedItems.isEmpty)
         XCTAssertEqual(windowApplier.appliedBundleIdentifiers, [bundleIdentifier])
+    }
+
+    func testUnverifiedWindowIsSkippedAndExcludedFromZOrderReplay() async throws {
+        let bundleIdentifier = "com.example.editor"
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            windowTitle: "Project Notes",
+            zOrderHint: 0
+        )
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let application = makeApplication(
+            bundleIdentifier: bundleIdentifier,
+            windows: [
+                makeDiscoveredWindow(
+                    title: savedWindow.windowTitle,
+                    frame: savedWindow.frame.cgRect
+                )
+            ]
+        )
+        let windowApplier = RecordingEngineWindowApplier(
+            result: .failed(reason: RestoreSkipReason.windowGeometryDidNotSettle)
+        )
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: DiscoverySequence([[application]]),
+            windowApplier: windowApplier
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(result.skippedItems.count, 1)
+        XCTAssertEqual(
+            result.skippedItems.first?.reason,
+            RestoreSkipReason.windowGeometryDidNotSettle
+        )
+        XCTAssertEqual(windowApplier.raiseCount, 0)
+        XCTAssertEqual(windowApplier.focusCount, 0)
     }
 
     func testUnresolvableLaunchLeavesSavedWindowSkippedAsAppNotRunning() async throws {
@@ -2845,6 +2885,7 @@ final class RestoreEngineTests: XCTestCase {
         role: String = "AXWindow",
         subrole: String? = "AXStandardWindow",
         frame: CGRect = CGRect(x: 10, y: 20, width: 300, height: 200),
+        zOrderHint: Int? = nil,
         openingConfiguration: WindowOpeningConfiguration = WindowOpeningConfiguration()
     ) -> WindowRecord {
         WindowRecord(
@@ -2861,7 +2902,7 @@ final class RestoreEngineTests: XCTestCase {
                 widthRatio: 0.5,
                 heightRatio: 0.5
             ),
-            zOrderHint: nil,
+            zOrderHint: zOrderHint,
             isMinimized: false,
             isFullscreen: false,
             isVisible: true,
@@ -3053,23 +3094,32 @@ private final class DiscoverySequence {
 private final class RecordingEngineWindowApplier: RestoreWindowApplying {
     private(set) var appliedBundleIdentifiers: [String] = []
     private(set) var appliedWindowTitles: [String?] = []
+    private(set) var raiseCount = 0
+    private(set) var focusCount = 0
+    private let result: RestoreWindowApplyResult
+
+    init(result: RestoreWindowApplyResult = .restored()) {
+        self.result = result
+    }
 
     func apply(
         savedWindow: WindowRecord,
         targetFrame: CGRect,
         to discoveredWindow: DiscoveredWindow
-    ) -> RestoreWindowApplyResult {
+    ) async throws -> RestoreWindowApplyResult {
         appliedBundleIdentifiers.append(savedWindow.bundleIdentifier)
         appliedWindowTitles.append(discoveredWindow.title)
-        return .restored()
+        return result
     }
 
     func raise(_ discoveredWindow: DiscoveredWindow) -> Bool {
-        true
+        raiseCount += 1
+        return true
     }
 
     func focus(_ discoveredWindow: DiscoveredWindow) -> RestoreWindowFocusResult {
-        RestoreWindowFocusResult(
+        focusCount += 1
+        return RestoreWindowFocusResult(
             didRaise: true,
             didSetMain: true,
             didSetFocused: true

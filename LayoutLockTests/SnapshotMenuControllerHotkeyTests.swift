@@ -1871,7 +1871,7 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
         savedWindow _: WindowRecord,
         targetFrame _: CGRect,
         to _: DiscoveredWindow
-    ) -> RestoreWindowApplyResult {
+    ) async throws -> RestoreWindowApplyResult {
         .restored()
     }
 

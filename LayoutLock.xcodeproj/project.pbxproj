@@ -54,6 +54,7 @@
 		A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */; };
 		A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */; };
 		A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009A /* AXAttributeReaderTests.swift */; };
+		I00000000000000000000001 /* AXRestoreWindowApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */; };
 		B00000000000000000000001 /* OnboardingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* OnboardingStore.swift */; };
 		B00000000000000000000003 /* OnboardingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* OnboardingController.swift */; };
 		B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* PermissionInterventionRouter.swift */; };
@@ -175,6 +176,7 @@
 		A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCaptureServiceTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryEngineTests.swift; sourceTree = "<group>"; };
 		A0000000000000000000009A /* AXAttributeReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXAttributeReaderTests.swift; sourceTree = "<group>"; };
+		I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXRestoreWindowApplierTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000002 /* OnboardingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000004 /* OnboardingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingController.swift; sourceTree = "<group>"; };
 		B00000000000000000000006 /* PermissionInterventionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionInterventionRouter.swift; sourceTree = "<group>"; };
@@ -291,6 +293,7 @@
 				F00000000000000000000005 /* AppUpdateControllerTests.swift */,
 				F0000000000000000000000E /* AppUpdateUserDriverTests.swift */,
 				A0000000000000000000009A /* AXAttributeReaderTests.swift */,
+				I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */,
 				G00000000000000000000015 /* BrowserAutomationTests.swift */,
 				C00000000000000000000008 /* DisplayChangeRestoreControllerTests.swift */,
 				A0000000000000000000004A /* DisplayResolverTests.swift */,
@@ -711,6 +714,7 @@
 				F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */,
 				F0000000000000000000000D /* AppUpdateUserDriverTests.swift in Sources */,
 				A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */,
+				I00000000000000000000001 /* AXRestoreWindowApplierTests.swift in Sources */,
 				G00000000000000000000005 /* BrowserAutomationTests.swift in Sources */,
 				C00000000000000000000007 /* DisplayChangeRestoreControllerTests.swift in Sources */,
 				A00000000000000000000048 /* DisplayResolverTests.swift in Sources */,
