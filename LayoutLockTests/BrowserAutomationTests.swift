@@ -314,7 +314,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let coldStartSafariSource = BrowserAutomationWindowOpener.script(
             for: .safari,
             targets: targets,
-            reuseDisposableSafariWindow: true
+            reuseDisposableStartupWindow: true
         )
         let coldStartSafariScript = NSAppleScript(source: coldStartSafariSource)
         var coldStartSafariError: NSDictionary?
@@ -322,13 +322,37 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             coldStartSafariScript?.compileAndReturnError(&coldStartSafariError) == true,
             "Cold-start Safari restore script failed to compile: \(String(describing: coldStartSafariError))"
         )
+
+        let coldStartChromeSource = BrowserAutomationWindowOpener.script(
+            for: .chrome,
+            targets: targets,
+            reuseDisposableStartupWindow: true
+        )
+        let coldStartChromeScript = NSAppleScript(source: coldStartChromeSource)
+        var coldStartChromeError: NSDictionary?
+        XCTAssertTrue(
+            coldStartChromeScript?.compileAndReturnError(&coldStartChromeError) == true,
+            "Cold-start Chrome restore script failed to compile: \(String(describing: coldStartChromeError))"
+        )
+        XCTAssertTrue(coldStartChromeSource.contains("(count windows) is 1"))
+        XCTAssertTrue(coldStartChromeSource.contains("(count tabs of candidateWindow) is 1"))
+        XCTAssertTrue(coldStartChromeSource.contains("chrome://newtab"))
+        XCTAssertTrue(coldStartChromeSource.contains("set targetWindow to candidateWindow"))
+        XCTAssertTrue(coldStartChromeSource.contains("set targetWindow to make new window"))
+
+        let runningChromeSource = BrowserAutomationWindowOpener.script(
+            for: .chrome,
+            targets: targets
+        )
+        XCTAssertFalse(runningChromeSource.contains("candidateWindow"))
+        XCTAssertTrue(runningChromeSource.contains("set targetWindow to make new window"))
     }
 
     func testConnectedRunningBrowserOpensDistinctWindowWithoutPrompting() async {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: .list())
+        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
         let target = WindowOpenTarget(
             kind: .webURL,
             url: URL(string: "https://example.com")!
@@ -352,9 +376,10 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             browser: .safari
         )
 
-        guard case .opened = result else {
+        guard case let .opened(openedWindow) = result else {
             return XCTFail("Expected connected Safari window restore to succeed.")
         }
+        XCTAssertEqual(openedWindow.scriptingIdentifier, "opened-window")
         XCTAssertEqual(
             permissionChecker.calls,
             [.init(browser: .safari, askUserIfNeeded: false)]
@@ -369,7 +394,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: .list())
+        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
         var isRunning = false
         var launchCount = 0
         let opener = BrowserAutomationWindowOpener(
@@ -413,7 +438,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
     func testOnlyFirstSafariRestoreAfterColdStartCanReuseStartupWindow() async {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
-        let evaluator = RecordingBrowserScriptEvaluator(result: .list())
+        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
         var isRunning = false
         let opener = BrowserAutomationWindowOpener(
             userDefaults: userDefaults,
@@ -447,7 +472,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let userDefaults = makeBrowserUserDefaults()
         connect(.chrome, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: .list())
+        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
         var isRunning = false
         var launchCount = 0
         let opener = BrowserAutomationWindowOpener(
@@ -485,6 +510,10 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             [.init(browser: .chrome, askUserIfNeeded: false)]
         )
         XCTAssertEqual(evaluator.callCount, 1)
+        XCTAssertTrue(evaluator.lastSource?.contains("(count windows) is 1") == true)
+        XCTAssertTrue(evaluator.lastSource?.contains("chrome://newtab") == true)
+        XCTAssertTrue(evaluator.lastSource?.contains("set targetWindow to candidateWindow") == true)
+        XCTAssertTrue(evaluator.lastSource?.contains("set targetWindow to make new window") == true)
     }
 
     func testDisconnectedOrRevokedBrowserNeverExecutesRestoreScript() async {
@@ -601,6 +630,7 @@ final class BrowserWindowTargetEnricherTests: XCTestCase {
         )
         let windows = result.discoveryResult.applications[0].windows
 
+        XCTAssertEqual(windows.map(\.browserScriptingIdentifier), ["front", "back"])
         XCTAssertEqual(windows[0].capturedOpeningTargets.map(\.url), [firstURL, firstURL])
         XCTAssertEqual(windows[1].capturedOpeningTargets.map(\.url), [secondURL])
         XCTAssertTrue(result.issues.isEmpty)
@@ -732,6 +762,39 @@ final class BrowserWindowTargetEnricherTests: XCTestCase {
             [[firstURL], [secondURL]]
         )
         XCTAssertTrue(result.issues.isEmpty)
+    }
+
+    func testCanDisableOrderFallbackForPartialRestoreEvidence() {
+        let discoveryResult = makeBrowserDiscoveryResult(
+            browser: .chrome,
+            windows: [makeDiscoveredWindow(title: "Existing Window")]
+        )
+        let captureResult = BrowserTabCaptureResult(
+            windows: [
+                CapturedBrowserWindow(
+                    browser: .chrome,
+                    scriptingIdentifier: "new-window",
+                    title: "Opened Window",
+                    frame: CGRect(x: 900, y: 700, width: 300, height: 200),
+                    frontToBackIndex: 0,
+                    tabs: []
+                )
+            ],
+            issues: []
+        )
+
+        let result = BrowserWindowTargetEnricher(
+            allowsOrderFallback: false
+        ).enrich(discoveryResult, with: captureResult)
+
+        XCTAssertNil(
+            result.discoveryResult.applications[0].windows[0]
+                .browserScriptingIdentifier
+        )
+        XCTAssertEqual(
+            result.issues,
+            [BrowserCaptureIssue(browser: .chrome, reason: .ambiguousWindowMatch)]
+        )
     }
 }
 
@@ -1031,6 +1094,19 @@ private func makeBrowserResultDescriptor(
         result.insert(row, at: windowIndex + 1)
     }
     return result
+}
+
+private func makeOpenedWindowDescriptor() -> NSAppleEventDescriptor {
+    makeBrowserResultDescriptor(
+        windows: [
+            (
+                identifier: "opened-window",
+                title: "Opened Window",
+                frame: CGRect(x: 100, y: 100, width: 800, height: 600),
+                URLs: ["https://example.com"]
+            )
+        ]
+    )
 }
 
 private func makeCapturedBrowserTabs(_ URLs: [URL]) -> [CapturedBrowserTab] {

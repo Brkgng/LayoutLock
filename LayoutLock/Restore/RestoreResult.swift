@@ -7,6 +7,8 @@ struct RestoreResult {
     let displayFallbacks: [DisplayFallbackEvent]
     let requestedTargetCount: Int
     let targetIssues: [RestoreTargetIssue]
+    let windowDiagnostics: [RestoreWindowDiagnostic]
+    let discoveryDiagnostics: [WindowDiscoveryDiagnostic]
 
     init(
         restoredWindows: Int,
@@ -14,7 +16,9 @@ struct RestoreResult {
         downgradedItems: [RestoreDowngrade],
         displayFallbacks: [DisplayFallbackEvent],
         requestedTargetCount: Int = 0,
-        targetIssues: [RestoreTargetIssue] = []
+        targetIssues: [RestoreTargetIssue] = [],
+        windowDiagnostics: [RestoreWindowDiagnostic] = [],
+        discoveryDiagnostics: [WindowDiscoveryDiagnostic] = []
     ) {
         self.restoredWindows = restoredWindows
         self.skippedItems = skippedItems
@@ -22,7 +26,25 @@ struct RestoreResult {
         self.displayFallbacks = displayFallbacks
         self.requestedTargetCount = requestedTargetCount
         self.targetIssues = targetIssues
+        self.windowDiagnostics = windowDiagnostics
+        self.discoveryDiagnostics = discoveryDiagnostics
     }
+}
+
+struct RestoreWindowDiagnostic {
+    let windowID: UUID
+    let bundleIdentifier: String
+    let matchStrategy: RestoreWindowMatchStrategy?
+    let candidateCount: Int
+    let filteredCandidateCount: Int
+    let readinessTimedOut: Bool
+    let geometryAttempted: Bool
+    let geometryAttemptCount: Int
+    let expectedFrame: CGRect?
+    let finalObservedFrame: CGRect?
+    let displayOutcome: RestoreDisplayOutcome?
+    let result: String
+    let reason: String?
 }
 
 enum RestoreTargetIssueReason: String {
@@ -113,17 +135,26 @@ struct RestoreDowngrade: Identifiable {
 
 struct DisplayFallbackEvent: Identifiable {
     let id: UUID
+    let windowID: UUID?
+    let bundleIdentifier: String?
+    let outcome: RestoreDisplayOutcome
     let savedDisplayID: UInt32?
     let resolvedDisplayID: UInt32?
     let reason: String
 
     init(
         id: UUID = UUID(),
+        windowID: UUID? = nil,
+        bundleIdentifier: String? = nil,
+        outcome: RestoreDisplayOutcome = .primaryFallback,
         savedDisplayID: UInt32?,
         resolvedDisplayID: UInt32?,
         reason: String
     ) {
         self.id = id
+        self.windowID = windowID
+        self.bundleIdentifier = bundleIdentifier
+        self.outcome = outcome
         self.savedDisplayID = savedDisplayID
         self.resolvedDisplayID = resolvedDisplayID
         self.reason = reason

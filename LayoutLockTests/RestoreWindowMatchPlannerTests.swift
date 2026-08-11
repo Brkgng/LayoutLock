@@ -86,6 +86,276 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         XCTAssertNil(plans.first?.skip)
     }
 
+    func testPlansMatchLocalTargetFromExactFullPathDocumentTitle() {
+        let planner = RestoreWindowMatchPlanner()
+        let targetURL = URL(fileURLWithPath: "/Users/test/solvoyo/web-react18", isDirectory: true)
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: "com.example.terminal",
+            pidAtCapture: 100,
+            windowTitle: "~/solvoyo/web-react18",
+            frame: CGRect(x: -1_900, y: 20, width: 1_000, height: 700),
+            openingConfiguration: WindowOpeningConfiguration(
+                manualTargets: [WindowOpenTarget(kind: .folder, url: targetURL)]
+            )
+        )
+        let candidate = makeCandidate(
+            id: 1,
+            bundleIdentifier: "com.example.terminal",
+            pid: 900,
+            documentTitles: ["shell: \(targetURL.path)"],
+            title: "Different title",
+            frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+        )
+
+        let plan = planner.plans(for: [savedWindow], candidates: [candidate]).first
+
+        XCTAssertEqual(plan?.candidate?.id, 1)
+        XCTAssertEqual(plan?.matchStrategy, .scored)
+        XCTAssertNil(plan?.skip)
+    }
+
+    func testPlansUseAutomaticTargetForMatchingWhenManualTargetsAreEmpty() {
+        let planner = RestoreWindowMatchPlanner()
+        let targetURL = URL(
+            fileURLWithPath: "/Users/test/solvoyo/web-react18",
+            isDirectory: true
+        )
+        let automaticTarget = WindowOpenTarget(kind: .folder, url: targetURL)
+        let configuration = WindowOpeningConfiguration(
+            automaticallyCapturedTargets: [automaticTarget],
+            manualTargets: []
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: "com.mitchellh.ghostty",
+            pidAtCapture: 100,
+            windowTitle: "~/solvoyo/web-react18",
+            frame: CGRect(x: -852, y: -1_410, width: 1_653, height: 1_410),
+            openingConfiguration: configuration
+        )
+        let candidates = [
+            makeCandidate(
+                id: 1,
+                bundleIdentifier: "com.mitchellh.ghostty",
+                pid: 900,
+                documentTitles: [targetURL.path],
+                title: "lg",
+                frame: CGRect(x: 1_495, y: -1_405, width: 1_280, height: 1_410)
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: "com.mitchellh.ghostty",
+                pid: 901,
+                documentTitles: ["/Users/test/another-project"],
+                title: "Another terminal",
+                frame: CGRect(x: 2_000, y: 200, width: 600, height: 500)
+            )
+        ]
+
+        let plan = planner.plans(for: [savedWindow], candidates: candidates).first
+
+        XCTAssertTrue(configuration.effectiveTargets.isEmpty)
+        XCTAssertEqual(configuration.matchingTargets, [automaticTarget])
+        XCTAssertEqual(plan?.candidate?.id, 1)
+        XCTAssertEqual(plan?.matchStrategy, .scored)
+        XCTAssertNil(plan?.skip)
+    }
+
+    func testPlansPreferNonemptyManualTargetsOverAutomaticTargetsForMatching() {
+        let planner = RestoreWindowMatchPlanner()
+        let automaticTarget = WindowOpenTarget(
+            kind: .folder,
+            url: URL(fileURLWithPath: "/Users/test/automatic", isDirectory: true)
+        )
+        let manualTarget = WindowOpenTarget(
+            kind: .folder,
+            url: URL(fileURLWithPath: "/Users/test/manual", isDirectory: true)
+        )
+        let configuration = WindowOpeningConfiguration(
+            automaticallyCapturedTargets: [automaticTarget],
+            manualTargets: [manualTarget]
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: "com.example.terminal",
+            pidAtCapture: 100,
+            windowTitle: "Saved terminal",
+            frame: CGRect(x: -1_900, y: 20, width: 1_000, height: 700),
+            openingConfiguration: configuration
+        )
+        let candidates = [
+            makeCandidate(
+                id: 1,
+                bundleIdentifier: "com.example.terminal",
+                pid: 900,
+                documentTitles: [automaticTarget.url.path],
+                title: "Automatic terminal",
+                frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: "com.example.terminal",
+                pid: 901,
+                documentTitles: [manualTarget.url.path],
+                title: "Manual terminal",
+                frame: CGRect(x: 2_000, y: 900, width: 400, height: 300)
+            )
+        ]
+
+        let plan = planner.plans(for: [savedWindow], candidates: candidates).first
+
+        XCTAssertEqual(configuration.matchingTargets, [manualTarget])
+        XCTAssertEqual(plan?.candidate?.id, 2)
+        XCTAssertEqual(plan?.matchStrategy, .scored)
+        XCTAssertNil(plan?.skip)
+    }
+
+    func testPlansDoNotMatchLocalTargetByBasenameFromDifferentParent() {
+        let planner = RestoreWindowMatchPlanner()
+        let savedURL = URL(fileURLWithPath: "/Users/test/Second/src", isDirectory: true)
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: "com.example.terminal",
+            pidAtCapture: 100,
+            windowTitle: "Saved terminal",
+            frame: CGRect(x: -1_900, y: 20, width: 1_000, height: 700),
+            openingConfiguration: WindowOpeningConfiguration(
+                manualTargets: [WindowOpenTarget(kind: .folder, url: savedURL)]
+            )
+        )
+        let candidates = [
+            makeCandidate(
+                id: 1,
+                bundleIdentifier: "com.example.terminal",
+                pid: 900,
+                documentTitles: ["shell: /Users/test/First/src"],
+                title: "Different terminal",
+                frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: "com.example.terminal",
+                pid: 901,
+                documentTitles: ["shell: /Users/test/Third/src"],
+                title: "Another terminal",
+                frame: CGRect(x: 2_000, y: 900, width: 400, height: 300)
+            )
+        ]
+
+        let plan = planner.plans(for: [savedWindow], candidates: candidates).first
+
+        XCTAssertNil(plan?.candidate)
+        XCTAssertEqual(plan?.skip?.reason, RestoreSkipReason.windowNotFound)
+    }
+
+    func testPlansReserveExactBrowserScriptingIdentifierBeforeScoring() {
+        let planner = RestoreWindowMatchPlanner()
+        let bundleIdentifier = BrowserAutomationBrowser.chrome.bundleIdentifier
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved Tab",
+            frame: CGRect(x: -1_900, y: 20, width: 1_200, height: 900)
+        )
+        let candidates = [
+            makeCandidate(
+                id: 1,
+                bundleIdentifier: bundleIdentifier,
+                pid: 100,
+                browserScriptingIdentifier: "other-window",
+                documentURLs: [URL(string: "https://saved.example")!],
+                title: "Saved Tab",
+                frame: savedWindow.frame.cgRect
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: bundleIdentifier,
+                pid: 900,
+                browserScriptingIdentifier: "opened-window",
+                documentURLs: [URL(string: "https://redirected.example")!],
+                title: "Redirected Tab",
+                frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+            )
+        ]
+
+        let plans = planner.plans(
+            for: [savedWindow],
+            candidates: candidates,
+            preferredBrowserScriptingIdentifiers: [savedWindow.id: "opened-window"],
+            openedBrowserWindowIDs: [savedWindow.id]
+        )
+
+        XCTAssertEqual(plans.first?.candidate?.id, 2)
+        XCTAssertNil(plans.first?.skip)
+    }
+
+    func testPlansDoNotFallBackWhenAutomatedBrowserEvidenceIsAmbiguous() {
+        let planner = RestoreWindowMatchPlanner()
+        let bundleIdentifier = BrowserAutomationBrowser.chrome.bundleIdentifier
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved Tab",
+            frame: CGRect(x: -1_900, y: 20, width: 1_200, height: 900)
+        )
+        let candidates = [
+            makeCandidate(
+                id: 1,
+                bundleIdentifier: bundleIdentifier,
+                pid: 900,
+                browserScriptingIdentifier: "opened-window",
+                title: "Saved Tab",
+                frame: savedWindow.frame.cgRect
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: bundleIdentifier,
+                pid: 900,
+                browserScriptingIdentifier: "opened-window",
+                title: "Unrelated Window",
+                frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+            )
+        ]
+
+        let plans = planner.plans(
+            for: [savedWindow],
+            candidates: candidates,
+            preferredBrowserScriptingIdentifiers: [savedWindow.id: "opened-window"],
+            openedBrowserWindowIDs: [savedWindow.id]
+        )
+
+        XCTAssertNil(plans.first?.candidate)
+        XCTAssertEqual(
+            plans.first?.skip?.reason,
+            RestoreSkipReason.openedBrowserWindowNotIdentified
+        )
+    }
+
+    func testPlansUseSingletonFallbackOnlyForGenericColdBrowserWindow() {
+        let planner = RestoreWindowMatchPlanner()
+        let bundleIdentifier = BrowserAutomationBrowser.chrome.bundleIdentifier
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved Tab",
+            frame: CGRect(x: -1_900, y: 20, width: 1_200, height: 900)
+        )
+        let candidate = makeCandidate(
+            id: 1,
+            bundleIdentifier: bundleIdentifier,
+            pid: 900,
+            title: "New Tab",
+            frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+        )
+
+        let plans = planner.plans(
+            for: [savedWindow],
+            candidates: [candidate],
+            genericColdOpenedBrowserWindowIDs: [savedWindow.id],
+            openedBrowserWindowIDs: [savedWindow.id]
+        )
+
+        XCTAssertEqual(plans.first?.candidate?.id, 1)
+        XCTAssertNil(plans.first?.skip)
+    }
+
     func testPlansSkipLowConfidenceSameBundleCandidate() {
         let planner = RestoreWindowMatchPlanner()
         let savedWindow = makeWindowRecord(
@@ -112,7 +382,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         XCTAssertEqual(plans.first?.skip?.reason, RestoreSkipReason.windowNotFound)
     }
 
-    func testPlansSkipFarRoleMatchWhenTitleDoesNotMatch() {
+    func testPlansUseSingletonFallbackForFarStandardWindow() {
         let planner = RestoreWindowMatchPlanner()
         let savedWindow = makeWindowRecord(
             bundleIdentifier: "com.example.browser",
@@ -132,8 +402,9 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
 
         let plans = planner.plans(for: [savedWindow], candidates: candidates)
 
-        XCTAssertNil(plans.first?.candidate)
-        XCTAssertEqual(plans.first?.skip?.reason, RestoreSkipReason.windowNotFound)
+        XCTAssertEqual(plans.first?.candidate?.id, 1)
+        XCTAssertEqual(plans.first?.matchStrategy, .singleton)
+        XCTAssertNil(plans.first?.skip)
     }
 
     func testPlansMatchNearbyRoleMatchWhenTitleDoesNotMatch() {
@@ -160,7 +431,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         XCTAssertNil(plans.first?.skip)
     }
 
-    func testPlansMatchOptedInSingletonRoleMatchWhenTitleAndFrameChanged() {
+    func testPlansMatchSingletonRoleWhenTitleAndFrameChanged() {
         let planner = RestoreWindowMatchPlanner()
         let bundleIdentifier = "com.example.browser"
         let savedWindow = makeWindowRecord(
@@ -179,17 +450,14 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
             )
         ]
 
-        let plans = planner.plans(
-            for: [savedWindow],
-            candidates: candidates,
-            singletonFallbackBundleIdentifiers: [bundleIdentifier]
-        )
+        let plans = planner.plans(for: [savedWindow], candidates: candidates)
 
         XCTAssertEqual(plans.first?.candidate?.id, 1)
+        XCTAssertEqual(plans.first?.matchStrategy, .singleton)
         XCTAssertNil(plans.first?.skip)
     }
 
-    func testPlansSkipOptedInSingletonWhenRoleOrSubroleDoesNotMatch() {
+    func testPlansSkipSingletonWhenRoleOrSubroleDoesNotMatch() {
         let planner = RestoreWindowMatchPlanner()
         let bundleIdentifier = "com.example.browser"
         let savedWindow = makeWindowRecord(
@@ -221,8 +489,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         for candidate in candidates {
             let plans = planner.plans(
                 for: [savedWindow],
-                candidates: [candidate],
-                singletonFallbackBundleIdentifiers: [bundleIdentifier]
+                candidates: [candidate]
             )
 
             XCTAssertNil(plans.first?.candidate, "Unexpectedly matched candidate \(candidate.id).")
@@ -257,8 +524,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
 
         let plans = planner.plans(
             for: savedWindows,
-            candidates: candidates,
-            singletonFallbackBundleIdentifiers: [bundleIdentifier]
+            candidates: candidates
         )
 
         XCTAssertTrue(plans.allSatisfy { $0.candidate == nil })
@@ -292,8 +558,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
 
         let plans = planner.plans(
             for: [savedWindow],
-            candidates: candidates,
-            singletonFallbackBundleIdentifiers: [bundleIdentifier]
+            candidates: candidates
         )
 
         XCTAssertNil(plans.first?.candidate)
@@ -544,7 +809,9 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         id: Int,
         bundleIdentifier: String,
         pid: pid_t,
+        browserScriptingIdentifier: String? = nil,
         documentURLs: [URL] = [],
+        documentTitles: [String] = [],
         title: String?,
         role: String = "AXWindow",
         subrole: String? = "AXStandardWindow",
@@ -554,7 +821,9 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
             id: id,
             bundleIdentifier: bundleIdentifier,
             pid: pid,
+            browserScriptingIdentifier: browserScriptingIdentifier,
             documentURLs: documentURLs,
+            documentTitles: documentTitles,
             title: title,
             role: role,
             subrole: subrole,
@@ -771,7 +1040,7 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(discovery.callCount, 1)
     }
 
-    func testLaunchedAppWithNoMatchingWindowSkipsAsWindowNotFound() async throws {
+    func testColdLaunchedSingletonUsesRoleFallback() async throws {
         let bundleIdentifier = "com.example.editor"
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let snapshot = makeSnapshot(windows: [
@@ -805,10 +1074,12 @@ final class RestoreEngineTests: XCTestCase {
         ).restoreSnapshot(id: snapshot.id)
 
         XCTAssertEqual(launcher.requestedBundleIdentifiers, [bundleIdentifier])
-        XCTAssertEqual(result.skippedItems.first?.reason, RestoreSkipReason.windowNotFound)
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
     }
 
-    func testPollingContinuesPastStartupWindowUntilPlausibleSavedWindowAppears() async throws {
+    func testColdSingletonReadinessReturnsAtFirstStandardWindow() async throws {
         let bundleIdentifier = "com.example.editor"
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let savedWindow = makeWindowRecord(
@@ -856,7 +1127,8 @@ final class RestoreEngineTests: XCTestCase {
         ).restoreSnapshot(id: snapshot.id)
 
         XCTAssertEqual(result.restoredWindows, 1)
-        XCTAssertEqual(discovery.callCount, 3)
+        XCTAssertEqual(discovery.callCount, 2)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
     }
 
     func testAlreadyRunningAppDoesNotRequestLaunch() async throws {
@@ -890,7 +1162,7 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.restoredWindows, 1)
     }
 
-    func testAlreadyRunningSingletonRestoresAfterTitleAndFrameChange() async throws {
+    func testAlreadyRunningSingletonUsesRoleFallback() async throws {
         let bundleIdentifier = "com.example.editor"
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let savedWindow = makeWindowRecord(
@@ -926,7 +1198,59 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
         XCTAssertEqual(windowApplier.appliedBundleIdentifiers, [bundleIdentifier])
+    }
+
+    func testWorkGhosttyUsesAutomaticTargetEvidenceWithoutOpeningTarget() async throws {
+        let bundleIdentifier = "com.mitchellh.ghostty"
+        let targetURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("solvoyo/web-react18", isDirectory: true)
+        let automaticTarget = WindowOpenTarget(kind: .folder, url: targetURL)
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            pidAtCapture: 20_351,
+            windowTitle: "~/solvoyo/web-react18",
+            frame: CGRect(x: -852, y: -1_410, width: 1_653, height: 1_410),
+            zOrderHint: 1,
+            openingConfiguration: WindowOpeningConfiguration(
+                automaticallyCapturedTargets: [automaticTarget],
+                manualTargets: []
+            )
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let targetOpener = RecordingTargetOpener()
+        let windowApplier = RecordingEngineWindowApplier()
+        let liveWindow = makeDiscoveredWindow(
+            documentTitles: ["~/solvoyo/web-react18"],
+            title: "lg",
+            frame: CGRect(x: 1_495, y: -1_405, width: 1_280, height: 1_410)
+        )
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: DiscoverySequence([
+                [
+                    makeApplication(
+                        bundleIdentifier: bundleIdentifier,
+                        pid: 694,
+                        windows: [liveWindow]
+                    )
+                ]
+            ]),
+            windowApplier: windowApplier,
+            targetOpener: targetOpener
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertTrue(targetOpener.requests.isEmpty)
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .scored)
+        XCTAssertEqual(windowApplier.appliedBundleIdentifiers, [bundleIdentifier])
+        XCTAssertEqual(windowApplier.raiseCount, 1)
     }
 
     func testLocalTargetsAreOpenedSequentiallyInOrderIncludingDuplicates() async throws {
@@ -1694,7 +2018,9 @@ final class RestoreEngineTests: XCTestCase {
                 url: URL(string: "https://example.com/second")!
             )
         ]
-        let browserWindowOpener = RecordingBrowserWindowOpener(results: [.opened])
+        let browserWindowOpener = RecordingBrowserWindowOpener(
+            results: [.opened(makeCapturedBrowserWindow(browser: .safari))]
+        )
         let workspaceOpener = RecordingWorkspaceOpener()
         let opener = NSWorkspaceRestoreTargetOpener(
             applicationURLProvider: { _ in applicationURL },
@@ -2185,7 +2511,8 @@ final class RestoreEngineTests: XCTestCase {
             store: store,
             launcher: launcher,
             discovery: discovery,
-            targetOpener: targetOpener
+            targetOpener: targetOpener,
+            launchTimeout: 0
         )
 
         let firstResult = try await engine.restoreSnapshot(id: snapshot.id)
@@ -2207,7 +2534,52 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(secondResult.requestedTargetCount, 2)
         XCTAssertEqual(firstResult.restoredWindows, 1)
         XCTAssertEqual(secondResult.restoredWindows, 1)
+        XCTAssertTrue(firstResult.skippedItems.isEmpty)
+        XCTAssertTrue(secondResult.skippedItems.isEmpty)
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+    }
+
+    func testColdNonBrowserWebHandlerUsesStrictSingletonFallback() async throws {
+        let bundleIdentifier = "com.example.slack"
+        let target = WindowOpenTarget(
+            kind: .webURL,
+            url: URL(string: "https://app.example.com/client/workspace/channel")!
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved conversation",
+            frame: CGRect(x: -1_900, y: 20, width: 1_000, height: 700),
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let launcher = RecordingApplicationLauncher(results: [:])
+        let targetOpener = RecordingTargetOpener()
+        let readyApplication = makeApplication(
+            bundleIdentifier: bundleIdentifier,
+            pid: 900,
+            windows: [
+                makeDiscoveredWindow(
+                    title: "Loading",
+                    frame: CGRect(x: 1_500, y: 900, width: 400, height: 300)
+                )
+            ]
+        )
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: launcher,
+            discovery: DiscoverySequence([[], [readyApplication]]),
+            targetOpener: targetOpener
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(targetOpener.requests.map(\.disposition), [.applicationDefault])
+        XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
     }
 
     func testConnectedBrowserSkipsWebTargetThatIsAlreadyOpen() async throws {
@@ -2315,7 +2687,14 @@ final class RestoreEngineTests: XCTestCase {
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let snapshot = makeSnapshot(windows: [savedWindow])
         try store.save(snapshot)
-        let targetOpener = RecordingTargetOpener(results: [.opened])
+        let openedFrame = CGRect(x: 700, y: 100, width: 600, height: 500)
+        let targetOpener = RecordingTargetOpener(
+            results: [
+                .openedNewBrowserWindow(
+                    makeCapturedBrowserWindow(browser: browser, frame: openedFrame)
+                )
+            ]
+        )
         let application = makeApplication(
             bundleIdentifier: browser.bundleIdentifier,
             windows: [
@@ -2326,11 +2705,21 @@ final class RestoreEngineTests: XCTestCase {
                 )
             ]
         )
+        let readyApplication = makeApplication(
+            bundleIdentifier: browser.bundleIdentifier,
+            windows: application.windows + [
+                makeDiscoveredWindow(
+                    documentURL: target.url,
+                    title: "Opened Window",
+                    frame: openedFrame
+                )
+            ]
+        )
 
         let result = try await makeEngine(
             store: store,
             launcher: RecordingApplicationLauncher(results: [:]),
-            discovery: DiscoverySequence([[application], [application]]),
+            discovery: DiscoverySequence([[application], [readyApplication]]),
             targetOpener: targetOpener,
             browserTabCapturer: StubRestoreBrowserTabCapturer(
                 result: BrowserTabCaptureResult(
@@ -2381,7 +2770,6 @@ final class RestoreEngineTests: XCTestCase {
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let snapshot = makeSnapshot(windows: [savedWindow])
         try store.save(snapshot)
-        let targetOpener = RecordingTargetOpener()
         let application = makeApplication(
             bundleIdentifier: browser.bundleIdentifier,
             windows: [
@@ -2397,8 +2785,18 @@ final class RestoreEngineTests: XCTestCase {
             windows: application.windows + [
                 makeDiscoveredWindow(
                     documentURLs: [repeatedTarget.url, otherTarget.url],
-                    title: savedWindow.windowTitle,
-                    frame: savedWindow.frame.cgRect
+                    title: "Opened Window",
+                    frame: CGRect(x: 700, y: 100, width: 600, height: 500)
+                )
+            ]
+        )
+        let targetOpener = RecordingTargetOpener(
+            results: [
+                .openedNewBrowserWindow(
+                    makeCapturedBrowserWindow(
+                        browser: browser,
+                        frame: CGRect(x: 700, y: 100, width: 600, height: 500)
+                    )
                 )
             ]
         )
@@ -2491,7 +2889,148 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
     }
 
-    func testBrowserWindowPollingWaitsForWindowCountIncreaseInsteadOfMatchingStalePID() async throws {
+    func testColdChromeUsesOpenedWindowEvidenceAcrossPidTitleURLAndMonitor() async throws {
+        let browser = BrowserAutomationBrowser.chrome
+        let target = WindowOpenTarget(
+            kind: .webURL,
+            url: URL(string: "https://saved.example")!
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: browser.bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved Tab",
+            frame: CGRect(x: -1_900, y: 40, width: 1_200, height: 900),
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let openedFrame = CGRect(x: 1_400, y: 800, width: 500, height: 350)
+        let evidence = makeCapturedBrowserWindow(
+            scriptingIdentifier: "chrome-window-42",
+            frame: openedFrame
+        )
+        let discoveredWindow = makeDiscoveredWindow(
+            documentURL: URL(string: "https://redirected.example")!,
+            title: "Redirected Tab",
+            frame: openedFrame
+        )
+        let readyApplication = makeApplication(
+            bundleIdentifier: browser.bundleIdentifier,
+            pid: 900,
+            windows: [discoveredWindow]
+        )
+        let discovery = DiscoverySequence([[], [readyApplication]])
+        let windowApplier = RecordingEngineWindowApplier()
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: discovery,
+            windowApplier: windowApplier,
+            targetOpener: RecordingTargetOpener(
+                results: [.openedNewBrowserWindow(evidence)]
+            )
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(discovery.callCount, 2)
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(windowApplier.appliedWindowTitles, ["Redirected Tab"])
+    }
+
+    func testColdGenericBrowserFallbackRestoresOnlySingletonRoleMatch() async throws {
+        let browser = BrowserAutomationBrowser.chrome
+        let target = WindowOpenTarget(
+            kind: .webURL,
+            url: URL(string: "https://saved.example")!
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: browser.bundleIdentifier,
+            pidAtCapture: 100,
+            windowTitle: "Saved Tab",
+            frame: CGRect(x: -1_900, y: 40, width: 1_200, height: 900),
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let readyApplication = makeApplication(
+            bundleIdentifier: browser.bundleIdentifier,
+            pid: 900,
+            windows: [
+                makeDiscoveredWindow(
+                    title: "New Tab",
+                    frame: CGRect(x: 1_400, y: 800, width: 500, height: 350)
+                )
+            ]
+        )
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: DiscoverySequence([[], [readyApplication]]),
+            targetOpener: RecordingTargetOpener(results: [.opened])
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+    }
+
+    func testAmbiguousOpenedBrowserEvidenceSkipsGeometryAndZOrder() async throws {
+        let browser = BrowserAutomationBrowser.chrome
+        let target = WindowOpenTarget(
+            kind: .webURL,
+            url: URL(string: "https://saved.example")!
+        )
+        let savedWindow = makeWindowRecord(
+            bundleIdentifier: browser.bundleIdentifier,
+            windowTitle: "Saved Tab",
+            zOrderHint: 1,
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [savedWindow])
+        try store.save(snapshot)
+        let openedFrame = CGRect(x: 1_400, y: 800, width: 500, height: 350)
+        let evidence = makeCapturedBrowserWindow(
+            scriptingIdentifier: "chrome-window-42",
+            frame: openedFrame
+        )
+        let ambiguousApplication = makeApplication(
+            bundleIdentifier: browser.bundleIdentifier,
+            windows: [
+                makeDiscoveredWindow(title: "Opened Window", frame: openedFrame),
+                makeDiscoveredWindow(title: "Opened Window", frame: openedFrame)
+            ]
+        )
+        let windowApplier = RecordingEngineWindowApplier()
+
+        let result = try await makeEngine(
+            store: store,
+            launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: DiscoverySequence([[], [ambiguousApplication]]),
+            windowApplier: windowApplier,
+            targetOpener: RecordingTargetOpener(
+                results: [.openedNewBrowserWindow(evidence)]
+            ),
+            launchTimeout: 0
+        ).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(
+            result.skippedItems.first?.reason,
+            RestoreSkipReason.openedBrowserWindowNotIdentified
+        )
+        XCTAssertTrue(windowApplier.appliedWindowTitles.isEmpty)
+        XCTAssertEqual(windowApplier.raiseCount, 0)
+        XCTAssertEqual(windowApplier.focusCount, 0)
+        XCTAssertEqual(result.windowDiagnostics.first?.candidateCount, 2)
+        XCTAssertEqual(result.windowDiagnostics.first?.readinessTimedOut, true)
+        XCTAssertEqual(result.windowDiagnostics.first?.geometryAttempted, false)
+    }
+
+    func testBrowserWindowPollingWaitsForEvidencedWindowInsteadOfMatchingStalePID() async throws {
         let browser = BrowserAutomationBrowser.safari
         let target = WindowOpenTarget(
             kind: .webURL,
@@ -2540,7 +3079,16 @@ final class RestoreEngineTests: XCTestCase {
             launcher: RecordingApplicationLauncher(results: [:]),
             discovery: discovery,
             windowApplier: windowApplier,
-            targetOpener: RecordingTargetOpener(),
+            targetOpener: RecordingTargetOpener(
+                results: [
+                    .openedNewBrowserWindow(
+                        makeCapturedBrowserWindow(
+                            browser: browser,
+                            frame: CGRect(x: 900, y: 700, width: 300, height: 200)
+                        )
+                    )
+                ]
+            ),
             launchTimeout: 1,
             launchClock: clock.now,
             launchPollSleeper: clock.sleep
@@ -2555,7 +3103,7 @@ final class RestoreEngineTests: XCTestCase {
         )
     }
 
-    func testGenericBrowserFallbackDoesNotWaitForWindowCountIncrease() async throws {
+    func testGenericRunningBrowserFallbackDoesNotMoveExistingWindow() async throws {
         let browser = BrowserAutomationBrowser.safari
         let target = WindowOpenTarget(
             kind: .webURL,
@@ -2589,7 +3137,7 @@ final class RestoreEngineTests: XCTestCase {
             launcher: RecordingApplicationLauncher(results: [:]),
             discovery: discovery,
             targetOpener: targetOpener,
-            launchTimeout: 1,
+            launchTimeout: 0,
             launchClock: clock.now,
             launchPollSleeper: clock.sleep
         ).restoreSnapshot(id: snapshot.id)
@@ -2597,10 +3145,14 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(targetOpener.requests.first?.disposition, .newBrowserWindow)
         XCTAssertEqual(discovery.callCount, 2)
         XCTAssertEqual(result.requestedTargetCount, 1)
-        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(
+            result.skippedItems.first?.reason,
+            RestoreSkipReason.openedBrowserWindowNotIdentified
+        )
     }
 
-    func testSeparateBrowserBatchesReportMergedWindowShortage() async throws {
+    func testSeparateNonAutomatedWebBatchesRestoreMatchableWindowAndSkipShortage() async throws {
         let bundleIdentifier = "com.example.browser"
         let firstTarget = WindowOpenTarget(
             kind: .webURL,
@@ -2684,19 +3236,38 @@ final class RestoreEngineTests: XCTestCase {
             let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
             let snapshot = makeSnapshot(windows: [firstWindow, secondWindow])
             try store.save(snapshot)
-            let targetOpener = RecordingTargetOpener()
+            let firstOpenedFrame = CGRect(x: 100, y: 100, width: 600, height: 500)
+            let secondOpenedFrame = CGRect(x: 800, y: 100, width: 600, height: 500)
+            let targetOpener = RecordingTargetOpener(
+                results: [
+                    .openedNewBrowserWindow(
+                        makeCapturedBrowserWindow(
+                            browser: browser,
+                            scriptingIdentifier: "first-opened-window",
+                            frame: firstOpenedFrame
+                        )
+                    ),
+                    .openedNewBrowserWindow(
+                        makeCapturedBrowserWindow(
+                            browser: browser,
+                            scriptingIdentifier: "second-opened-window",
+                            frame: secondOpenedFrame
+                        )
+                    )
+                ]
+            )
             let readyApplication = makeApplication(
                 bundleIdentifier: browser.bundleIdentifier,
                 windows: [
                     makeDiscoveredWindow(
                         documentURL: firstTarget.url,
                         title: firstWindow.windowTitle,
-                        frame: firstWindow.frame.cgRect
+                        frame: firstOpenedFrame
                     ),
                     makeDiscoveredWindow(
                         documentURL: secondTarget.url,
                         title: secondWindow.windowTitle,
-                        frame: secondWindow.frame.cgRect
+                        frame: secondOpenedFrame
                     )
                 ]
             )
@@ -3016,8 +3587,30 @@ private final class RecordingTargetOpener: RestoreTargetOpening {
         if !results.isEmpty {
             return results.removeFirst()
         }
-        return disposition == .newBrowserWindow ? .openedNewBrowserWindow : .opened
+        return disposition == .newBrowserWindow
+            ? .openedNewBrowserWindow(makeCapturedBrowserWindow())
+            : .opened
     }
+}
+
+private func makeCapturedBrowserWindow(
+    browser: BrowserAutomationBrowser = .chrome,
+    scriptingIdentifier: String? = "opened-window",
+    frame: CGRect = CGRect(x: 100, y: 100, width: 800, height: 600)
+) -> CapturedBrowserWindow {
+    CapturedBrowserWindow(
+        browser: browser,
+        scriptingIdentifier: scriptingIdentifier,
+        title: "Opened Window",
+        frame: frame,
+        frontToBackIndex: 0,
+        tabs: [
+            CapturedBrowserTab(
+                title: "Example",
+                URL: URL(string: "https://example.com")!
+            )
+        ]
+    )
 }
 
 private final class RecordingBrowserWindowOpener: BrowserWindowOpening {

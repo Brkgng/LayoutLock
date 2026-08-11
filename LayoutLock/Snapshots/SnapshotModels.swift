@@ -108,6 +108,14 @@ struct WindowOpeningConfiguration: Codable, Hashable {
         manualTargets ?? automaticallyCapturedTargets
     }
 
+    var matchingTargets: [WindowOpenTarget] {
+        guard let manualTargets, !manualTargets.isEmpty else {
+            return automaticallyCapturedTargets
+        }
+
+        return manualTargets
+    }
+
     var isManual: Bool {
         manualTargets != nil
     }

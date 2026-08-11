@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 enum BrowserWindowOpenResult {
-    case opened
+    case opened(CapturedBrowserWindow)
     case unavailable
     case failed
 }
@@ -98,14 +98,19 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         }
 
         do {
-            _ = try scriptEvaluator.evaluate(
+            let descriptor = try scriptEvaluator.evaluate(
                 Self.script(
                     for: browser,
                     targets: targets,
-                    reuseDisposableSafariWindow: browser == .safari && !wasRunning
+                    reuseDisposableStartupWindow: !wasRunning
                 )
             )
-            return .opened
+            guard let openedWindow = try BrowserScriptResultParser()
+                .parse(descriptor, browser: browser)
+                .first else {
+                return .failed
+            }
+            return .opened(openedWindow)
         } catch {
             AppLogger.browserAutomation.error(
                 "\(browser.displayName, privacy: .public) window restore failed."
@@ -117,14 +122,14 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
     static func script(
         for browser: BrowserAutomationBrowser,
         targets: [WindowOpenTarget],
-        reuseDisposableSafariWindow: Bool = false
+        reuseDisposableStartupWindow: Bool = false
     ) -> String {
         let URLs = targets.map { appleScriptLiteral($0.url.absoluteString) }
         let URLList = "{\(URLs.joined(separator: ", "))}"
 
         switch browser {
         case .safari:
-            let selectTargetWindow = reuseDisposableSafariWindow
+            let selectTargetWindow = reuseDisposableStartupWindow
                 ? """
                 set shouldReuseFrontWindow to false
                 if (count windows) > 0 then
@@ -167,13 +172,51 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                     end repeat
                 end if
                 set current tab of targetWindow to tab 1 of targetWindow
+                set capturedTabs to {}
+                repeat with browserTab in tabs of targetWindow
+                    set tabURL to URL of browserTab
+                    if tabURL is missing value then set tabURL to ""
+                    set tabTitle to name of browserTab
+                    if tabTitle is missing value then set tabTitle to ""
+                    set end of capturedTabs to {tabTitle as text, tabURL as text}
+                end repeat
+                set windowBounds to bounds of targetWindow
+                set normalizedBounds to {item 1 of windowBounds, item 2 of windowBounds, item 3 of windowBounds, item 4 of windowBounds}
+                return {{(id of targetWindow) as text, (name of targetWindow) as text, normalizedBounds, capturedTabs}}
             end tell
             """
         case .chrome:
+            let selectTargetWindow = reuseDisposableStartupWindow
+                ? """
+                set shouldReuseFrontWindow to false
+                if (count windows) is 1 then
+                    set candidateWindow to front window
+                    if (mode of candidateWindow) is "normal" and (count tabs of candidateWindow) is 1 then
+                        set candidateURL to URL of active tab of candidateWindow
+                        if candidateURL is missing value then
+                            set shouldReuseFrontWindow to true
+                        else
+                            set candidateURLText to candidateURL as text
+                            if candidateURLText is "" or candidateURLText starts with "chrome://newtab" then
+                                set shouldReuseFrontWindow to true
+                            end if
+                        end if
+                    end if
+                end if
+
+                if shouldReuseFrontWindow then
+                    set targetWindow to candidateWindow
+                else
+                    set targetWindow to make new window with properties {mode:"normal"}
+                end if
+                """
+                : """
+                set targetWindow to make new window with properties {mode:"normal"}
+                """
             return """
             set targetURLs to \(URLList)
             tell application id "com.google.Chrome"
-                set targetWindow to make new window with properties {mode:"normal"}
+                \(selectTargetWindow)
                 set URL of active tab of targetWindow to item 1 of targetURLs
                 if (count targetURLs) > 1 then
                     repeat with tabIndex from 2 to count targetURLs
@@ -184,6 +227,17 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                     end repeat
                 end if
                 set active tab index of targetWindow to 1
+                set capturedTabs to {}
+                repeat with browserTab in tabs of targetWindow
+                    set tabURL to URL of browserTab
+                    if tabURL is missing value then set tabURL to ""
+                    set tabTitle to title of browserTab
+                    if tabTitle is missing value then set tabTitle to ""
+                    set end of capturedTabs to {tabTitle as text, tabURL as text}
+                end repeat
+                set windowBounds to bounds of targetWindow
+                set normalizedBounds to {item 1 of windowBounds, item 2 of windowBounds, item 3 of windowBounds, item 4 of windowBounds}
+                return {{(id of targetWindow) as text, (name of targetWindow) as text, normalizedBounds, capturedTabs}}
             end tell
             """
         }

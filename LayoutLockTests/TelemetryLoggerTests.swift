@@ -101,6 +101,23 @@ final class TelemetryLoggerTests: XCTestCase {
                     ),
                     reason: .unsupportedURL
                 )
+            ],
+            windowDiagnostics: [
+                RestoreWindowDiagnostic(
+                    windowID: snapshot.windows[0].id,
+                    bundleIdentifier: "com.example.editor",
+                    matchStrategy: .scored,
+                    candidateCount: 2,
+                    filteredCandidateCount: 1,
+                    readinessTimedOut: false,
+                    geometryAttempted: true,
+                    geometryAttemptCount: 2,
+                    expectedFrame: CGRect(x: -1000, y: 20, width: 800, height: 600),
+                    finalObservedFrame: CGRect(x: -1000, y: 20, width: 800, height: 600),
+                    displayOutcome: .hardwareRemap,
+                    result: "restored",
+                    reason: nil
+                )
             ]
         )
         let event = TelemetryLogEvent.restoreCompleted(snapshot: snapshot, result: result)
@@ -123,6 +140,8 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertTrue(json.contains("openRequestFailed"))
         XCTAssertTrue(json.contains("\"targetKind\":\"file\""))
         XCTAssertTrue(json.contains("\"targetKind\":\"webURL\""))
+        XCTAssertTrue(json.contains("\"matchStrategy\":\"scored\""))
+        XCTAssertTrue(json.contains("\"displayOutcome\":\"hardwareRemap\""))
         XCTAssertTrue(json.contains("unsupportedURL"))
     }
 

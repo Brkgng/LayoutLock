@@ -25,6 +25,8 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         XCTAssertEqual(accessor.frame, targetFrame)
         XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
         XCTAssertEqual(sleepCount, 1)
+        XCTAssertEqual(result.attemptCount, 1)
+        XCTAssertEqual(result.finalObservedFrame, targetFrame)
     }
 
     func testInitiallyCorrectGeometryThatDriftsDuringSettlingIsRetried() async throws {
@@ -150,6 +152,8 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         XCTAssertEqual(result.failureReason, RestoreSkipReason.windowGeometryDidNotSettle)
         XCTAssertEqual(sleepCount, 4)
         XCTAssertEqual(accessor.writeOrder.count, 12)
+        XCTAssertEqual(result.attemptCount, 4)
+        XCTAssertEqual(result.finalObservedFrame, accessor.frame)
     }
 
     func testFrameExactlyTwoPointsFromTargetIsAccepted() async throws {
