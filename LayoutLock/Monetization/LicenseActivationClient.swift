@@ -75,7 +75,9 @@ struct LicenseActivationClient: LicenseActivationClienting {
         self.session = session
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            try Self.decodeISO8601Date(from: decoder)
+        }
         self.decoder = decoder
 
         let encoder = JSONEncoder()
@@ -125,8 +127,38 @@ struct LicenseActivationClient: LicenseActivationClienting {
             throw LicenseActivationClientError.invalidResponse
         }
 
-        return try decoder
-            .decode(LicenseValidationResult.self, from: data)
-            .validatingProductID(expectedProductID)
+        let result: LicenseValidationResult
+        do {
+            result = try decoder.decode(LicenseValidationResult.self, from: data)
+        } catch is DecodingError {
+            AppLogger.entitlements.error(
+                "Failed to decode license response with HTTP status \(httpResponse.statusCode) and \(data.count) bytes"
+            )
+            throw LicenseActivationClientError.invalidResponse
+        }
+
+        return try result.validatingProductID(expectedProductID)
+    }
+
+    private static func decodeISO8601Date(from decoder: Decoder) throws -> Date {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let date = formatter.date(from: value) {
+            return date
+        }
+
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Expected an ISO-8601 date."
+        )
     }
 }
