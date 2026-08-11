@@ -113,6 +113,7 @@ struct DashboardView: View {
     @ObservedObject var entitlementController: EntitlementController
     @ObservedObject var settingsNavigationController: SettingsNavigationController
     @ObservedObject var updateController: AppUpdateController
+    @ObservedObject var raycastRecommendationController: RaycastRecommendationController
     let windowPresentationCoordinator: DashboardWindowPresentationCoordinator
 
     @State private var selectedSnapshotID: UUID?
@@ -235,26 +236,36 @@ struct DashboardView: View {
             .navigationTitle("Layouts")
             .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
-            DashboardDetailView(
-                bootstrapErrorMessage: bootstrapErrorMessage,
-                permissionCoordinator: permissionCoordinator,
-                permissionRouter: permissionRouter,
-                snapshotMenuController: snapshotMenuController,
-                selectedSnapshotID: selectedSnapshotID,
-                selectedSnapshot: selectedSnapshot,
-                selectedSummary: selectedSummary,
-                inlineRenameRequestID: inlineRenameRequestID,
-                hotkeyEditRequestID: hotkeyEditRequestID,
-                renameSnapshotInline: renameSnapshotInline,
-                clearHotkey: clearHotkeyFromSelectedSnapshot,
-                deleteSnapshot: deleteSelectedSnapshot,
-                removeWindow: requestWindowRemoval,
-                editOpeningTargets: requestOpeningTargetsEdit,
-                reorderWindows: reorderDisplayWindows,
-                updateSnapshot: updateSelectedSnapshot,
-                restoreSnapshot: restoreSelectedSnapshot,
-                saveSnapshot: saveSnapshot
-            )
+            VStack(spacing: 0) {
+                if raycastRecommendationController.shouldShow {
+                    RaycastRecommendationBanner(
+                        install: openRaycastSetup,
+                        dismiss: raycastRecommendationController.dismiss
+                    )
+                    Divider()
+                }
+
+                DashboardDetailView(
+                    bootstrapErrorMessage: bootstrapErrorMessage,
+                    permissionCoordinator: permissionCoordinator,
+                    permissionRouter: permissionRouter,
+                    snapshotMenuController: snapshotMenuController,
+                    selectedSnapshotID: selectedSnapshotID,
+                    selectedSnapshot: selectedSnapshot,
+                    selectedSummary: selectedSummary,
+                    inlineRenameRequestID: inlineRenameRequestID,
+                    hotkeyEditRequestID: hotkeyEditRequestID,
+                    renameSnapshotInline: renameSnapshotInline,
+                    clearHotkey: clearHotkeyFromSelectedSnapshot,
+                    deleteSnapshot: deleteSelectedSnapshot,
+                    removeWindow: requestWindowRemoval,
+                    editOpeningTargets: requestOpeningTargetsEdit,
+                    reorderWindows: reorderDisplayWindows,
+                    updateSnapshot: updateSelectedSnapshot,
+                    restoreSnapshot: restoreSelectedSnapshot,
+                    saveSnapshot: saveSnapshot
+                )
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 940, minHeight: 640)
@@ -396,6 +407,10 @@ struct DashboardView: View {
             reconcileSelection(with: snapshotMenuController.snapshotSummaries)
             refreshSelectedSnapshot()
             focusLayoutList()
+            raycastRecommendationController.refreshAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            raycastRecommendationController.refreshAvailability()
         }
         .onReceive(snapshotMenuController.$snapshotSummaries) { summaries in
             reconcileSelection(with: summaries)
@@ -408,7 +423,11 @@ struct DashboardView: View {
         .onChange(of: selectedSnapshotID) { _, _ in
             permissionRouter.clearDashboardPermissionEducationForContextChange()
         }
+    }
 
+    private func openRaycastSetup() {
+        raycastRecommendationController.extensionSetupRequested()
+        openURL(LayoutLockSupport.raycastURL)
     }
 
     private var deleteConfirmationMessage: String {
@@ -1554,6 +1573,44 @@ struct PlanStatusView: View {
 
     private var helpText: String {
         presentation.isLimitReached ? "Open Pro checkout" : "Open Pro settings"
+    }
+}
+
+private struct RaycastRecommendationBanner: View {
+    let install: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "command")
+                .font(.title2)
+                .foregroundStyle(.blue)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Use LayoutLock with Raycast")
+                    .font(.headline)
+                Text("Save and restore layouts without leaving Raycast.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Install Extension", action: install)
+                .buttonStyle(.borderedProminent)
+
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss Raycast Recommendation")
+        }
+        .padding(12)
+        .background(.bar)
     }
 }
 

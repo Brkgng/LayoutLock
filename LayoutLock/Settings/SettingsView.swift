@@ -5,6 +5,7 @@ enum LayoutLockSupport {
     static let emailAddress = "support@layoutlock.app"
     static let privacyPolicyURL = URL(string: "https://layoutlock.app/privacy")!
     static let termsOfServiceURL = URL(string: "https://layoutlock.app/terms")!
+    static let raycastURL = URL(string: "https://layoutlock.app/raycast")!
     static let supportEmailBody = "\n\n"
     static let refundEmailSubject = "LayoutLock Refund Request"
     static let refundEmailBody = "Purchase email or Creem order ID:\n\n"
@@ -23,7 +24,7 @@ enum LayoutLockSupport {
 
 enum SettingsTab: Hashable {
     case general
-    case browsers
+    case integrations
     case pro
     case diagnostics
     case about
@@ -46,6 +47,7 @@ struct SettingsView: View {
     @ObservedObject var entitlementController: EntitlementController
     @ObservedObject var settingsNavigationController: SettingsNavigationController
     @ObservedObject var updateController: AppUpdateController
+    @ObservedObject var raycastRecommendationController: RaycastRecommendationController
 
     @AppStorage(LayoutLockSettings.suggestRestoreOnDisplayChangeKey)
     private var suggestRestoreOnDisplayChange = true
@@ -60,6 +62,7 @@ struct SettingsView: View {
     @State private var proActionMessage: String?
     @State private var isShowingDeactivationConfirmation = false
     @State private var browserInfo: BrowserAutomationBrowser?
+    @State private var isRaycastInstalled = false
 
     var body: some View {
         TabView(selection: $settingsNavigationController.selectedTab) {
@@ -71,9 +74,9 @@ struct SettingsView: View {
 
             integrationsTab
                 .tabItem {
-                    Label("Browsers", systemImage: "safari")
+                    Label("Integrations", systemImage: "puzzlepiece.extension")
                 }
-                .tag(SettingsTab.browsers)
+                .tag(SettingsTab.integrations)
 
             proTab
                 .tabItem {
@@ -93,7 +96,7 @@ struct SettingsView: View {
                 }
                 .tag(SettingsTab.about)
         }
-        .frame(width: 540, height: 390)
+        .frame(width: 560, height: 460)
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .navigationTitle("Settings")
@@ -101,10 +104,12 @@ struct SettingsView: View {
             launchAtLoginController.refreshStatus()
             permissionCoordinator.refreshTrust(trigger: .manualCheckAgain)
             browserAutomationController.refresh()
+            refreshRaycastAvailability()
             refreshDiagnosticLogAvailability()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLoginController.refreshStatus()
+            refreshRaycastAvailability()
         }
         .onChange(of: settingsNavigationController.selectedTab) { _, selectedTab in
             if selectedTab == .diagnostics {
@@ -267,6 +272,36 @@ struct SettingsView: View {
             } footer: {
                 Text("macOS asks for Automation access only when you click Connect.")
             }
+
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "command")
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                        .frame(width: 32, height: 32)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Raycast")
+                            .fontWeight(.medium)
+                        Text(isRaycastInstalled ? "Raycast is installed on this Mac" : "Install Raycast to use the extension")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Get Extension") {
+                        raycastRecommendationController.extensionSetupRequested()
+                        NSWorkspace.shared.open(LayoutLockSupport.raycastURL)
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Raycast")
+            } footer: {
+                Text("Raycast asks you to confirm extension installation. LayoutLock cannot detect whether the extension itself is installed.")
+            }
         }
         .formStyle(.grouped)
         .popover(item: $browserInfo) { browser in
@@ -288,6 +323,12 @@ struct SettingsView: View {
             .padding()
             .frame(width: 300, alignment: .leading)
         }
+    }
+
+    private func refreshRaycastAvailability() {
+        isRaycastInstalled = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.raycast.macos"
+        ) != nil
     }
 
     @ViewBuilder

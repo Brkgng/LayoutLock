@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OnboardingReadyStep: View {
     let onSetUpBrowsers: () -> Void
+    let onInstallRaycast: () -> Void
     let onOpenDashboard: () -> Void
     let onDone: () -> Void
 
@@ -23,6 +24,7 @@ struct OnboardingReadyStep: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             OnboardingBrowserTabsCard(onSetUp: onSetUpBrowsers)
+            OnboardingRaycastCard(onInstall: onInstallRaycast)
 
             OnboardingCompletionButtons(
                 primaryTitle: "Open Dashboard",
@@ -33,6 +35,35 @@ struct OnboardingReadyStep: View {
         }
         .frame(maxWidth: 430)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct OnboardingRaycastCard: View {
+    let onInstall: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "command")
+                .font(.title2)
+                .foregroundStyle(.blue)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Raycast (Optional)")
+                    .fontWeight(.medium)
+                Text("Save and restore layouts without leaving Raycast.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Install Extension", action: onInstall)
+                .accessibilityLabel("Install LayoutLock Raycast Extension")
+        }
+        .padding(12)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

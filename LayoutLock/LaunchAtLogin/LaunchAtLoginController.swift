@@ -53,7 +53,10 @@ struct SystemLaunchAtLoginRegistration: LaunchAtLoginRegistration {
 }
 
 struct LoginHelperLaunchAtLoginService: LaunchAtLoginServicing {
-    static let helperBundleIdentifier = "com.berkergungor.layoutlock.login-helper"
+    static var helperBundleIdentifier: String {
+        Bundle.main.object(forInfoDictionaryKey: "LayoutLockLoginHelperBundleIdentifier") as? String
+            ?? "com.berkergungor.layoutlock.login-helper"
+    }
 
     private let helper: LaunchAtLoginRegistration
     private let legacyMainApp: LaunchAtLoginRegistration

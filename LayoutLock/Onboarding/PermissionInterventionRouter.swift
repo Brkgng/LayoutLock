@@ -11,6 +11,7 @@ enum PrivilegedActionSource: Equatable {
     case menuBar
     case hotkey
     case settings
+    case externalIntegration
 }
 
 enum DashboardWindowVisibility: Equatable {
@@ -39,7 +40,8 @@ protocol StatusNoticePresenting: AnyObject {
 
 @MainActor
 final class PermissionInterventionRouter: ObservableObject {
-    private static let passivePermissionMessage = "Accessibility access is required to restore layouts. Open LayoutLock to enable access."
+    private static let restorePermissionMessage = "Accessibility access is required to restore layouts. Open LayoutLock to enable access."
+    private static let savePermissionMessage = "Accessibility access is required to save layouts. Open LayoutLock to enable access."
     private static let passivePermissionDuration: TimeInterval = 6
 
     @Published private(set) var showsDashboardPermissionEducation = false
@@ -60,7 +62,7 @@ final class PermissionInterventionRouter: ObservableObject {
 
     @discardableResult
     func requestAuthorization(
-        kind _: PrivilegedActionKind,
+        kind: PrivilegedActionKind,
         source: PrivilegedActionSource
     ) -> Bool {
         let state = permissionCoordinator.refreshTrust(trigger: .privilegedAction)
@@ -80,8 +82,11 @@ final class PermissionInterventionRouter: ObservableObject {
             clearPassivePermissionNotice()
             onboardingPresentationRequestID = UUID()
         case .displayChange, .hotkey:
-            showPassivePermissionNoticeIfNeeded()
+            showPassivePermissionNoticeIfNeeded(kind: kind)
         case .settings:
+            permissionCoordinator.openAccessibilitySettings()
+        case .externalIntegration:
+            showPassivePermissionNoticeIfNeeded(kind: kind)
             permissionCoordinator.openAccessibilitySettings()
         }
 
@@ -116,14 +121,14 @@ final class PermissionInterventionRouter: ObservableObject {
         dashboardWindowVisibility = visibility
     }
 
-    private func showPassivePermissionNoticeIfNeeded() {
+    private func showPassivePermissionNoticeIfNeeded(kind: PrivilegedActionKind) {
         guard !(showsDashboardPermissionEducation && dashboardWindowVisibility == .visibleOnActiveSpace) else {
             clearPassivePermissionNotice()
             return
         }
 
         let notice = PassivePermissionNotice(
-            message: Self.passivePermissionMessage,
+            message: kind == .restoreLayout ? Self.restorePermissionMessage : Self.savePermissionMessage,
             duration: Self.passivePermissionDuration
         )
         lastPassivePermissionNotice = notice

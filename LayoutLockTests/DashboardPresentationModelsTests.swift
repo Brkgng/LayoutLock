@@ -44,6 +44,24 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertEqual(startCount, 1)
     }
 
+    @MainActor
+    func testExternalLaunchSuppressesAutomaticOnboarding() {
+        let presentationState = AppLaunchPresentationState()
+        presentationState.suppressInitialPresentation()
+        var startCount = 0
+
+        let didStart = AutomaticOnboardingPresentationPolicy.startIfAllowed(
+            for: .foreground,
+            presentationState: presentationState
+        ) {
+            startCount += 1
+            return true
+        }
+
+        XCTAssertFalse(didStart)
+        XCTAssertEqual(startCount, 0)
+    }
+
     func testReopenPolicyUsesExistingDashboardBeforeNormalWindowReopening() {
         XCTAssertFalse(
             DashboardReopenPolicy.shouldAllowNormalReopen(focusedExistingWindow: true)
@@ -99,6 +117,31 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertTrue(shownWindows.isEmpty)
         XCTAssertEqual(hiddenWindows, [window])
         XCTAssertTrue(coordinator.hasPresentedInitialWindow)
+    }
+
+    @MainActor
+    func testExternalLaunchSuppressesInitialDashboardWithoutActivation() {
+        let window = NSWindow()
+        let presentationState = AppLaunchPresentationState()
+        presentationState.suppressInitialPresentation()
+        var activationCount = 0
+        var shownWindows: [NSWindow] = []
+        var hiddenWindows: [NSWindow] = []
+        let coordinator = DashboardWindowPresentationCoordinator(
+            launchMode: .foreground,
+            presentationState: presentationState,
+            actions: .init(
+                activateApplication: { activationCount += 1 },
+                showWindow: { shownWindows.append($0) },
+                hideWindow: { hiddenWindows.append($0) }
+            )
+        )
+
+        coordinator.presentInitialWindow(window)
+
+        XCTAssertEqual(activationCount, 0)
+        XCTAssertTrue(shownWindows.isEmpty)
+        XCTAssertEqual(hiddenWindows, [window])
     }
 
     @MainActor
