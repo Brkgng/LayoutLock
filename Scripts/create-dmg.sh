@@ -13,9 +13,24 @@ OUTPUT_DIR="$(cd "$(dirname "$2")" && pwd)"
 OUTPUT_DMG="$OUTPUT_DIR/$(basename "$2")"
 APP_NAME="$(basename "$APP")"
 VOLUME_NAME="${APP_NAME%.app}"
+TEAM_ID="894AUNHU54"
+BUNDLE_ID="com.berkergungor.layoutlock"
 
 if [ ! -d "$APP" ]; then
   echo "App not found: $APP" >&2
+  exit 1
+fi
+
+if ! codesign --verify --deep --strict "$APP"; then
+  echo "App signature is invalid: $APP" >&2
+  exit 1
+fi
+
+DESIGNATED_REQUIREMENT="$(codesign -dr - "$APP" 2>&1)"
+if ! grep -Fq "identifier \"$BUNDLE_ID\"" <<< "$DESIGNATED_REQUIREMENT" ||
+  ! grep -Fq "certificate leaf[field.1.2.840.113635.100.6.1.13]" <<< "$DESIGNATED_REQUIREMENT" ||
+  ! grep -Fq "certificate leaf[subject.OU] = \"$TEAM_ID\"" <<< "$DESIGNATED_REQUIREMENT"; then
+  echo "App must have LayoutLock's Developer ID identity before creating a DMG." >&2
   exit 1
 fi
 
@@ -83,5 +98,20 @@ hdiutil convert \
   -imagekey zlib-level=9 \
   -ov \
   -o "$OUTPUT_DMG" >/dev/null
+
+SIGNING_IDENTITIES="$(security find-identity -v -p codesigning)"
+SIGNING_IDENTITY="$(awk -v team_id="$TEAM_ID" '
+  /Developer ID Application:/ && index($0, "(" team_id ")") { print $2; exit }
+' <<< "$SIGNING_IDENTITIES")"
+if [ -z "$SIGNING_IDENTITY" ]; then
+  echo "No valid Developer ID Application identity found for team $TEAM_ID." >&2
+  exit 1
+fi
+
+codesign \
+  --force \
+  --sign "$SIGNING_IDENTITY" \
+  --timestamp \
+  "$OUTPUT_DMG"
 
 echo "Created $OUTPUT_DMG"

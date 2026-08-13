@@ -24,6 +24,7 @@ struct DiscoveredApplication {
 
 struct DiscoveredWindow {
     let axElement: AXUIElement
+    let browserScriptingIdentifier: String?
     let documentURL: URL?
     let documentURLs: [URL]
     let documentTitles: [String]
@@ -44,6 +45,7 @@ struct DiscoveredWindow {
 
     init(
         axElement: AXUIElement,
+        browserScriptingIdentifier: String? = nil,
         documentURL: URL? = nil,
         documentURLs: [URL] = [],
         documentTitles: [String] = [],
@@ -68,6 +70,7 @@ struct DiscoveredWindow {
         }
 
         self.axElement = axElement
+        self.browserScriptingIdentifier = browserScriptingIdentifier
         self.documentURL = documentURL ?? resolvedDocumentURLs.first
         self.documentURLs = resolvedDocumentURLs
         self.documentTitles = documentTitles

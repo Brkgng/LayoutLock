@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>LayoutLock</string>
+	<string>$(LAYOUTLOCK_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -18,16 +18,33 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).external-command</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(LAYOUTLOCK_URL_SCHEME)</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LayoutLockCreemProductID</key>
 	<string>$(LAYOUTLOCK_CREEM_PRODUCT_ID)</string>
+	<key>LayoutLockApplicationSupportDirectoryName</key>
+	<string>$(LAYOUTLOCK_APP_SUPPORT_DIRECTORY_NAME)</string>
 	<key>LayoutLockLicenseProxyBaseURL</key>
 	<string>$(LAYOUTLOCK_LICENSE_PROXY_BASE_URL)</string>
+	<key>LayoutLockLoginHelperBundleIdentifier</key>
+	<string>$(LAYOUTLOCK_LOGIN_HELPER_BUNDLE_IDENTIFIER)</string>
 	<key>LayoutLockPaymentsEnvironment</key>
 	<string>$(LAYOUTLOCK_PAYMENTS_ENVIRONMENT)</string>
 	<key>LayoutLockProPurchaseURL</key>
 	<string>$(LAYOUTLOCK_PRO_PURCHASE_URL)</string>
+	<key>LayoutLockURLScheme</key>
+	<string>$(LAYOUTLOCK_URL_SCHEME)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>

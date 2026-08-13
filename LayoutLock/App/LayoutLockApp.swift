@@ -12,11 +12,14 @@ struct LayoutLockApp: App {
     @StateObject private var entitlementController: EntitlementController
     @StateObject private var settingsNavigationController: SettingsNavigationController
     @StateObject private var updateController: AppUpdateController
+    @StateObject private var raycastRecommendationController: RaycastRecommendationController
 
     private let bootstrapErrorMessage: String?
     private let diagnosticLogController: DiagnosticLogController?
     private let displayChangeRestoreController: DisplayChangeRestoreController?
+    private let externalCommandCoordinator: ExternalCommandCoordinator
     private let launchMode: AppLaunchMode
+    private let launchPresentationState: AppLaunchPresentationState
     private let dashboardPresentationCoordinator: DashboardWindowPresentationCoordinator
     private let hotkeyManager: HotkeyManager
     private let operationOverlayController: OperationOverlayController
@@ -31,14 +34,19 @@ struct LayoutLockApp: App {
         let entitlementController = EntitlementController()
         let settingsNavigationController = SettingsNavigationController()
         let updateController = AppUpdateController()
+        let raycastRecommendationController = RaycastRecommendationController()
         let launchMode = AppLaunchMode(arguments: ProcessInfo.processInfo.arguments)
+        let launchPresentationState = AppLaunchPresentationState()
         let dashboardPresentationCoordinator = DashboardWindowPresentationCoordinator(
-            launchMode: launchMode
+            launchMode: launchMode,
+            presentationState: launchPresentationState
         )
+        let integrationIndexWriter: LayoutIntegrationIndexWriter?
 
         do {
             let bootstrapper = try AppSupportDirectoryBootstrapper()
             try bootstrapper.prepare()
+            integrationIndexWriter = LayoutIntegrationIndexWriter(bootstrapper: bootstrapper)
             bootstrapErrorMessage = nil
             let snapshotStore = SnapshotStore(bootstrapper: bootstrapper)
             snapshotStoreForDisplayChanges = snapshotStore
@@ -67,6 +75,7 @@ struct LayoutLockApp: App {
             bootstrapErrorMessage = error.localizedDescription
             diagnosticLogController = nil
             snapshotStoreForDisplayChanges = nil
+            integrationIndexWriter = nil
             browserAutomationController = BrowserAutomationController()
             snapshotMenuController = SnapshotMenuController(entitlementProvider: entitlementController)
             AppLogger.app.error("Failed to prepare Application Support directories: \(error.localizedDescription)")
@@ -91,6 +100,12 @@ struct LayoutLockApp: App {
         }
 
         snapshotMenuController.setSnapshotSummariesDidChange { [weak snapshotMenuController, hotkeyManager] summaries in
+            do {
+                try integrationIndexWriter?.write(summaries: summaries)
+            } catch {
+                AppLogger.app.error("Failed to update the Raycast layout index: \(error.localizedDescription)")
+            }
+
             do {
                 try hotkeyManager.reloadBindings(from: summaries)
                 return nil
@@ -139,7 +154,16 @@ struct LayoutLockApp: App {
         self.hotkeyManager = hotkeyManager
         self.operationOverlayController = operationOverlayController
         self.launchMode = launchMode
+        self.launchPresentationState = launchPresentationState
         self.dashboardPresentationCoordinator = dashboardPresentationCoordinator
+        let externalCommandCoordinator = ExternalCommandCoordinator(
+            permissionRouter: permissionRouter,
+            snapshotMenuController: snapshotMenuController,
+            presentationState: launchPresentationState,
+            statusNoticePresenter: operationOverlayController,
+            externalIntegrationWasUsed: raycastRecommendationController.externalIntegrationWasUsed
+        )
+        self.externalCommandCoordinator = externalCommandCoordinator
         entitlementController.onEntitlementDidChange = { [weak snapshotMenuController] in
             _ = snapshotMenuController?.refreshSummaries()
         }
@@ -155,6 +179,11 @@ struct LayoutLockApp: App {
         _entitlementController = StateObject(wrappedValue: entitlementController)
         _settingsNavigationController = StateObject(wrappedValue: settingsNavigationController)
         _updateController = StateObject(wrappedValue: updateController)
+        _raycastRecommendationController = StateObject(wrappedValue: raycastRecommendationController)
+
+        appDelegate.externalCommandHandler = { [weak externalCommandCoordinator] url in
+            externalCommandCoordinator?.handle(url)
+        }
 
         permissionCoordinator.refreshTrust(trigger: .launch)
     }
@@ -169,12 +198,14 @@ struct LayoutLockApp: App {
                 entitlementController: entitlementController,
                 settingsNavigationController: settingsNavigationController,
                 updateController: updateController,
+                raycastRecommendationController: raycastRecommendationController,
                 windowPresentationCoordinator: dashboardPresentationCoordinator
             )
             .background(
                 OnboardingPresentationBridge(
                     onboardingController: onboardingController,
-                    launchMode: launchMode
+                    launchMode: launchMode,
+                    presentationState: launchPresentationState
                 )
             )
         }
@@ -202,7 +233,8 @@ struct LayoutLockApp: App {
             OnboardingContainerView(
                 controller: onboardingController,
                 permissionCoordinator: permissionCoordinator,
-                settingsNavigationController: settingsNavigationController
+                settingsNavigationController: settingsNavigationController,
+                raycastRecommendationController: raycastRecommendationController
             )
         }
         .defaultSize(width: 560, height: 500)
@@ -215,7 +247,8 @@ struct LayoutLockApp: App {
                 diagnosticLogController: diagnosticLogController,
                 entitlementController: entitlementController,
                 settingsNavigationController: settingsNavigationController,
-                updateController: updateController
+                updateController: updateController,
+                raycastRecommendationController: raycastRecommendationController
             )
         }
     }
@@ -226,6 +259,7 @@ private struct OnboardingPresentationBridge: View {
 
     @ObservedObject var onboardingController: OnboardingController
     let launchMode: AppLaunchMode
+    let presentationState: AppLaunchPresentationState
 
     @State private var didCheckFirstLaunch = false
 
@@ -248,6 +282,7 @@ private struct OnboardingPresentationBridge: View {
         didCheckFirstLaunch = true
         guard AutomaticOnboardingPresentationPolicy.startIfAllowed(
             for: launchMode,
+            presentationState: presentationState,
             start: onboardingController.startFirstLaunchIfNeeded
         ) else {
             return
@@ -326,6 +361,8 @@ private struct DashboardCommands: Commands {
 }
 
 final class LayoutLockAppDelegate: NSObject, NSApplicationDelegate {
+    var externalCommandHandler: (@MainActor (URL) -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = AppearancePreference.resolved().nsAppearance
         NSApp.setActivationPolicy(LayoutLockSettings.resolvedDockActivationPolicy())
@@ -338,5 +375,11 @@ final class LayoutLockAppDelegate: NSObject, NSApplicationDelegate {
         DashboardReopenPolicy.shouldAllowNormalReopen(
             focusedExistingWindow: DashboardWindowSupport.focusExistingWindow()
         )
+    }
+
+    func application(_: NSApplication, open urls: [URL]) {
+        for url in urls {
+            externalCommandHandler?(url)
+        }
     }
 }

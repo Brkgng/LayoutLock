@@ -1453,6 +1453,147 @@ private extension JSONSerialization {
     }
 }
 
+// MARK: - License activation client
+
+@MainActor
+final class LicenseActivationClientTests: XCTestCase {
+    private let productID = "prod_4kKRRbopJu2qSEXsnnFJ79"
+
+    override func tearDown() {
+        LicenseActivationURLProtocolStub.requestHandler = nil
+        super.tearDown()
+    }
+
+    func testActivationDecodesFractionalSecondsTimestamp() async throws {
+        let client = makeClient(
+            responseBody: responseBody(validatedAt: "2026-08-11T17:55:43.224Z")
+        )
+
+        let result = try await client.activate(makeRequest())
+
+        XCTAssertEqual(result.status, .inactive)
+        XCTAssertEqual(result.message, "This license is already active on another Mac.")
+        XCTAssertEqual(result.validatedAt, makeDate("2026-08-11T17:55:43.224Z", fractionalSeconds: true))
+    }
+
+    func testActivationDecodesWholeSecondsTimestamp() async throws {
+        let client = makeClient(
+            responseBody: responseBody(validatedAt: "2026-08-11T17:55:43Z")
+        )
+
+        let result = try await client.activate(makeRequest())
+
+        XCTAssertEqual(result.validatedAt, makeDate("2026-08-11T17:55:43Z", fractionalSeconds: false))
+    }
+
+    func testMalformedTimestampReturnsControlledInvalidResponseError() async {
+        let client = makeClient(responseBody: responseBody(validatedAt: "not-a-date"))
+
+        do {
+            _ = try await client.activate(makeRequest())
+            XCTFail("Expected activation to fail")
+        } catch {
+            XCTAssertEqual(error as? LicenseActivationClientError, .invalidResponse)
+        }
+    }
+
+    func testServerMessageResponseRemainsUnchanged() async {
+        let message = "This license is already active on another Mac."
+        let client = makeClient(
+            statusCode: 409,
+            responseBody: #"{"message":"This license is already active on another Mac."}"#
+        )
+
+        do {
+            _ = try await client.activate(makeRequest())
+            XCTFail("Expected activation to fail")
+        } catch {
+            XCTAssertEqual(error as? LicenseActivationClientError, .serverMessage(message))
+        }
+    }
+
+    private func makeClient(
+        statusCode: Int = 200,
+        responseBody: String
+    ) -> LicenseActivationClient {
+        LicenseActivationURLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: statusCode,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(responseBody.utf8))
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LicenseActivationURLProtocolStub.self]
+        return LicenseActivationClient(
+            baseURLProvider: { URL(string: "https://license.example.com") },
+            expectedProductIDProvider: { self.productID },
+            session: URLSession(configuration: configuration)
+        )
+    }
+
+    private func makeRequest() -> LicenseValidationRequest {
+        LicenseValidationRequest(
+            licenseKey: "KEY-123",
+            appVersion: "1.0",
+            deviceLabel: "Test Mac",
+            deviceIdentifier: "device-123",
+            instanceID: nil
+        )
+    }
+
+    private func responseBody(validatedAt: String) -> String {
+        """
+        {
+          "status": "inactive",
+          "validatedAt": "\(validatedAt)",
+          "customerID": null,
+          "productID": "\(productID)",
+          "instanceID": null,
+          "message": "This license is already active on another Mac.",
+          "receipt": null
+        }
+        """
+    }
+
+    private func makeDate(_ value: String, fractionalSeconds: Bool) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = fractionalSeconds
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
+        return formatter.date(from: value)!
+    }
+}
+
+private final class LicenseActivationURLProtocolStub: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: LicenseActivationClientError.invalidResponse)
+            return
+        }
+
+        do {
+            let (response, data) = try requestHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 // MARK: - Test doubles
 
 final class FakeLicenseActivationClient: LicenseActivationClienting {

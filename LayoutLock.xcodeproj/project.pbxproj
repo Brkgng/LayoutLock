@@ -54,6 +54,7 @@
 		A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */; };
 		A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */; };
 		A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000009A /* AXAttributeReaderTests.swift */; };
+		I00000000000000000000001 /* AXRestoreWindowApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */; };
 		B00000000000000000000001 /* OnboardingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* OnboardingStore.swift */; };
 		B00000000000000000000003 /* OnboardingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* OnboardingController.swift */; };
 		B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* PermissionInterventionRouter.swift */; };
@@ -92,6 +93,10 @@
 		H00000000000000000000001 /* AppLaunchPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = H00000000000000000000004 /* AppLaunchPresentation.swift */; };
 		H00000000000000000000002 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = H00000000000000000000005 /* main.swift */; };
 		H00000000000000000000003 /* LayoutLockLoginHelper.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = H00000000000000000000006 /* LayoutLockLoginHelper.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		J00000000000000000000001 /* ExternalCommandIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = J00000000000000000000003 /* ExternalCommandIntegration.swift */; };
+		J00000000000000000000002 /* LayoutIntegrationIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = J00000000000000000000004 /* LayoutIntegrationIndex.swift */; };
+		J00000000000000000000005 /* ExternalCommandIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = J00000000000000000000007 /* ExternalCommandIntegrationTests.swift */; };
+		J00000000000000000000006 /* LayoutIntegrationIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = J00000000000000000000008 /* LayoutIntegrationIndexTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -175,6 +180,7 @@
 		A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCaptureServiceTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryEngineTests.swift; sourceTree = "<group>"; };
 		A0000000000000000000009A /* AXAttributeReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXAttributeReaderTests.swift; sourceTree = "<group>"; };
+		I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXRestoreWindowApplierTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000002 /* OnboardingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000004 /* OnboardingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingController.swift; sourceTree = "<group>"; };
 		B00000000000000000000006 /* PermissionInterventionRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionInterventionRouter.swift; sourceTree = "<group>"; };
@@ -212,6 +218,10 @@
 		H00000000000000000000004 /* AppLaunchPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchPresentation.swift; sourceTree = "<group>"; };
 		H00000000000000000000005 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		H00000000000000000000006 /* LayoutLockLoginHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLockLoginHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		J00000000000000000000003 /* ExternalCommandIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalCommandIntegration.swift; sourceTree = "<group>"; };
+		J00000000000000000000004 /* LayoutIntegrationIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutIntegrationIndex.swift; sourceTree = "<group>"; };
+		J00000000000000000000007 /* ExternalCommandIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalCommandIntegrationTests.swift; sourceTree = "<group>"; };
+		J00000000000000000000008 /* LayoutIntegrationIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutIntegrationIndexTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -261,6 +271,7 @@
 				B00000000000000000000015 /* Onboarding */,
 				A00000000000000000000059 /* Settings */,
 				G00000000000000000000020 /* BrowserAutomation */,
+				J00000000000000000000009 /* Integrations */,
 				A00000000000000000000076 /* LaunchAtLogin */,
 				E0000000000000000000000D /* Monetization */,
 				A0000000000000000000005A /* Permissions */,
@@ -291,10 +302,13 @@
 				F00000000000000000000005 /* AppUpdateControllerTests.swift */,
 				F0000000000000000000000E /* AppUpdateUserDriverTests.swift */,
 				A0000000000000000000009A /* AXAttributeReaderTests.swift */,
+				I00000000000000000000002 /* AXRestoreWindowApplierTests.swift */,
 				G00000000000000000000015 /* BrowserAutomationTests.swift */,
 				C00000000000000000000008 /* DisplayChangeRestoreControllerTests.swift */,
 				A0000000000000000000004A /* DisplayResolverTests.swift */,
 				C0000000000000000000000A /* LayoutLockSettingsTests.swift */,
+				J00000000000000000000007 /* ExternalCommandIntegrationTests.swift */,
+				J00000000000000000000008 /* LayoutIntegrationIndexTests.swift */,
 				A0000000000000000000008C /* DashboardPresentationModelsTests.swift */,
 				E0000000000000000000000A /* EntitlementControllerTests.swift */,
 				A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */,
@@ -322,6 +336,15 @@
 				A00000000000000000000012 /* LayoutLockApp.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		J00000000000000000000009 /* Integrations */ = {
+			isa = PBXGroup;
+			children = (
+				J00000000000000000000003 /* ExternalCommandIntegration.swift */,
+				J00000000000000000000004 /* LayoutIntegrationIndex.swift */,
+			);
+			path = Integrations;
 			sourceTree = "<group>";
 		};
 		H00000000000000000000009 /* LayoutLockLoginHelper */ = {
@@ -677,6 +700,8 @@
 				A00000000000000000000067 /* HotkeyManager.swift in Sources */,
 				A00000000000000000000074 /* LaunchAtLoginController.swift in Sources */,
 				A00000000000000000000002 /* LayoutLockApp.swift in Sources */,
+				J00000000000000000000001 /* ExternalCommandIntegration.swift in Sources */,
+				J00000000000000000000002 /* LayoutIntegrationIndex.swift in Sources */,
 				C00000000000000000000005 /* LayoutLockSettings.swift in Sources */,
 				E00000000000000000000003 /* LicenseActivationClient.swift in Sources */,
 				A0000000000000000000001C /* MenuBarContentView.swift in Sources */,
@@ -711,10 +736,13 @@
 				F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */,
 				F0000000000000000000000D /* AppUpdateUserDriverTests.swift in Sources */,
 				A00000000000000000000099 /* AXAttributeReaderTests.swift in Sources */,
+				I00000000000000000000001 /* AXRestoreWindowApplierTests.swift in Sources */,
 				G00000000000000000000005 /* BrowserAutomationTests.swift in Sources */,
 				C00000000000000000000007 /* DisplayChangeRestoreControllerTests.swift in Sources */,
 				A00000000000000000000048 /* DisplayResolverTests.swift in Sources */,
 				C00000000000000000000009 /* LayoutLockSettingsTests.swift in Sources */,
+				J00000000000000000000005 /* ExternalCommandIntegrationTests.swift in Sources */,
+				J00000000000000000000006 /* LayoutIntegrationIndexTests.swift in Sources */,
 				A0000000000000000000008B /* DashboardPresentationModelsTests.swift in Sources */,
 				E00000000000000000000009 /* EntitlementControllerTests.swift in Sources */,
 				A0000000000000000000006B /* HotkeyBindingValidatorTests.swift in Sources */,
@@ -809,23 +837,27 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LayoutLock/Info.plist;
+				LAYOUTLOCK_APP_SUPPORT_DIRECTORY_NAME = "LayoutLock Dev";
 				LAYOUTLOCK_CREEM_PRODUCT_ID = prod_4kKRRbopJu2qSEXsnnFJ79;
+				LAYOUTLOCK_DISPLAY_NAME = "LayoutLock Dev";
 				LAYOUTLOCK_LICENSE_PROXY_BASE_URL = "https://layoutlock-license-proxy-test.berkergng457.workers.dev";
+				LAYOUTLOCK_LOGIN_HELPER_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev.login-helper;
 				LAYOUTLOCK_PAYMENTS_ENVIRONMENT = test;
 				LAYOUTLOCK_PRO_PURCHASE_URL = "https://www.creem.io/test/payment/prod_4kKRRbopJu2qSEXsnnFJ79";
+				LAYOUTLOCK_URL_SCHEME = "layoutlock-dev";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
@@ -841,22 +873,26 @@
 				CODE_SIGN_ENTITLEMENTS = LayoutLock/LayoutLock.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LayoutLock/Info.plist;
+				LAYOUTLOCK_APP_SUPPORT_DIRECTORY_NAME = LayoutLock;
 				LAYOUTLOCK_CREEM_PRODUCT_ID = prod_2uX8wPSHxfQhZcaiSILQFH;
+				LAYOUTLOCK_DISPLAY_NAME = LayoutLock;
 				LAYOUTLOCK_LICENSE_PROXY_BASE_URL = "https://layoutlock-license-proxy.berkergng457.workers.dev";
+				LAYOUTLOCK_LOGIN_HELPER_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
 				LAYOUTLOCK_PAYMENTS_ENVIRONMENT = live;
 				LAYOUTLOCK_PRO_PURCHASE_URL = "https://www.creem.io/payment/prod_2uX8wPSHxfQhZcaiSILQFH";
+				LAYOUTLOCK_URL_SCHEME = layoutlock;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -872,11 +908,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -892,11 +928,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -911,14 +947,14 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -932,13 +968,13 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;

@@ -922,12 +922,30 @@ final class SnapshotMenuController: ObservableObject {
         let appName = appNameResolver(skippedItem.bundleIdentifier)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = appName.isEmpty ? skippedItem.bundleIdentifier : appName
-        guard let windowTitle = skippedItem.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !windowTitle.isEmpty else {
-            return displayName
+        let windowDescription: String
+        if let windowTitle = skippedItem.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !windowTitle.isEmpty {
+            windowDescription = "\(displayName) (\(windowTitle))"
+        } else {
+            windowDescription = displayName
         }
 
-        return "\(displayName) (\(windowTitle))"
+        return "\(windowDescription): \(friendlySkipReason(skippedItem.reason))"
+    }
+
+    private func friendlySkipReason(_ reason: String) -> String {
+        switch reason {
+        case RestoreSkipReason.appNotRunning:
+            return "Application is not running."
+        case RestoreSkipReason.windowNotFound:
+            return "Matching window was not found."
+        case RestoreSkipReason.openedBrowserWindowNotIdentified:
+            return "Opened browser window could not be matched."
+        case RestoreSkipReason.windowGeometryDidNotSettle:
+            return "Window did not accept the saved position and size."
+        default:
+            return "Window could not be restored."
+        }
     }
 
     private func windowCountDescription(_ count: Int) -> String {

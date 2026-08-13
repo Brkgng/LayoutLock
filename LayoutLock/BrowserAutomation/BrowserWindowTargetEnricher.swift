@@ -8,9 +8,14 @@ struct BrowserWindowTargetEnricher {
     }
 
     private let frameTolerance: CGFloat
+    private let allowsOrderFallback: Bool
 
-    init(frameTolerance: CGFloat = 12) {
+    init(
+        frameTolerance: CGFloat = 12,
+        allowsOrderFallback: Bool = true
+    ) {
         self.frameTolerance = frameTolerance
+        self.allowsOrderFallback = allowsOrderFallback
     }
 
     func enrich(
@@ -46,7 +51,8 @@ struct BrowserWindowTargetEnricher {
                 guard let capturedIndex = matchResult.capturedIndexByDiscoveredIndex[index] else {
                     return window
                 }
-                return window.addingBrowserTabs(capturedWindows[capturedIndex].tabs)
+                let capturedWindow = capturedWindows[capturedIndex]
+                return window.addingBrowserEvidence(capturedWindow)
             }
 
             return DiscoveredApplication(
@@ -100,7 +106,8 @@ struct BrowserWindowTargetEnricher {
             }
         }
 
-        if !foundAmbiguousCandidate,
+        if allowsOrderFallback,
+           !foundAmbiguousCandidate,
            !unmatchedCapturedIndices.isEmpty,
            unmatchedCapturedIndices.count == unmatchedDiscoveredIndices.count {
             let discoveredByOrder = unmatchedDiscoveredIndices.sorted {
@@ -148,12 +155,12 @@ struct BrowserWindowTargetEnricher {
 }
 
 private extension DiscoveredWindow {
-    func addingBrowserTabs(_ tabs: [CapturedBrowserTab]) -> DiscoveredWindow {
+    func addingBrowserEvidence(_ capturedWindow: CapturedBrowserWindow) -> DiscoveredWindow {
         let validator = WindowOpenTargetValidator()
         let retainedDocumentURLs = documentURLs.filter {
             validator.webTarget(url: $0) == nil
         }
-        let targets = tabs.compactMap { tab -> WindowOpenTarget? in
+        let targets = capturedWindow.tabs.compactMap { tab -> WindowOpenTarget? in
             guard let target = validator.webTarget(url: tab.URL) else {
                 return nil
             }
@@ -166,6 +173,7 @@ private extension DiscoveredWindow {
         }
         return DiscoveredWindow(
             axElement: axElement,
+            browserScriptingIdentifier: capturedWindow.scriptingIdentifier,
             documentURL: retainedDocumentURLs.first,
             documentURLs: retainedDocumentURLs,
             documentTitles: documentTitles,

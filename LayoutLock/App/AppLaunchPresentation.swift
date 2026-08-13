@@ -14,13 +14,23 @@ enum AppLaunchMode: Equatable {
 enum AutomaticOnboardingPresentationPolicy {
     static func startIfAllowed(
         for launchMode: AppLaunchMode,
+        presentationState: AppLaunchPresentationState? = nil,
         start: () -> Bool
     ) -> Bool {
-        guard launchMode == .foreground else {
+        guard launchMode == .foreground,
+              presentationState?.suppressesInitialPresentation != true else {
             return false
         }
 
         return start()
+    }
+}
+
+final class AppLaunchPresentationState {
+    private(set) var suppressesInitialPresentation = false
+
+    func suppressInitialPresentation() {
+        suppressesInitialPresentation = true
     }
 }
 
@@ -54,14 +64,17 @@ final class DashboardWindowPresentationCoordinator {
     }
 
     private let launchMode: AppLaunchMode
+    private let presentationState: AppLaunchPresentationState
     private let actions: Actions
     private(set) var hasPresentedInitialWindow = false
 
     init(
         launchMode: AppLaunchMode,
+        presentationState: AppLaunchPresentationState = AppLaunchPresentationState(),
         actions: Actions = .live
     ) {
         self.launchMode = launchMode
+        self.presentationState = presentationState
         self.actions = actions
     }
 
@@ -71,11 +84,11 @@ final class DashboardWindowPresentationCoordinator {
         }
 
         hasPresentedInitialWindow = true
-        switch launchMode {
-        case .foreground:
+        switch (launchMode, presentationState.suppressesInitialPresentation) {
+        case (.foreground, false):
             actions.activateApplication()
             actions.showWindow(window)
-        case .loginItem:
+        case (.foreground, true), (.loginItem, _):
             actions.hideWindow(window)
         }
     }

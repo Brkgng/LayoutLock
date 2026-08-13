@@ -895,6 +895,72 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         )
     }
 
+    func testRestoreSnapshotCompletionDoesNotWarnForHardwareDisplayRemap() async throws {
+        let snapshotID = UUID()
+        let savedDisplay = makeDisplayRecord(
+            id: 3,
+            localizedName: "External",
+            frame: CGRect(x: -1000, y: 0, width: 1000, height: 700),
+            vendorID: 3,
+            productID: 30,
+            serialNumber: 300
+        )
+        let currentDisplay = makeDisplayRecord(
+            id: 2,
+            localizedName: "External",
+            frame: CGRect(x: -1200, y: 0, width: 1200, height: 800),
+            vendorID: 3,
+            productID: 30,
+            serialNumber: 300
+        )
+        let savedWindow = makeWindow(
+            bundleIdentifier: "com.example.editor",
+            displayID: savedDisplay.id
+        )
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(
+            makeSnapshot(
+                id: snapshotID,
+                name: "Desk",
+                windows: [savedWindow],
+                displays: [savedDisplay],
+                primaryDisplayID: savedDisplay.id
+            )
+        )
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(
+            store: store,
+            overlayPresenter: overlayPresenter,
+            screenProvider: { [self.makeScreenSnapshot(from: currentDisplay)] },
+            discoveredApplicationsProvider: {
+                [
+                    DiscoveredApplication(
+                        bundleIdentifier: savedWindow.bundleIdentifier,
+                        pid: savedWindow.pidAtCapture,
+                        localizedName: "Editor",
+                        windows: [
+                            makeDiscoveredWindow(
+                                title: savedWindow.windowTitle,
+                                role: savedWindow.role,
+                                subrole: savedWindow.subrole,
+                                frame: savedWindow.frame.cgRect
+                            )
+                        ]
+                    )
+                ]
+            }
+        )
+
+        let task = controller.restoreSnapshot(id: snapshotID)
+        await task?.value
+
+        XCTAssertEqual(
+            overlayPresenter.restoreCompletionSummaries,
+            ["Restored \"Desk\": 1 window restored."]
+        )
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
+    }
+
     func testRestoreSnapshotShowsAndHidesOverlayAfterFailure() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
@@ -952,7 +1018,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
-            ["Editor (ScrollSnap)\nEditor (Settings)\nBrowser"]
+            ["Editor (ScrollSnap): Application is not running.\nEditor (Settings): Application is not running.\nBrowser: Application is not running."]
         )
         XCTAssertEqual(controller.status?.message, "Restored \"Coding\": 0 windows restored, 3 skipped.")
     }
@@ -984,7 +1050,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
-            ["Editor (Window 1)\nEditor (Window 2)\nEditor (Window 3)\nEditor (Window 4)\nEditor (Window 5)\nand 2 more skipped"]
+            ["Editor (Window 1): Application is not running.\nEditor (Window 2): Application is not running.\nEditor (Window 3): Application is not running.\nEditor (Window 4): Application is not running.\nEditor (Window 5): Application is not running.\nand 2 more skipped"]
         )
     }
 
@@ -1025,7 +1091,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
             [
-                "Editor (\(missingURL.path)): Target no longer exists.\nEditor (Project)"
+                "Editor (\(missingURL.path)): Target no longer exists.\nEditor (Project): Application is not running."
             ]
         )
         XCTAssertEqual(
@@ -1071,7 +1137,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
             [
-                "Browser (\(targetURL.absoluteString)): Only HTTP and HTTPS URLs can be opened.\nBrowser (Private)"
+                "Browser (\(targetURL.absoluteString)): Only HTTP and HTTPS URLs can be opened.\nBrowser (Private): Application is not running."
             ]
         )
     }
@@ -1871,7 +1937,7 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
         savedWindow _: WindowRecord,
         targetFrame _: CGRect,
         to _: DiscoveredWindow
-    ) -> RestoreWindowApplyResult {
+    ) async throws -> RestoreWindowApplyResult {
         .restored()
     }
 

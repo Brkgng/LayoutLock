@@ -8,6 +8,7 @@ enum AppLogger {
     static let displays = Logger(subsystem: subsystem, category: "displays")
     static let entitlements = Logger(subsystem: subsystem, category: "entitlements")
     static let permissions = Logger(subsystem: subsystem, category: "permissions")
+    static let restore = Logger(subsystem: subsystem, category: "restore")
     static let browserAutomation = Logger(subsystem: subsystem, category: "browser-automation")
     static let updates = Logger(subsystem: subsystem, category: "updates")
 }

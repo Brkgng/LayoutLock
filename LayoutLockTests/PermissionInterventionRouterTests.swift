@@ -56,6 +56,27 @@ final class PermissionInterventionRouterTests: XCTestCase {
         XCTAssertEqual(presenter.durations.last, 6)
     }
 
+    func testUnauthorizedExternalRequestShowsNoticeAndOpensAccessibilitySettings() {
+        var settingsOpenCount = 0
+        let presenter = RecordingStatusNoticePresenter()
+        let permissionCoordinator = PermissionCoordinator(
+            trustChecker: AccessibilityTrustChecker { false },
+            accessibilitySettingsOpener: { settingsOpenCount += 1 }
+        )
+        let router = PermissionInterventionRouter(
+            permissionCoordinator: permissionCoordinator,
+            statusNoticePresenter: presenter
+        )
+
+        XCTAssertFalse(router.requestAuthorization(kind: .saveLayout, source: .externalIntegration))
+
+        XCTAssertEqual(settingsOpenCount, 1)
+        XCTAssertEqual(
+            presenter.messages.last,
+            "Accessibility access is required to save layouts. Open LayoutLock to enable access."
+        )
+    }
+
     func testHotkeyPassiveNoticeIsSuppressedWhenDashboardEducationIsVisibleOnActiveSpace() {
         let presenter = RecordingStatusNoticePresenter()
         let router = makeRouter(isTrusted: false, presenter: presenter)

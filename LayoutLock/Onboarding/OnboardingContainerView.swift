@@ -10,6 +10,7 @@ struct OnboardingContainerView: View {
     @ObservedObject var controller: OnboardingController
     @ObservedObject var permissionCoordinator: PermissionCoordinator
     @ObservedObject var settingsNavigationController: SettingsNavigationController
+    @ObservedObject var raycastRecommendationController: RaycastRecommendationController
 
     var body: some View {
         ScrollView {
@@ -30,12 +31,14 @@ struct OnboardingContainerView: View {
                 case .authorizedReady:
                     OnboardingAuthorizedReadyStep(
                         onSetUpBrowsers: openBrowserSettings,
+                        onInstallRaycast: openRaycastSetup,
                         onOpenDashboard: controller.openDashboardAndComplete,
                         onDone: controller.finishWithoutDashboard
                     )
                 case .ready:
                     OnboardingReadyStep(
                         onSetUpBrowsers: openBrowserSettings,
+                        onInstallRaycast: openRaycastSetup,
                         onOpenDashboard: controller.openDashboardAndComplete,
                         onDone: controller.finishWithoutDashboard
                     )
@@ -83,9 +86,14 @@ struct OnboardingContainerView: View {
     }
 
     private func openBrowserSettings() {
-        settingsNavigationController.selectedTab = .browsers
+        settingsNavigationController.selectedTab = .integrations
         NSApp.activate(ignoringOtherApps: true)
         openSettings()
+    }
+
+    private func openRaycastSetup() {
+        raycastRecommendationController.extensionSetupRequested()
+        NSWorkspace.shared.open(LayoutLockSupport.raycastURL)
     }
 }
 

@@ -4,6 +4,7 @@ struct AppSupportDirectoryBootstrapper {
     let rootURL: URL
     let snapshotsURL: URL
     let logsURL: URL
+    let integrationsURL: URL
 
     private let fileManager: FileManager
 
@@ -15,12 +16,30 @@ struct AppSupportDirectoryBootstrapper {
             throw BootstrapError.applicationSupportUnavailable
         }
 
-        let rootURL = appSupportBaseURL.appendingPathComponent("LayoutLock", isDirectory: true)
+        self.init(
+            applicationSupportBaseURL: appSupportBaseURL,
+            directoryName: Self.configuredDirectoryName,
+            fileManager: fileManager
+        )
+    }
+
+    init(
+        applicationSupportBaseURL: URL,
+        directoryName: String = "LayoutLock",
+        fileManager: FileManager = .default
+    ) {
+        let rootURL = applicationSupportBaseURL.appendingPathComponent(directoryName, isDirectory: true)
 
         self.rootURL = rootURL
         snapshotsURL = rootURL.appendingPathComponent("Snapshots", isDirectory: true)
         logsURL = rootURL.appendingPathComponent("Logs", isDirectory: true)
+        integrationsURL = rootURL.appendingPathComponent("Integrations", isDirectory: true)
         self.fileManager = fileManager
+    }
+
+    private static var configuredDirectoryName: String {
+        Bundle.main.object(forInfoDictionaryKey: "LayoutLockApplicationSupportDirectoryName") as? String
+            ?? "LayoutLock"
     }
 
     func prepare() throws {

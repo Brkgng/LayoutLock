@@ -267,7 +267,8 @@ final class DisplayResolverTests: XCTestCase {
 
         XCTAssertEqual(plan.targetFrame, CGRect(x: 500, y: 250, width: 1000, height: 500))
         XCTAssertEqual(plan.resolvedDisplayID, 20)
-        XCTAssertEqual(plan.fallback?.reason, DisplayFallbackReason.hardwareMatch)
+        XCTAssertEqual(plan.outcome, .hardwareRemap)
+        XCTAssertNil(plan.fallback)
     }
 
     func testRestorePlanUsesExactDisplayIDWhenSavedDisplayHasNoStableIdentity() {
@@ -371,10 +372,12 @@ final class DisplayResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(samsungPlan.resolvedDisplayID, 2)
-        XCTAssertEqual(samsungPlan.fallback?.reason, DisplayFallbackReason.hardwareMatch)
+        XCTAssertEqual(samsungPlan.outcome, .hardwareRemap)
+        XCTAssertNil(samsungPlan.fallback)
         XCTAssertEqual(samsungPlan.targetFrame, CGRect(x: -1119, y: -1296, width: 1280, height: 720))
         XCTAssertEqual(msiPlan.resolvedDisplayID, 3)
-        XCTAssertEqual(msiPlan.fallback?.reason, DisplayFallbackReason.hardwareMatch)
+        XCTAssertEqual(msiPlan.outcome, .hardwareRemap)
+        XCTAssertNil(msiPlan.fallback)
         XCTAssertEqual(msiPlan.targetFrame, CGRect(x: 1057, y: -1152, width: 1280, height: 720))
     }
 
@@ -642,9 +645,11 @@ final class DisplayResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(primaryPlan.resolvedDisplayID, 10)
-        XCTAssertEqual(primaryPlan.fallback?.reason, DisplayFallbackReason.hardwareMatch)
+        XCTAssertEqual(primaryPlan.outcome, .hardwareRemap)
+        XCTAssertNil(primaryPlan.fallback)
         XCTAssertEqual(sidePlan.resolvedDisplayID, 20)
-        XCTAssertEqual(sidePlan.fallback?.reason, DisplayFallbackReason.hardwareMatch)
+        XCTAssertEqual(sidePlan.outcome, .hardwareRemap)
+        XCTAssertNil(sidePlan.fallback)
         XCTAssertEqual(missingPlan.resolvedDisplayID, 10)
         XCTAssertEqual(missingPlan.fallback?.reason, DisplayFallbackReason.primaryDisplay)
         XCTAssertEqual(missingPlan.targetFrame, CGRect(x: 720, y: 450, width: 720, height: 450))

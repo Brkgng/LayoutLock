@@ -83,7 +83,11 @@ struct DisplayResolver {
             return RestoreDisplayPlan(
                 targetFrame: window.frame.cgRect,
                 resolvedDisplayID: nil,
+                outcome: .unavailable,
                 fallback: DisplayFallbackEvent(
+                    windowID: window.id,
+                    bundleIdentifier: window.bundleIdentifier,
+                    outcome: .unavailable,
                     savedDisplayID: window.displayID,
                     resolvedDisplayID: nil,
                     reason: DisplayFallbackReason.noDisplaysAvailable
@@ -99,7 +103,15 @@ struct DisplayResolver {
             return RestoreDisplayPlan(
                 targetFrame: window.frame.cgRect,
                 resolvedDisplayID: nil,
-                fallback: nil
+                outcome: .unavailable,
+                fallback: DisplayFallbackEvent(
+                    windowID: window.id,
+                    bundleIdentifier: window.bundleIdentifier,
+                    outcome: .unavailable,
+                    savedDisplayID: window.displayID,
+                    resolvedDisplayID: nil,
+                    reason: DisplayFallbackReason.noDisplaysAvailable
+                )
             )
         }
 
@@ -111,13 +123,16 @@ struct DisplayResolver {
         return RestoreDisplayPlan(
             targetFrame: targetFrame,
             resolvedDisplayID: resolvedDisplay.display.id,
-            fallback: resolvedDisplay.reason.map {
+            outcome: resolvedDisplay.outcome,
+            fallback: resolvedDisplay.outcome.isFallback ?
                 DisplayFallbackEvent(
+                    windowID: window.id,
+                    bundleIdentifier: window.bundleIdentifier,
+                    outcome: resolvedDisplay.outcome,
                     savedDisplayID: window.displayID,
                     resolvedDisplayID: resolvedDisplay.display.id,
-                    reason: $0
-                )
-            }
+                    reason: resolvedDisplay.outcome.reason
+                ) : nil
         )
     }
 
@@ -125,7 +140,7 @@ struct DisplayResolver {
         savedDisplayID: UInt32?,
         sourceDisplayState: DisplayState,
         currentDisplayState: DisplayState
-    ) -> (display: DisplayRecord, reason: String?)? {
+    ) -> (display: DisplayRecord, outcome: RestoreDisplayOutcome)? {
         let currentDisplays = currentDisplayState.displays
         let savedDisplay = savedDisplayID.flatMap { id in
             sourceDisplayState.displays.first(where: { $0.id == id })
@@ -137,14 +152,14 @@ struct DisplayResolver {
                let hardwareMatch = hardwareMatches.first {
                 return (
                     hardwareMatch,
-                    hardwareMatch.id == savedDisplayID ? nil : DisplayFallbackReason.hardwareMatch
+                    hardwareMatch.id == savedDisplayID ? .exact : .hardwareRemap
                 )
             }
 
             if let savedDisplayID,
                let exactMatch = currentDisplays.first(where: { $0.id == savedDisplayID }),
                !savedDisplay.hasStableIdentity || exactMatch.identityMatches(savedDisplay) {
-                return (exactMatch, nil)
+                return (exactMatch, .exact)
             }
         }
 
@@ -162,19 +177,19 @@ struct DisplayResolver {
 
                 return DisplayRecord.sortComparator($0, $1)
             }) {
-            return (semanticMatch, DisplayFallbackReason.semanticMatch)
+            return (semanticMatch, .semanticFallback)
         }
 
         if savedDisplay == nil,
            let savedDisplayID,
            let exactMatch = currentDisplays.first(where: { $0.id == savedDisplayID }) {
-            return (exactMatch, nil)
+            return (exactMatch, .exact)
         }
 
         if let primaryDisplay = currentDisplays.first(where: { $0.id == currentDisplayState.primaryDisplayID }) ??
             currentDisplays.first(where: \.isPrimary) ??
             currentDisplays.sorted(by: DisplayRecord.sortComparator).first {
-            return (primaryDisplay, DisplayFallbackReason.primaryDisplay)
+            return (primaryDisplay, .primaryFallback)
         }
 
         return nil
@@ -184,7 +199,40 @@ struct DisplayResolver {
 struct RestoreDisplayPlan {
     let targetFrame: CGRect
     let resolvedDisplayID: UInt32?
+    let outcome: RestoreDisplayOutcome
     let fallback: DisplayFallbackEvent?
+}
+
+enum RestoreDisplayOutcome: String {
+    case exact
+    case hardwareRemap
+    case semanticFallback
+    case primaryFallback
+    case unavailable
+
+    var isFallback: Bool {
+        switch self {
+        case .exact, .hardwareRemap:
+            return false
+        case .semanticFallback, .primaryFallback, .unavailable:
+            return true
+        }
+    }
+
+    var reason: String {
+        switch self {
+        case .exact:
+            return "display matched exactly"
+        case .hardwareRemap:
+            return DisplayFallbackReason.hardwareMatch
+        case .semanticFallback:
+            return DisplayFallbackReason.semanticMatch
+        case .primaryFallback:
+            return DisplayFallbackReason.primaryDisplay
+        case .unavailable:
+            return DisplayFallbackReason.noDisplaysAvailable
+        }
+    }
 }
 
 enum DisplayFallbackReason {

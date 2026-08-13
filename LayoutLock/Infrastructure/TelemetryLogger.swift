@@ -338,6 +338,17 @@ struct TelemetryLogDetail: Codable, Equatable {
     let targetKind: String?
     let savedDisplayID: UInt32?
     let resolvedDisplayID: UInt32?
+    let windowID: UUID?
+    let matchStrategy: String?
+    let candidateCount: Int?
+    let filteredCandidateCount: Int?
+    let readinessTimedOut: Bool?
+    let geometryAttempted: Bool?
+    let geometryAttemptCount: Int?
+    let expectedFrame: CGRectCodable?
+    let finalObservedFrame: CGRectCodable?
+    let displayOutcome: String?
+    let result: String?
 
     init(
         kind: String,
@@ -346,7 +357,18 @@ struct TelemetryLogDetail: Codable, Equatable {
         reason: String? = nil,
         targetKind: String? = nil,
         savedDisplayID: UInt32? = nil,
-        resolvedDisplayID: UInt32? = nil
+        resolvedDisplayID: UInt32? = nil,
+        windowID: UUID? = nil,
+        matchStrategy: String? = nil,
+        candidateCount: Int? = nil,
+        filteredCandidateCount: Int? = nil,
+        readinessTimedOut: Bool? = nil,
+        geometryAttempted: Bool? = nil,
+        geometryAttemptCount: Int? = nil,
+        expectedFrame: CGRectCodable? = nil,
+        finalObservedFrame: CGRectCodable? = nil,
+        displayOutcome: String? = nil,
+        result: String? = nil
     ) {
         self.kind = kind
         self.bundleIdentifier = bundleIdentifier
@@ -355,6 +377,17 @@ struct TelemetryLogDetail: Codable, Equatable {
         self.targetKind = targetKind
         self.savedDisplayID = savedDisplayID
         self.resolvedDisplayID = resolvedDisplayID
+        self.windowID = windowID
+        self.matchStrategy = matchStrategy
+        self.candidateCount = candidateCount
+        self.filteredCandidateCount = filteredCandidateCount
+        self.readinessTimedOut = readinessTimedOut
+        self.geometryAttempted = geometryAttempted
+        self.geometryAttemptCount = geometryAttemptCount
+        self.expectedFrame = expectedFrame
+        self.finalObservedFrame = finalObservedFrame
+        self.displayOutcome = displayOutcome
+        self.result = result
     }
 }
 
@@ -459,9 +492,12 @@ private extension RestoreResult {
         displayFallbacks.map {
             TelemetryLogDetail(
                 kind: "displayFallback",
+                bundleIdentifier: $0.bundleIdentifier,
                 reason: $0.reason,
                 savedDisplayID: $0.savedDisplayID,
-                resolvedDisplayID: $0.resolvedDisplayID
+                resolvedDisplayID: $0.resolvedDisplayID,
+                windowID: $0.windowID,
+                displayOutcome: $0.outcome.rawValue
             )
         } +
         targetIssues.map {
@@ -471,6 +507,25 @@ private extension RestoreResult {
                 reason: $0.reason.rawValue,
                 targetKind: $0.target.kind.rawValue
             )
-        }
+        } +
+        windowDiagnostics.map {
+            TelemetryLogDetail(
+                kind: "restoreWindow",
+                bundleIdentifier: $0.bundleIdentifier,
+                reason: $0.reason,
+                windowID: $0.windowID,
+                matchStrategy: $0.matchStrategy?.rawValue,
+                candidateCount: $0.candidateCount,
+                filteredCandidateCount: $0.filteredCandidateCount,
+                readinessTimedOut: $0.readinessTimedOut,
+                geometryAttempted: $0.geometryAttempted,
+                geometryAttemptCount: $0.geometryAttemptCount,
+                expectedFrame: $0.expectedFrame.map(CGRectCodable.init),
+                finalObservedFrame: $0.finalObservedFrame.map(CGRectCodable.init),
+                displayOutcome: $0.displayOutcome?.rawValue,
+                result: $0.result
+            )
+        } +
+        discoveryDiagnostics.map(TelemetryLogDetail.init(discoveryDiagnostic:))
     }
 }

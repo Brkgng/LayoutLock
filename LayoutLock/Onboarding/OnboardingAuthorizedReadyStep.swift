@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OnboardingAuthorizedReadyStep: View {
     let onSetUpBrowsers: () -> Void
+    let onInstallRaycast: () -> Void
     let onOpenDashboard: () -> Void
     let onDone: () -> Void
 
@@ -23,6 +24,7 @@ struct OnboardingAuthorizedReadyStep: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             OnboardingBrowserTabsCard(onSetUp: onSetUpBrowsers)
+            OnboardingRaycastCard(onInstall: onInstallRaycast)
 
             OnboardingCompletionButtons(
                 primaryTitle: "Open Dashboard",

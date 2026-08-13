@@ -147,6 +147,7 @@ final class LayoutLockSupportTests: XCTestCase {
     func testLegalURLsUsePublishedLayoutLockPages() {
         XCTAssertEqual(LayoutLockSupport.privacyPolicyURL.absoluteString, "https://layoutlock.app/privacy")
         XCTAssertEqual(LayoutLockSupport.termsOfServiceURL.absoluteString, "https://layoutlock.app/terms")
+        XCTAssertEqual(LayoutLockSupport.raycastURL.absoluteString, "https://layoutlock.app/raycast")
     }
 
     func testRefundEmailURLTargetsBrandedSupportAddress() throws {
