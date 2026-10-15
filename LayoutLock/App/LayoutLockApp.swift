@@ -317,6 +317,14 @@ private struct DashboardCommands: Commands {
             .keyboardShortcut("n")
         }
 
+        CommandGroup(after: .textEditing) {
+            Button("Search Layouts") {
+                dashboardCommandContext?.focusLayoutSearch()
+            }
+            .disabled(dashboardCommandContext?.canSearchLayouts != true)
+            .keyboardShortcut("f", modifiers: .command)
+        }
+
         CommandMenu("Layout") {
             Button("New Layout") {
                 dashboardCommandContext?.createLayout()

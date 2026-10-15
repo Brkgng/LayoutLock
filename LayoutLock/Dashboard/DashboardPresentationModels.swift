@@ -99,6 +99,42 @@ struct DashboardWindowRemovalConfirmation {
     }
 }
 
+enum DashboardSidebarSearch {
+    static let minimumLayoutCount = 5
+
+    static func showsSearchField(layoutCount: Int) -> Bool {
+        layoutCount >= minimumLayoutCount
+    }
+
+    static func filteredSummaries(
+        _ summaries: [SnapshotSummary],
+        query: String
+    ) -> [SnapshotSummary] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else {
+            return summaries
+        }
+
+        return summaries.filter {
+            $0.name.range(
+                of: trimmedQuery,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) != nil
+        }
+    }
+
+    static func replacementSelectionID(
+        in summaries: [SnapshotSummary],
+        query: String
+    ) -> UUID? {
+        let visibleSummaries = showsSearchField(layoutCount: summaries.count)
+            ? filteredSummaries(summaries, query: query)
+            : summaries
+
+        return (visibleSummaries.first ?? summaries.first)?.id
+    }
+}
+
 enum DashboardSnapshotPresentation {
     static let windowOverlapThreshold = 0.35
 

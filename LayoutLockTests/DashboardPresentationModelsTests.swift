@@ -891,6 +891,95 @@ final class DashboardPresentationModelsTests: XCTestCase {
         )
     }
 
+    func testSidebarSearchShowsSearchFieldOnlyAtMinimumLayoutCount() {
+        XCTAssertFalse(DashboardSidebarSearch.showsSearchField(layoutCount: 4))
+        XCTAssertTrue(DashboardSidebarSearch.showsSearchField(layoutCount: 5))
+        XCTAssertTrue(DashboardSidebarSearch.showsSearchField(layoutCount: 12))
+    }
+
+    func testSidebarSearchFiltersSummariesCaseAndDiacriticInsensitivelyPreservingOrder() {
+        let summaries = [
+            makeSummary(name: "Writing"),
+            makeSummary(name: "Recording"),
+            makeSummary(name: "Résumé")
+        ]
+
+        let filtered = DashboardSidebarSearch.filteredSummaries(summaries, query: "RE")
+
+        XCTAssertEqual(filtered.map(\.name), ["Recording", "Résumé"])
+    }
+
+    func testSidebarSearchReturnsAllSummariesForBlankQuery() {
+        let summaries = [
+            makeSummary(name: "Writing"),
+            makeSummary(name: "Recording")
+        ]
+
+        XCTAssertEqual(
+            DashboardSidebarSearch.filteredSummaries(summaries, query: "  ").map(\.name),
+            ["Writing", "Recording"]
+        )
+    }
+
+    func testSidebarSearchReturnsNoSummariesForUnmatchedQuery() {
+        let summaries = [
+            makeSummary(name: "Writing"),
+            makeSummary(name: "Recording")
+        ]
+
+        XCTAssertTrue(
+            DashboardSidebarSearch.filteredSummaries(summaries, query: "zzz").isEmpty
+        )
+    }
+
+    func testSidebarSearchReplacementSelectionPrefersFirstVisibleMatch() {
+        let alpha = makeSummary(name: "Alpha")
+        let morningWork = makeSummary(name: "Work Morning")
+        let beta = makeSummary(name: "Beta")
+        let eveningWork = makeSummary(name: "Work Evening")
+        let gamma = makeSummary(name: "Gamma")
+
+        XCTAssertEqual(
+            DashboardSidebarSearch.replacementSelectionID(
+                in: [alpha, morningWork, beta, eveningWork, gamma],
+                query: "work"
+            ),
+            morningWork.id
+        )
+    }
+
+    func testSidebarSearchReplacementSelectionFallsBackToFirstLayoutWithoutVisibleMatch() {
+        let alpha = makeSummary(name: "Alpha")
+        let beta = makeSummary(name: "Beta")
+        let summaries = [
+            alpha,
+            beta,
+            makeSummary(name: "Gamma"),
+            makeSummary(name: "Delta"),
+            makeSummary(name: "Epsilon")
+        ]
+
+        XCTAssertEqual(
+            DashboardSidebarSearch.replacementSelectionID(in: summaries, query: "zzz"),
+            alpha.id
+        )
+    }
+
+    func testSidebarSearchReplacementSelectionIgnoresQueryBelowMinimumLayoutCount() {
+        let alpha = makeSummary(name: "Alpha")
+        let summaries = [
+            alpha,
+            makeSummary(name: "Beta"),
+            makeSummary(name: "Gamma"),
+            makeSummary(name: "Delta")
+        ]
+
+        XCTAssertEqual(
+            DashboardSidebarSearch.replacementSelectionID(in: summaries, query: "beta"),
+            alpha.id
+        )
+    }
+
     func testDisplayPreviewModelsGroupWindowsByDisplayID() {
         let snapshot = makeSnapshot(windows: [
             makeWindow(bundleIdentifier: "com.example.editor", displayID: 1),
@@ -1321,6 +1410,16 @@ final class DashboardPresentationModelsTests: XCTestCase {
             name: names[bundleIdentifier] ?? bundleIdentifier,
             icon: NSImage(),
             accentColor: .accentColor
+        )
+    }
+
+    private func makeSummary(name: String) -> SnapshotSummary {
+        SnapshotSummary(
+            snapshot: Snapshot(
+                name: name,
+                sourceDisplayState: DisplayState(displays: [], primaryDisplayID: nil),
+                windows: [makeWindow(bundleIdentifier: "com.example.editor")]
+            )
         )
     }
 

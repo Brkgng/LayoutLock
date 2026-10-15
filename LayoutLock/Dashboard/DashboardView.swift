@@ -3,6 +3,7 @@ import SwiftUI
 
 private enum DashboardFocusTarget: Hashable {
     case layoutList
+    case layoutSearch
 }
 
 struct DashboardSnapshotNameRequest: Identifiable {
@@ -81,6 +82,7 @@ struct DashboardCommandContext {
     let canAssignHotkey: Bool
     let canClearHotkey: Bool
     let canDeleteLayout: Bool
+    let canSearchLayouts: Bool
     let hotkeyCommandTitle: String
     let createLayout: () -> Void
     let restoreLayout: () -> Void
@@ -89,6 +91,7 @@ struct DashboardCommandContext {
     let assignHotkey: () -> Void
     let clearHotkey: () -> Void
     let deleteLayout: () -> Void
+    let focusLayoutSearch: () -> Void
 }
 
 private struct DashboardCommandContextKey: FocusedValueKey {
@@ -118,6 +121,7 @@ struct DashboardView: View {
 
     @State private var selectedSnapshotID: UUID?
     @State private var selectedSnapshot: Snapshot?
+    @State private var layoutSearchText = ""
     @State private var pendingUpdate: SnapshotSummary?
     @State private var pendingDeletion: SnapshotSummary?
     @State private var pendingWindowRemoval: DashboardWindowRemovalConfirmation?
@@ -152,6 +156,13 @@ struct DashboardView: View {
                     )
                 }
 
+                if showsLayoutSearch {
+                    SidebarSearchField(
+                        searchText: $layoutSearchText,
+                        focus: $dashboardFocus
+                    )
+                }
+
                 ScrollViewReader { proxy in
                     List(selection: Binding(
                         get: { selectedSnapshotID },
@@ -167,8 +178,11 @@ struct DashboardView: View {
                         if snapshotMenuController.snapshotSummaries.isEmpty {
                             Text("No layouts saved yet")
                                 .foregroundStyle(.secondary)
+                        } else if visibleSnapshotSummaries.isEmpty {
+                            Text("No matching layouts")
+                                .foregroundStyle(.secondary)
                         } else {
-                            ForEach(snapshotMenuController.snapshotSummaries) { snapshot in
+                            ForEach(visibleSnapshotSummaries) { snapshot in
                                 DashboardSnapshotRow(
                                     snapshot: snapshot,
                                     isSelected: selectedSnapshotID == snapshot.id,
@@ -198,6 +212,7 @@ struct DashboardView: View {
                             return
                         }
 
+                        layoutSearchText = ""
                         selectSnapshot(id: snapshotID)
                         Task { @MainActor in
                             await Task.yield()
@@ -419,6 +434,9 @@ struct DashboardView: View {
                !summaries.contains(where: { $0.id == selectedSnapshotID }) {
                 hotkeyEditRequestID = nil
             }
+            if !DashboardSidebarSearch.showsSearchField(layoutCount: summaries.count) {
+                layoutSearchText = ""
+            }
         }
         .onChange(of: selectedSnapshotID) { _, _ in
             permissionRouter.clearDashboardPermissionEducationForContextChange()
@@ -470,6 +488,23 @@ struct DashboardView: View {
             snapshotMenuController.snapshotSummaries.count >= LayoutLockProConfiguration.freeLayoutLimit
     }
 
+    private var showsLayoutSearch: Bool {
+        DashboardSidebarSearch.showsSearchField(
+            layoutCount: snapshotMenuController.snapshotSummaries.count
+        )
+    }
+
+    private var visibleSnapshotSummaries: [SnapshotSummary] {
+        guard showsLayoutSearch else {
+            return snapshotMenuController.snapshotSummaries
+        }
+
+        return DashboardSidebarSearch.filteredSummaries(
+            snapshotMenuController.snapshotSummaries,
+            query: layoutSearchText
+        )
+    }
+
     private var dashboardCommandContext: DashboardCommandContext {
         let availability = DashboardCommandAvailability(
             isSnapshotActionDisabled: isSnapshotActionDisabled,
@@ -486,6 +521,7 @@ struct DashboardView: View {
             canAssignHotkey: availability.canAssignHotkey,
             canClearHotkey: availability.canClearHotkey,
             canDeleteLayout: availability.canDeleteLayout,
+            canSearchLayouts: showsLayoutSearch,
             hotkeyCommandTitle: availability.hotkeyCommandTitle,
             createLayout: saveSnapshot,
             restoreLayout: restoreSelectedSnapshot,
@@ -493,7 +529,8 @@ struct DashboardView: View {
             renameLayout: requestInlineRenameForSelectedSnapshot,
             assignHotkey: assignHotkeyToSelectedSnapshot,
             clearHotkey: clearHotkeyFromSelectedSnapshot,
-            deleteLayout: deleteSelectedSnapshot
+            deleteLayout: deleteSelectedSnapshot,
+            focusLayoutSearch: focusLayoutSearchField
         )
     }
 
@@ -501,6 +538,13 @@ struct DashboardView: View {
         Task { @MainActor in
             await Task.yield()
             dashboardFocus = .layoutList
+        }
+    }
+
+    private func focusLayoutSearchField() {
+        Task { @MainActor in
+            await Task.yield()
+            dashboardFocus = .layoutSearch
         }
     }
 
@@ -518,7 +562,10 @@ struct DashboardView: View {
             return
         }
 
-        selectedSnapshotID = summaries.first?.id
+        selectedSnapshotID = DashboardSidebarSearch.replacementSelectionID(
+            in: summaries,
+            query: layoutSearchText
+        )
     }
 
     @MainActor
@@ -1460,6 +1507,46 @@ private struct SidebarActionButton: View {
         }
 
         return .secondary
+    }
+}
+
+private struct SidebarSearchField: View {
+    @Binding var searchText: String
+    @FocusState.Binding var focus: DashboardFocusTarget?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            TextField("Search layouts", text: $searchText)
+                .textFieldStyle(.plain)
+                .focused($focus, equals: .layoutSearch)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .imageScale(.small)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 }
 
