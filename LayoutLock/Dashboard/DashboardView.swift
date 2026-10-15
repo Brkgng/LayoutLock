@@ -292,7 +292,7 @@ struct DashboardView: View {
         )
         .focusedSceneValue(\.dashboardCommandContext, dashboardCommandContext)
         .alert(
-            "Update Layout?",
+            "Update?",
             isPresented: Binding(
                 get: { pendingUpdate != nil },
                 set: { isPresented in
@@ -313,7 +313,7 @@ struct DashboardView: View {
             Text(updateConfirmationMessage)
         }
         .alert(
-            "Delete Layout?",
+            "Delete?",
             isPresented: Binding(
                 get: { pendingDeletion != nil },
                 set: { isPresented in
@@ -1990,20 +1990,20 @@ private struct DashboardDetailView: View {
             Button {
                 restoreSnapshot()
             } label: {
-                Label("Restore Layout", systemImage: "arrow.counterclockwise")
+                Label("Restore", systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(isPrivilegedActionDisabled)
-            .help("Restore Layout")
+            .help("Restore")
 
             Button {
                 updateSnapshot()
             } label: {
-                Label("Update Layout", systemImage: "arrow.triangle.2.circlepath")
+                Label("Update", systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(isPrivilegedActionDisabled)
-            .help("Update Layout")
+            .help("Update")
 
             Button {
                 beginInlineRename(snapshot)
@@ -2011,7 +2011,7 @@ private struct DashboardDetailView: View {
                 Label("Rename", systemImage: "pencil")
             }
             .disabled(isDisabled)
-            .help("Rename Layout")
+            .help("Rename")
 
             Button(role: .destructive) {
                 deleteSnapshot()
@@ -2019,11 +2019,11 @@ private struct DashboardDetailView: View {
                 Image(systemName: "trash")
                     .symbolRenderingMode(.hierarchical)
                     .imageScale(.medium)
-                    .accessibilityLabel("Delete Layout")
+                    .accessibilityLabel("Delete")
             }
             .buttonStyle(.borderless)
             .disabled(isDisabled)
-            .help("Delete Layout")
+            .help("Delete")
         }
         .controlSize(.regular)
     }
