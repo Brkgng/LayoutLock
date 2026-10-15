@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private let recentLayoutLimit = 7
+private let visibleLayoutLimit = 7
 
 struct MenuBarContentView: View {
     @Environment(\.openWindow) private var openWindow
@@ -143,11 +143,11 @@ struct MenuBarContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(recentSnapshotSummaries) { snapshot in
+            ForEach(visibleSnapshotSummaries) { snapshot in
                 restoreButton(for: snapshot)
             }
 
-            if snapshotMenuController.snapshotSummaries.count > recentLayoutLimit {
+            if snapshotMenuController.snapshotSummaries.count > visibleLayoutLimit {
                 Menu("More Layouts") {
                     ForEach(remainingSnapshotSummaries) { snapshot in
                         restoreButton(for: snapshot)
@@ -162,7 +162,11 @@ struct MenuBarContentView: View {
         let button = Button {
             handleRestoreSnapshot(id: snapshot.id)
         } label: {
-            Text(shortMenuTitle(snapshot.name))
+            if snapshot.isPinned {
+                Label(shortMenuTitle(snapshot.name), systemImage: "pin.fill")
+            } else {
+                Text(shortMenuTitle(snapshot.name))
+            }
         }
         .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
 
@@ -210,12 +214,12 @@ struct MenuBarContentView: View {
         return false
     }
 
-    private var recentSnapshotSummaries: ArraySlice<SnapshotSummary> {
-        snapshotMenuController.snapshotSummaries.prefix(recentLayoutLimit)
+    private var visibleSnapshotSummaries: ArraySlice<SnapshotSummary> {
+        snapshotMenuController.snapshotSummaries.prefix(visibleLayoutLimit)
     }
 
     private var remainingSnapshotSummaries: ArraySlice<SnapshotSummary> {
-        snapshotMenuController.snapshotSummaries.dropFirst(recentLayoutLimit)
+        snapshotMenuController.snapshotSummaries.dropFirst(visibleLayoutLimit)
     }
 
     private var planStatusPresentation: PlanStatusPresentation {

@@ -112,7 +112,8 @@ func makeSnapshot(
     displays: [DisplayRecord] = [makeDisplayRecord()],
     primaryDisplayID: UInt32? = 1,
     windows: [WindowRecord] = [makeWindowRecord()],
-    hotkey: HotkeyBinding? = nil
+    hotkey: HotkeyBinding? = nil,
+    isPinned: Bool = false
 ) -> Snapshot {
     Snapshot(
         id: id,
@@ -124,7 +125,8 @@ func makeSnapshot(
             primaryDisplayID: primaryDisplayID
         ),
         windows: windows,
-        hotkey: hotkey
+        hotkey: hotkey,
+        isPinned: isPinned
     )
 }
 

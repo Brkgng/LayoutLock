@@ -193,6 +193,9 @@ struct DashboardView: View {
                                     clearHotkey: {
                                         clearHotkey(from: snapshot)
                                     },
+                                    togglePin: {
+                                        snapshotMenuController.togglePin(for: snapshot.id)
+                                    },
                                     deleteSnapshot: {
                                         deleteSnapshot(snapshot)
                                     },
@@ -2013,6 +2016,19 @@ private struct DashboardDetailView: View {
             .disabled(isDisabled)
             .help("Rename")
 
+            Button {
+                snapshotMenuController.togglePin(for: snapshot.id)
+            } label: {
+                Label(
+                    summary.isPinned ? "Unpin" : "Pin",
+                    systemImage: summary.isPinned ? "pin.fill" : "pin"
+                )
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .disabled(isDisabled)
+            .help(summary.isPinned ? "Unpin" : "Pin")
+
             Button(role: .destructive) {
                 deleteSnapshot()
             } label: {
@@ -2541,6 +2557,7 @@ private struct DashboardSnapshotRow: View {
     let renameSnapshotInline: (UUID, String) -> Bool
     let assignHotkey: () -> Void
     let clearHotkey: () -> Void
+    let togglePin: () -> Void
     let deleteSnapshot: () -> Void
     let isActionDisabled: Bool
 
@@ -2557,6 +2574,13 @@ private struct DashboardSnapshotRow: View {
         HStack(alignment: .center, spacing: 6) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    if snapshot.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(supportingForeground)
+                            .accessibilityLabel("Pinned layout")
+                    }
+
                     if isRenaming {
                         TextField("Layout name", text: $draftName)
                             .textFieldStyle(.plain)
@@ -2633,6 +2657,11 @@ private struct DashboardSnapshotRow: View {
     private var snapshotActions: some View {
         Button("Rename") {
             beginInlineRename()
+        }
+        .disabled(isActionDisabled)
+
+        Button(snapshot.isPinned ? "Unpin" : "Pin") {
+            togglePin()
         }
         .disabled(isActionDisabled)
 

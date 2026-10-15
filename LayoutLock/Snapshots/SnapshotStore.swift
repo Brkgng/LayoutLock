@@ -9,6 +9,7 @@ struct SnapshotSummary: Identifiable {
     let updatedAt: Date
     let windowCount: Int
     let hotkey: HotkeyBinding?
+    let isPinned: Bool
 
     init(snapshot: Snapshot) {
         let appIdentifiers = Set(snapshot.windows.map(\.bundleIdentifier))
@@ -22,6 +23,7 @@ struct SnapshotSummary: Identifiable {
         updatedAt = snapshot.updatedAt
         windowCount = snapshot.windows.count
         hotkey = snapshot.hotkey
+        isPinned = snapshot.isPinned
     }
 }
 
@@ -117,6 +119,10 @@ struct SnapshotStore {
         }
 
         return summaries.sorted {
+            if $0.isPinned != $1.isPinned {
+                return $0.isPinned
+            }
+
             if $0.updatedAt != $1.updatedAt {
                 return $0.updatedAt > $1.updatedAt
             }
@@ -151,7 +157,8 @@ struct SnapshotStore {
             schemaVersion: Snapshot.currentSchemaVersion,
             sourceDisplayState: snapshot.sourceDisplayState,
             windows: snapshot.windows,
-            hotkey: snapshot.hotkey
+            hotkey: snapshot.hotkey,
+            isPinned: snapshot.isPinned
         )
 
         let destinationURL = snapshotFileURL(for: snapshotToPersist.id)
@@ -179,6 +186,16 @@ struct SnapshotStore {
 
             throw SnapshotStoreError.snapshotWriteFailed(destinationURL, error)
         }
+    }
+
+    func setPinned(_ isPinned: Bool, for id: UUID) throws {
+        var snapshot = try loadSnapshot(id: id)
+        guard snapshot.isPinned != isPinned else {
+            return
+        }
+
+        snapshot.isPinned = isPinned
+        try save(snapshot)
     }
 
     func renameSnapshot(
@@ -223,7 +240,8 @@ struct SnapshotStore {
             schemaVersion: snapshot.schemaVersion,
             sourceDisplayState: snapshot.sourceDisplayState,
             windows: remainingWindows,
-            hotkey: snapshot.hotkey
+            hotkey: snapshot.hotkey,
+            isPinned: snapshot.isPinned
         ))
 
         return removedWindowCount
@@ -255,7 +273,8 @@ struct SnapshotStore {
             schemaVersion: snapshot.schemaVersion,
             sourceDisplayState: snapshot.sourceDisplayState,
             windows: remainingWindows,
-            hotkey: snapshot.hotkey
+            hotkey: snapshot.hotkey,
+            isPinned: snapshot.isPinned
         ))
 
         return true
@@ -314,7 +333,8 @@ struct SnapshotStore {
             schemaVersion: snapshot.schemaVersion,
             sourceDisplayState: snapshot.sourceDisplayState,
             windows: updatedWindows,
-            hotkey: snapshot.hotkey
+            hotkey: snapshot.hotkey,
+            isPinned: snapshot.isPinned
         ))
 
         return true
@@ -349,7 +369,8 @@ struct SnapshotStore {
             schemaVersion: snapshot.schemaVersion,
             sourceDisplayState: snapshot.sourceDisplayState,
             windows: windows,
-            hotkey: snapshot.hotkey
+            hotkey: snapshot.hotkey,
+            isPinned: snapshot.isPinned
         ))
 
         return true

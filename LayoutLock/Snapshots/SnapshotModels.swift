@@ -12,6 +12,7 @@ struct Snapshot: Codable, Identifiable {
     let sourceDisplayState: DisplayState
     let windows: [WindowRecord]
     var hotkey: HotkeyBinding?
+    var isPinned: Bool
 
     init(
         id: UUID = UUID(),
@@ -21,7 +22,8 @@ struct Snapshot: Codable, Identifiable {
         schemaVersion: Int = Snapshot.currentSchemaVersion,
         sourceDisplayState: DisplayState,
         windows: [WindowRecord],
-        hotkey: HotkeyBinding? = nil
+        hotkey: HotkeyBinding? = nil,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -31,6 +33,24 @@ struct Snapshot: Codable, Identifiable {
         self.sourceDisplayState = sourceDisplayState
         self.windows = windows
         self.hotkey = hotkey
+        self.isPinned = isPinned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, updatedAt, schemaVersion, sourceDisplayState, windows, hotkey, isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        sourceDisplayState = try container.decode(DisplayState.self, forKey: .sourceDisplayState)
+        windows = try container.decode([WindowRecord].self, forKey: .windows)
+        hotkey = try container.decodeIfPresent(HotkeyBinding.self, forKey: .hotkey)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 

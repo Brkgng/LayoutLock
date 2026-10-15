@@ -15,6 +15,7 @@ repositioning windows across your displays.
   layouts survive resolution and DPI changes and re-flow onto the right screen.
 - **Relaunches inactive apps** automatically when a layout is restored.
 - **Per-layout global hotkeys** to restore a layout from anywhere.
+- **Pin layouts** to keep them at the top of the dashboard and menu bar lists.
 - **Browser tab capture** for Safari and Chrome (tabs are saved and reopened
   alongside the rest of the layout).
 - **Opening targets** — reopen the documents, folders, and URLs a window had
@@ -74,7 +75,7 @@ Pro adds power-user features with a one-time purchase (no subscription).
 | -------------------------------------------- | --------------- | ----------------- |
 | Save and restore window layouts              | Up to 3 layouts | Unlimited layouts |
 | Restore layouts from the dashboard           | Yes             | Yes               |
-| Restore recent layouts from the menu bar     | Yes             | Yes               |
+| Restore layouts from the menu bar            | Yes             | Yes               |
 | Relaunch inactive apps during restore        | Yes             | Yes               |
 | Display-relative window positioning          | Yes             | Yes               |
 | Dashboard layout preview                     | Yes             | Yes               |
@@ -82,6 +83,7 @@ Pro adds power-user features with a one-time purchase (no subscription).
 | Launch at login                              | Yes             | Yes               |
 | Local diagnostic logs                        | Yes             | Yes               |
 | Per-layout global hotkeys                    | Yes             | Yes               |
+| Pin layouts for quick access                 | Yes             | Yes               |
 | Remove individual windows from saved layouts | Yes             | Yes               |
 | Restore suggestions when displays change     | —               | Yes               |
 | Customize window restore order               | —               | Yes               |
