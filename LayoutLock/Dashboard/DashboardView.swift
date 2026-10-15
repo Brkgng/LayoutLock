@@ -1932,38 +1932,39 @@ private struct DashboardDetailView: View {
     }
 
     private func header(snapshot: Snapshot, summary: SnapshotSummary) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                if editingSnapshotID == snapshot.id {
-                    TextField("Layout name", text: $draftSnapshotName)
-                        .textFieldStyle(.plain)
-                        .font(.largeTitle.weight(.semibold))
-                        .lineLimit(1)
-                        .focused($isTitleFieldFocused)
-                        .onSubmit {
-                            commitInlineRename(for: snapshot)
-                        }
-                        .onExitCommand {
-                            cancelInlineRename()
-                        }
-                } else {
-                    Text(snapshot.name)
-                        .font(.largeTitle.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .onTapGesture(count: 2) {
-                            beginInlineRename(snapshot)
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 16) {
+                Group {
+                    if editingSnapshotID == snapshot.id {
+                        TextField("Layout name", text: $draftSnapshotName)
+                            .textFieldStyle(.plain)
+                            .font(.largeTitle.weight(.semibold))
+                            .lineLimit(1)
+                            .focused($isTitleFieldFocused)
+                            .onSubmit {
+                                commitInlineRename(for: snapshot)
+                            }
+                            .onExitCommand {
+                                cancelInlineRename()
+                            }
+                    } else {
+                        Text(snapshot.name)
+                            .font(.largeTitle.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .onTapGesture(count: 2) {
+                                beginInlineRename(snapshot)
+                            }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text("Updated \(DashboardRelativeDateFormatter.string(from: summary.updatedAt))")
-                    .foregroundStyle(DashboardVisualStyle.supportingText)
+                snapshotActionStrip(snapshot: snapshot, summary: summary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            snapshotActionStrip(snapshot: snapshot, summary: summary)
+            Text("Updated \(DashboardRelativeDateFormatter.string(from: summary.updatedAt))")
+                .foregroundStyle(DashboardVisualStyle.supportingText)
         }
         .onChange(of: snapshot.id) { _, _ in
             cancelInlineRename()
