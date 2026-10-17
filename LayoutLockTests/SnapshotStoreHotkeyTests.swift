@@ -138,6 +138,94 @@ final class SnapshotStoreHotkeyTests: XCTestCase {
         )
     }
 
+    func testSavingEditedOpeningTargetPreservesOtherTargetsWindowsAndLayoutMetadata() throws {
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let encoder = JSONEncoder()
+        let replacementFileURL = temporaryDirectoryURL.appendingPathComponent("Located.txt")
+        try Data().write(to: replacementFileURL)
+
+        for kind: WindowOpenTargetKind in [.file, .folder, .webURL] {
+            let replacementURL: URL
+            switch kind {
+            case .file:
+                replacementURL = replacementFileURL
+            case .folder:
+                replacementURL = temporaryDirectoryURL
+            case .webURL:
+                replacementURL = try XCTUnwrap(URL(string: "https://new.example.com/"))
+            }
+            let originalTarget = WindowOpenTarget(
+                kind: kind,
+                url: kind == .webURL
+                    ? try XCTUnwrap(URL(string: "https://old.example.com/"))
+                    : temporaryDirectoryURL.appendingPathComponent("Missing"),
+                title: "Saved target"
+            )
+            let otherTarget = WindowOpenTarget(kind: .file, url: replacementFileURL)
+            let lastTarget = WindowOpenTarget(kind: .file, url: replacementFileURL)
+            let originalTargets = [otherTarget, originalTarget, lastTarget]
+
+            for hasManualTargets in [false, true] {
+                let window = makeWindowRecord(
+                    zOrderHint: 2,
+                    openingConfiguration: WindowOpeningConfiguration(
+                        automaticallyCapturedTargets: originalTargets,
+                        manualTargets: hasManualTargets ? originalTargets : nil
+                    )
+                )
+                let otherWindow = makeWindowRecord()
+                let snapshot = Snapshot(
+                    name: "Daily Setup",
+                    createdAt: Date(timeIntervalSince1970: 100),
+                    updatedAt: Date(timeIntervalSince1970: 200),
+                    sourceDisplayState: DisplayState(displays: [makeDisplay(id: 1)], primaryDisplayID: 1),
+                    windows: [window, otherWindow],
+                    hotkey: makeHotkey(),
+                    isPinned: true
+                )
+                try store.save(snapshot)
+
+                let draft = [
+                    otherTarget,
+                    WindowOpenTarget(
+                        id: originalTarget.id,
+                        kind: kind,
+                        url: replacementURL,
+                        title: kind == .webURL ? nil : originalTarget.title
+                    ),
+                    lastTarget
+                ]
+
+                let savedAt = Date(timeIntervalSince1970: 300)
+                XCTAssertTrue(try store.setOpeningConfiguration(
+                    snapshotID: snapshot.id,
+                    windowID: window.id,
+                    manualTargets: draft,
+                    now: savedAt
+                ))
+
+                let saved = try store.loadSnapshot(id: snapshot.id)
+                var expectedJSON = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: encoder.encode(snapshot)) as? [String: Any]
+                )
+                var expectedWindows = try XCTUnwrap(expectedJSON["windows"] as? [[String: Any]])
+                var expectedConfiguration = try XCTUnwrap(
+                    expectedWindows[0]["openingConfiguration"] as? [String: Any]
+                )
+                expectedConfiguration["manualTargets"] = try JSONSerialization.jsonObject(with: encoder.encode(draft))
+                expectedWindows[0]["openingConfiguration"] = expectedConfiguration
+                expectedJSON["windows"] = expectedWindows
+                expectedJSON["updatedAt"] = savedAt.timeIntervalSinceReferenceDate
+
+                // Only the edited window's manual targets and the update date may change.
+                XCTAssertEqual(
+                    try JSONSerialization.jsonObject(with: encoder.encode(saved)) as? NSDictionary,
+                    NSDictionary(dictionary: expectedJSON)
+                )
+            }
+        }
+    }
+
     func testWindowOpenTargetValidatorClassifiesLocalTargets() throws {
         let fileURL = temporaryDirectoryURL.appendingPathComponent("Document.txt")
         let folderURL = temporaryDirectoryURL.appendingPathComponent("Project", isDirectory: true)
@@ -153,13 +241,57 @@ final class SnapshotStoreHotkeyTests: XCTestCase {
         XCTAssertEqual(folderTarget.kind, .folder)
         XCTAssertEqual(folderTarget.url, folderURL.standardizedFileURL)
         XCTAssertEqual(
+            try validator.localTarget(path: " \(fileURL.path)\n", expectedKind: .file).url,
+            fileURL.standardizedFileURL
+        )
+        XCTAssertEqual(
             try validator.localTarget(path: "~", expectedKind: .folder).url,
             FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
         )
         XCTAssertThrowsError(try validator.localTarget(path: folderURL.path, expectedKind: .file))
+        XCTAssertThrowsError(try validator.localTarget(path: fileURL.path, expectedKind: .folder))
         XCTAssertThrowsError(
             try validator.localTarget(path: temporaryDirectoryURL.appendingPathComponent("Missing").path)
         )
+        XCTAssertThrowsError(try validator.localTarget(url: folderURL, expectedKind: .file)) { error in
+            XCTAssertEqual(error as? WindowOpenTargetValidationError, .expectedFile)
+        }
+        XCTAssertThrowsError(try validator.localTarget(url: fileURL, expectedKind: .folder)) { error in
+            XCTAssertEqual(error as? WindowOpenTargetValidationError, .expectedFolder)
+        }
+        XCTAssertThrowsError(try validator.localTarget(url: temporaryDirectoryURL.appendingPathComponent("Missing"))) { error in
+            XCTAssertEqual(error as? WindowOpenTargetValidationError, .pathDoesNotExist)
+        }
+    }
+
+    func testLocalTargetURLPreservesTrailingWhitespaceWithAndWithoutSibling() throws {
+        let validator = WindowOpenTargetValidator()
+
+        for (name, kind) in [("Document.txt", WindowOpenTargetKind.file), ("Project", .folder)] {
+            let selectedURL = temporaryDirectoryURL.appendingPathComponent(name + " ", isDirectory: kind == .folder)
+            let siblingURL = temporaryDirectoryURL.appendingPathComponent(name, isDirectory: kind == .folder)
+            if kind == .folder {
+                try FileManager.default.createDirectory(at: selectedURL, withIntermediateDirectories: false)
+            } else {
+                try Data().write(to: selectedURL)
+            }
+
+            XCTAssertEqual(
+                try validator.localTarget(url: selectedURL, expectedKind: kind).url,
+                selectedURL.standardizedFileURL
+            )
+
+            if kind == .folder {
+                try FileManager.default.createDirectory(at: siblingURL, withIntermediateDirectories: false)
+            } else {
+                try Data().write(to: siblingURL)
+            }
+
+            XCTAssertEqual(
+                try validator.localTarget(url: selectedURL, expectedKind: kind).url,
+                selectedURL.standardizedFileURL
+            )
+        }
     }
 
     func testWindowOpenTargetValidatorAcceptsHTTPURLsAndPreservesDuplicates() throws {
@@ -189,6 +321,61 @@ final class SnapshotStoreHotkeyTests: XCTestCase {
         XCTAssertThrowsError(
             try WindowOpenTargetValidator().webTargets(from: "https:///missing-host")
         )
+    }
+
+    func testSingleWebTargetValidationNormalizesAnAddressAndRejectsInvalidEdits() throws {
+        let validator = WindowOpenTargetValidator()
+        let target = try validator.webTarget(from: "  example.com/updated?q=one  ")
+        XCTAssertEqual(target.kind, .webURL)
+        XCTAssertEqual(target.url.absoluteString, "https://example.com/updated?q=one")
+
+        for input in [
+            "",
+            " \t\n",
+            "https://example.com/one\nhttps://example.com/two",
+            "ftp://example.com/file",
+            "https:///missing-host"
+        ] {
+            XCTAssertThrowsError(try validator.webTarget(from: input)) { error in
+                XCTAssertEqual(
+                    error as? WindowOpenTargetValidationError,
+                    .invalidWebURL(input.trimmingCharacters(in: .whitespacesAndNewlines))
+                )
+            }
+        }
+    }
+
+    func testReplacingTargetURLPreservesIdentityKindAndLocalTitles() throws {
+        let newURL = temporaryDirectoryURL.appendingPathComponent("Replacement")
+        for kind: WindowOpenTargetKind in [.file, .folder] {
+            let target = WindowOpenTarget(
+                kind: kind,
+                url: temporaryDirectoryURL.appendingPathComponent("Original"),
+                title: "Saved title"
+            )
+            let replacement = target.replacingURL(newURL)
+            XCTAssertEqual(replacement.id, target.id)
+            XCTAssertEqual(replacement.kind, kind)
+            XCTAssertEqual(replacement.url, newURL)
+            XCTAssertEqual(replacement.title, target.title)
+        }
+    }
+
+    func testReplacingBrowserURLClearsTheCapturedTitleOnlyWhenTheURLChanges() throws {
+        let target = WindowOpenTarget(
+            kind: .webURL,
+            url: try XCTUnwrap(URL(string: "https://old.example.com/")),
+            title: "Old page title"
+        )
+        XCTAssertEqual(target.replacingURL(target.url), target)
+
+        let newURL = try XCTUnwrap(URL(string: "https://new.example.com/updated"))
+        let replacement = target.replacingURL(newURL)
+        XCTAssertEqual(replacement.id, target.id)
+        XCTAssertEqual(replacement.kind, .webURL)
+        XCTAssertEqual(replacement.url, newURL)
+        XCTAssertNil(replacement.title)
+        XCTAssertEqual(replacement.compactDisplayName, "new.example.com")
     }
 
     func testListSummariesIncludesDashboardMetrics() throws {

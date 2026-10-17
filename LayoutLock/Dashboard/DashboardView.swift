@@ -899,11 +899,15 @@ private struct DashboardOpeningTargetsEditorView: View {
     @State private var draftTargets: [WindowOpenTarget]
     @State private var pathInput = ""
     @State private var urlInput = ""
+    @State private var editingURLTargetID: UUID?
+    @State private var urlEditInput = ""
+    @State private var urlEditFrame = CGRect.zero
     @State private var validationMessage: String?
     @State private var pathSuggestions: [DashboardPathSuggestion] = []
     @State private var highlightedPathSuggestionIndex: Int?
     @State private var dismissedSuggestionInput: String?
     @FocusState private var isPathInputFocused: Bool
+    @FocusState private var focusedURLTargetID: UUID?
 
     private var capabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
@@ -1039,6 +1043,19 @@ private struct DashboardOpeningTargetsEditorView: View {
 
             }
             .formStyle(.grouped)
+            .coordinateSpace(name: "openingTargetsEditor")
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .named("openingTargetsEditor"))
+                    .onEnded { [editingURLTargetID] event in
+                        guard let editingURLTargetID,
+                              self.editingURLTargetID == editingURLTargetID,
+                              !urlEditFrame.contains(event.location) else {
+                            return
+                        }
+
+                        _ = commitURLEdit()
+                    }
+            )
             .navigationTitle("Opening Targets")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1067,15 +1084,41 @@ private struct DashboardOpeningTargetsEditorView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(targetDisplayName(for: target))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if editingURLTargetID == target.id {
+                    TextField("URL", text: $urlEditInput)
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .focused($focusedURLTargetID, equals: target.id)
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            proxy.frame(in: .named("openingTargetsEditor"))
+                        } action: { frame in
+                            urlEditFrame = frame
+                        }
+                        .onChange(of: focusedURLTargetID) { previousID, focusedID in
+                            if previousID == target.id,
+                               focusedID != target.id,
+                               editingURLTargetID == target.id {
+                                _ = commitURLEdit()
+                            }
+                        }
+                        .onSubmit { _ = commitURLEdit() }
+                        .onKeyPress(.escape) {
+                            editingURLTargetID = nil
+                            validationMessage = nil
+                            return .handled
+                        }
+                        .accessibilityLabel("Opening target URL")
+                } else {
+                    Text(targetDisplayName(for: target))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-                Text(target.url.isFileURL ? target.url.path : target.url.absoluteString)
-                    .font(.caption)
-                    .foregroundStyle(target.isMissing() ? .orange : DashboardVisualStyle.supportingText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    Text(target.url.isFileURL ? target.url.path : target.url.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(target.isMissing() ? .orange : DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 if target.isMissing() {
                     Text("Missing")
@@ -1106,7 +1149,20 @@ private struct DashboardOpeningTargetsEditorView: View {
             .help("Move target later")
             .accessibilityLabel("Move Target Later")
 
+            Button {
+                editTarget(target)
+            } label: {
+                Image(systemName: "pencil.circle")
+            }
+            .buttonStyle(.borderless)
+            .help(targetEditHelp(for: target))
+            .accessibilityLabel("\(targetEditHelp(for: target)) \(targetDisplayName(for: target))")
+
             Button(role: .destructive) {
+                if editingURLTargetID == target.id {
+                    editingURLTargetID = nil
+                    validationMessage = nil
+                }
                 draftTargets.remove(at: index)
             } label: {
                 Image(systemName: "minus.circle")
@@ -1130,6 +1186,17 @@ private struct DashboardOpeningTargetsEditorView: View {
 
     private func targetDisplayName(for target: WindowOpenTarget) -> String {
         target.compactDisplayName
+    }
+
+    private func targetEditHelp(for target: WindowOpenTarget) -> String {
+        switch target.kind {
+        case .file:
+            return target.isMissing() ? "Locate missing file…" : "Change file…"
+        case .folder:
+            return target.isMissing() ? "Locate missing folder…" : "Change folder…"
+        case .webURL:
+            return "Edit URL…"
+        }
     }
 
     @ViewBuilder
@@ -1360,7 +1427,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                 let targets = try panel.urls.map { url in
                     defer { url.stopAccessingSecurityScopedResource() }
                     return try WindowOpenTargetValidator().localTarget(
-                        path: url.path
+                        url: url
                     )
                 }
                 draftTargets.append(contentsOf: targets)
@@ -1368,6 +1435,75 @@ private struct DashboardOpeningTargetsEditorView: View {
             } catch {
                 validationMessage = error.userFacingDescription
             }
+        }
+    }
+
+    private func editTarget(_ target: WindowOpenTarget) {
+        if editingURLTargetID == target.id {
+            focusedURLTargetID = target.id
+            return
+        }
+
+        guard commitURLEdit() else {
+            return
+        }
+
+        if target.kind == .webURL {
+            editingURLTargetID = target.id
+            urlEditInput = target.url.absoluteString
+            validationMessage = nil
+            focusedURLTargetID = target.id
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = target.kind == .file
+        panel.canChooseDirectories = target.kind == .folder
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = target.isMissing() ? "Locate" : "Choose"
+        panel.directoryURL = target.isMissing()
+            ? FileManager.default.homeDirectoryForCurrentUser
+            : target.url.deletingLastPathComponent()
+
+        panel.begin { response in
+            guard response == .OK,
+                  let url = panel.url,
+                  let index = draftTargets.firstIndex(where: { $0.id == target.id }) else {
+                return
+            }
+
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            do {
+                let replacement = try WindowOpenTargetValidator().localTarget(
+                    url: url,
+                    expectedKind: target.kind
+                )
+                draftTargets[index] = target.replacingURL(replacement.url)
+                validationMessage = nil
+            } catch {
+                validationMessage = error.userFacingDescription
+            }
+        }
+    }
+
+    private func commitURLEdit() -> Bool {
+        guard let editingURLTargetID,
+              let index = draftTargets.firstIndex(where: { $0.id == editingURLTargetID }) else {
+            return true
+        }
+
+        do {
+            let replacement = try WindowOpenTargetValidator().webTarget(from: urlEditInput)
+            draftTargets[index] = draftTargets[index].replacingURL(replacement.url)
+            self.editingURLTargetID = nil
+            validationMessage = nil
+            return true
+        } catch {
+            validationMessage = error.userFacingDescription
+            focusedURLTargetID = editingURLTargetID
+            return false
         }
     }
 
@@ -1381,6 +1517,10 @@ private struct DashboardOpeningTargetsEditorView: View {
     }
 
     private func savePendingInputs() {
+        guard commitURLEdit() else {
+            return
+        }
+
         if !pathInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             addTypedPath()
             guard validationMessage == nil else {
