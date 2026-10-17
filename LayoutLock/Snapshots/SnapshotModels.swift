@@ -12,6 +12,7 @@ struct Snapshot: Codable, Identifiable {
     let sourceDisplayState: DisplayState
     let windows: [WindowRecord]
     var hotkey: HotkeyBinding?
+    var isPinned: Bool
 
     init(
         id: UUID = UUID(),
@@ -21,7 +22,8 @@ struct Snapshot: Codable, Identifiable {
         schemaVersion: Int = Snapshot.currentSchemaVersion,
         sourceDisplayState: DisplayState,
         windows: [WindowRecord],
-        hotkey: HotkeyBinding? = nil
+        hotkey: HotkeyBinding? = nil,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -31,6 +33,24 @@ struct Snapshot: Codable, Identifiable {
         self.sourceDisplayState = sourceDisplayState
         self.windows = windows
         self.hotkey = hotkey
+        self.isPinned = isPinned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, updatedAt, schemaVersion, sourceDisplayState, windows, hotkey, isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        sourceDisplayState = try container.decode(DisplayState.self, forKey: .sourceDisplayState)
+        windows = try container.decode([WindowRecord].self, forKey: .windows)
+        hotkey = try container.decodeIfPresent(HotkeyBinding.self, forKey: .hotkey)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
@@ -89,6 +109,15 @@ struct WindowOpenTarget: Codable, Hashable, Identifiable {
         }
 
         return !fileManager.fileExists(atPath: url.path)
+    }
+
+    func replacingURL(_ url: URL) -> WindowOpenTarget {
+        WindowOpenTarget(
+            id: id,
+            kind: kind,
+            url: url,
+            title: kind == .webURL && url != self.url ? nil : title
+        )
     }
 }
 
@@ -175,20 +204,25 @@ struct WindowOpenTargetValidator {
             url = URL(fileURLWithPath: expandedPath).standardizedFileURL
         }
 
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+        return try localTarget(url: url, expectedKind: expectedKind)
+    }
+
+    func localTarget(
+        url: URL,
+        expectedKind: WindowOpenTargetKind? = nil
+    ) throws -> WindowOpenTarget {
+        guard let target = existingLocalTarget(url: url) else {
             throw WindowOpenTargetValidationError.pathDoesNotExist
         }
 
-        let resolvedKind: WindowOpenTargetKind = isDirectory.boolValue ? .folder : .file
-        if expectedKind == .file, resolvedKind != .file {
+        if expectedKind == .file, target.kind != .file {
             throw WindowOpenTargetValidationError.expectedFile
         }
-        if expectedKind == .folder, resolvedKind != .folder {
+        if expectedKind == .folder, target.kind != .folder {
             throw WindowOpenTargetValidationError.expectedFolder
         }
 
-        return WindowOpenTarget(kind: resolvedKind, url: url)
+        return target
     }
 
     func existingLocalTarget(url: URL) -> WindowOpenTarget? {
@@ -226,23 +260,28 @@ struct WindowOpenTargetValidator {
         return WindowOpenTarget(kind: .webURL, url: standardizedURL)
     }
 
+    func webTarget(from input: String) throws -> WindowOpenTarget {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedValue = value.contains("://")
+            ? value
+            : "https://\(value)"
+        guard !value.isEmpty,
+              !value.contains(where: \.isNewline),
+              let url = URL(string: normalizedValue),
+              let target = webTarget(url: url) else {
+            throw WindowOpenTargetValidationError.invalidWebURL(value)
+        }
+
+        return target
+    }
+
     func webTargets(from input: String) throws -> [WindowOpenTarget] {
         let values = input
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        return try values.map { value in
-            let normalizedValue = value.contains("://")
-                ? value
-                : "https://\(value)"
-            guard let url = URL(string: normalizedValue),
-                  let target = webTarget(url: url) else {
-                throw WindowOpenTargetValidationError.invalidWebURL(value)
-            }
-
-            return target
-        }
+        return try values.map { try webTarget(from: $0) }
     }
 }
 

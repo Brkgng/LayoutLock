@@ -3,6 +3,7 @@ import SwiftUI
 
 private enum DashboardFocusTarget: Hashable {
     case layoutList
+    case layoutSearch
 }
 
 struct DashboardSnapshotNameRequest: Identifiable {
@@ -81,6 +82,7 @@ struct DashboardCommandContext {
     let canAssignHotkey: Bool
     let canClearHotkey: Bool
     let canDeleteLayout: Bool
+    let canSearchLayouts: Bool
     let hotkeyCommandTitle: String
     let createLayout: () -> Void
     let restoreLayout: () -> Void
@@ -89,6 +91,7 @@ struct DashboardCommandContext {
     let assignHotkey: () -> Void
     let clearHotkey: () -> Void
     let deleteLayout: () -> Void
+    let focusLayoutSearch: () -> Void
 }
 
 private struct DashboardCommandContextKey: FocusedValueKey {
@@ -118,6 +121,7 @@ struct DashboardView: View {
 
     @State private var selectedSnapshotID: UUID?
     @State private var selectedSnapshot: Snapshot?
+    @State private var layoutSearchText = ""
     @State private var pendingUpdate: SnapshotSummary?
     @State private var pendingDeletion: SnapshotSummary?
     @State private var pendingWindowRemoval: DashboardWindowRemovalConfirmation?
@@ -152,6 +156,13 @@ struct DashboardView: View {
                     )
                 }
 
+                if showsLayoutSearch {
+                    SidebarSearchField(
+                        searchText: $layoutSearchText,
+                        focus: $dashboardFocus
+                    )
+                }
+
                 ScrollViewReader { proxy in
                     List(selection: Binding(
                         get: { selectedSnapshotID },
@@ -167,8 +178,11 @@ struct DashboardView: View {
                         if snapshotMenuController.snapshotSummaries.isEmpty {
                             Text("No layouts saved yet")
                                 .foregroundStyle(.secondary)
+                        } else if visibleSnapshotSummaries.isEmpty {
+                            Text("No matching layouts")
+                                .foregroundStyle(.secondary)
                         } else {
-                            ForEach(snapshotMenuController.snapshotSummaries) { snapshot in
+                            ForEach(visibleSnapshotSummaries) { snapshot in
                                 DashboardSnapshotRow(
                                     snapshot: snapshot,
                                     isSelected: selectedSnapshotID == snapshot.id,
@@ -178,6 +192,9 @@ struct DashboardView: View {
                                     },
                                     clearHotkey: {
                                         clearHotkey(from: snapshot)
+                                    },
+                                    togglePin: {
+                                        snapshotMenuController.togglePin(for: snapshot.id)
                                     },
                                     deleteSnapshot: {
                                         deleteSnapshot(snapshot)
@@ -198,6 +215,7 @@ struct DashboardView: View {
                             return
                         }
 
+                        layoutSearchText = ""
                         selectSnapshot(id: snapshotID)
                         Task { @MainActor in
                             await Task.yield()
@@ -277,7 +295,7 @@ struct DashboardView: View {
         )
         .focusedSceneValue(\.dashboardCommandContext, dashboardCommandContext)
         .alert(
-            "Update Layout?",
+            "Update?",
             isPresented: Binding(
                 get: { pendingUpdate != nil },
                 set: { isPresented in
@@ -298,7 +316,7 @@ struct DashboardView: View {
             Text(updateConfirmationMessage)
         }
         .alert(
-            "Delete Layout?",
+            "Delete?",
             isPresented: Binding(
                 get: { pendingDeletion != nil },
                 set: { isPresented in
@@ -419,6 +437,9 @@ struct DashboardView: View {
                !summaries.contains(where: { $0.id == selectedSnapshotID }) {
                 hotkeyEditRequestID = nil
             }
+            if !DashboardSidebarSearch.showsSearchField(layoutCount: summaries.count) {
+                layoutSearchText = ""
+            }
         }
         .onChange(of: selectedSnapshotID) { _, _ in
             permissionRouter.clearDashboardPermissionEducationForContextChange()
@@ -470,6 +491,23 @@ struct DashboardView: View {
             snapshotMenuController.snapshotSummaries.count >= LayoutLockProConfiguration.freeLayoutLimit
     }
 
+    private var showsLayoutSearch: Bool {
+        DashboardSidebarSearch.showsSearchField(
+            layoutCount: snapshotMenuController.snapshotSummaries.count
+        )
+    }
+
+    private var visibleSnapshotSummaries: [SnapshotSummary] {
+        guard showsLayoutSearch else {
+            return snapshotMenuController.snapshotSummaries
+        }
+
+        return DashboardSidebarSearch.filteredSummaries(
+            snapshotMenuController.snapshotSummaries,
+            query: layoutSearchText
+        )
+    }
+
     private var dashboardCommandContext: DashboardCommandContext {
         let availability = DashboardCommandAvailability(
             isSnapshotActionDisabled: isSnapshotActionDisabled,
@@ -486,6 +524,7 @@ struct DashboardView: View {
             canAssignHotkey: availability.canAssignHotkey,
             canClearHotkey: availability.canClearHotkey,
             canDeleteLayout: availability.canDeleteLayout,
+            canSearchLayouts: showsLayoutSearch,
             hotkeyCommandTitle: availability.hotkeyCommandTitle,
             createLayout: saveSnapshot,
             restoreLayout: restoreSelectedSnapshot,
@@ -493,7 +532,8 @@ struct DashboardView: View {
             renameLayout: requestInlineRenameForSelectedSnapshot,
             assignHotkey: assignHotkeyToSelectedSnapshot,
             clearHotkey: clearHotkeyFromSelectedSnapshot,
-            deleteLayout: deleteSelectedSnapshot
+            deleteLayout: deleteSelectedSnapshot,
+            focusLayoutSearch: focusLayoutSearchField
         )
     }
 
@@ -501,6 +541,13 @@ struct DashboardView: View {
         Task { @MainActor in
             await Task.yield()
             dashboardFocus = .layoutList
+        }
+    }
+
+    private func focusLayoutSearchField() {
+        Task { @MainActor in
+            await Task.yield()
+            dashboardFocus = .layoutSearch
         }
     }
 
@@ -518,7 +565,10 @@ struct DashboardView: View {
             return
         }
 
-        selectedSnapshotID = summaries.first?.id
+        selectedSnapshotID = DashboardSidebarSearch.replacementSelectionID(
+            in: summaries,
+            query: layoutSearchText
+        )
     }
 
     @MainActor
@@ -849,11 +899,15 @@ private struct DashboardOpeningTargetsEditorView: View {
     @State private var draftTargets: [WindowOpenTarget]
     @State private var pathInput = ""
     @State private var urlInput = ""
+    @State private var editingURLTargetID: UUID?
+    @State private var urlEditInput = ""
+    @State private var urlEditFrame = CGRect.zero
     @State private var validationMessage: String?
     @State private var pathSuggestions: [DashboardPathSuggestion] = []
     @State private var highlightedPathSuggestionIndex: Int?
     @State private var dismissedSuggestionInput: String?
     @FocusState private var isPathInputFocused: Bool
+    @FocusState private var focusedURLTargetID: UUID?
 
     private var capabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
@@ -989,6 +1043,19 @@ private struct DashboardOpeningTargetsEditorView: View {
 
             }
             .formStyle(.grouped)
+            .coordinateSpace(name: "openingTargetsEditor")
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .named("openingTargetsEditor"))
+                    .onEnded { [editingURLTargetID] event in
+                        guard let editingURLTargetID,
+                              self.editingURLTargetID == editingURLTargetID,
+                              !urlEditFrame.contains(event.location) else {
+                            return
+                        }
+
+                        _ = commitURLEdit()
+                    }
+            )
             .navigationTitle("Opening Targets")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1017,15 +1084,41 @@ private struct DashboardOpeningTargetsEditorView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(targetDisplayName(for: target))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if editingURLTargetID == target.id {
+                    TextField("URL", text: $urlEditInput)
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .focused($focusedURLTargetID, equals: target.id)
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            proxy.frame(in: .named("openingTargetsEditor"))
+                        } action: { frame in
+                            urlEditFrame = frame
+                        }
+                        .onChange(of: focusedURLTargetID) { previousID, focusedID in
+                            if previousID == target.id,
+                               focusedID != target.id,
+                               editingURLTargetID == target.id {
+                                _ = commitURLEdit()
+                            }
+                        }
+                        .onSubmit { _ = commitURLEdit() }
+                        .onKeyPress(.escape) {
+                            editingURLTargetID = nil
+                            validationMessage = nil
+                            return .handled
+                        }
+                        .accessibilityLabel("Opening target URL")
+                } else {
+                    Text(targetDisplayName(for: target))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-                Text(target.url.isFileURL ? target.url.path : target.url.absoluteString)
-                    .font(.caption)
-                    .foregroundStyle(target.isMissing() ? .orange : DashboardVisualStyle.supportingText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    Text(target.url.isFileURL ? target.url.path : target.url.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(target.isMissing() ? .orange : DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 if target.isMissing() {
                     Text("Missing")
@@ -1056,7 +1149,20 @@ private struct DashboardOpeningTargetsEditorView: View {
             .help("Move target later")
             .accessibilityLabel("Move Target Later")
 
+            Button {
+                editTarget(target)
+            } label: {
+                Image(systemName: "pencil.circle")
+            }
+            .buttonStyle(.borderless)
+            .help(targetEditHelp(for: target))
+            .accessibilityLabel("\(targetEditHelp(for: target)) \(targetDisplayName(for: target))")
+
             Button(role: .destructive) {
+                if editingURLTargetID == target.id {
+                    editingURLTargetID = nil
+                    validationMessage = nil
+                }
                 draftTargets.remove(at: index)
             } label: {
                 Image(systemName: "minus.circle")
@@ -1080,6 +1186,17 @@ private struct DashboardOpeningTargetsEditorView: View {
 
     private func targetDisplayName(for target: WindowOpenTarget) -> String {
         target.compactDisplayName
+    }
+
+    private func targetEditHelp(for target: WindowOpenTarget) -> String {
+        switch target.kind {
+        case .file:
+            return target.isMissing() ? "Locate missing file…" : "Change file…"
+        case .folder:
+            return target.isMissing() ? "Locate missing folder…" : "Change folder…"
+        case .webURL:
+            return "Edit URL…"
+        }
     }
 
     @ViewBuilder
@@ -1310,7 +1427,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                 let targets = try panel.urls.map { url in
                     defer { url.stopAccessingSecurityScopedResource() }
                     return try WindowOpenTargetValidator().localTarget(
-                        path: url.path
+                        url: url
                     )
                 }
                 draftTargets.append(contentsOf: targets)
@@ -1318,6 +1435,75 @@ private struct DashboardOpeningTargetsEditorView: View {
             } catch {
                 validationMessage = error.userFacingDescription
             }
+        }
+    }
+
+    private func editTarget(_ target: WindowOpenTarget) {
+        if editingURLTargetID == target.id {
+            focusedURLTargetID = target.id
+            return
+        }
+
+        guard commitURLEdit() else {
+            return
+        }
+
+        if target.kind == .webURL {
+            editingURLTargetID = target.id
+            urlEditInput = target.url.absoluteString
+            validationMessage = nil
+            focusedURLTargetID = target.id
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = target.kind == .file
+        panel.canChooseDirectories = target.kind == .folder
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = target.isMissing() ? "Locate" : "Choose"
+        panel.directoryURL = target.isMissing()
+            ? FileManager.default.homeDirectoryForCurrentUser
+            : target.url.deletingLastPathComponent()
+
+        panel.begin { response in
+            guard response == .OK,
+                  let url = panel.url,
+                  let index = draftTargets.firstIndex(where: { $0.id == target.id }) else {
+                return
+            }
+
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            do {
+                let replacement = try WindowOpenTargetValidator().localTarget(
+                    url: url,
+                    expectedKind: target.kind
+                )
+                draftTargets[index] = target.replacingURL(replacement.url)
+                validationMessage = nil
+            } catch {
+                validationMessage = error.userFacingDescription
+            }
+        }
+    }
+
+    private func commitURLEdit() -> Bool {
+        guard let editingURLTargetID,
+              let index = draftTargets.firstIndex(where: { $0.id == editingURLTargetID }) else {
+            return true
+        }
+
+        do {
+            let replacement = try WindowOpenTargetValidator().webTarget(from: urlEditInput)
+            draftTargets[index] = draftTargets[index].replacingURL(replacement.url)
+            self.editingURLTargetID = nil
+            validationMessage = nil
+            return true
+        } catch {
+            validationMessage = error.userFacingDescription
+            focusedURLTargetID = editingURLTargetID
+            return false
         }
     }
 
@@ -1331,6 +1517,10 @@ private struct DashboardOpeningTargetsEditorView: View {
     }
 
     private func savePendingInputs() {
+        guard commitURLEdit() else {
+            return
+        }
+
         if !pathInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             addTypedPath()
             guard validationMessage == nil else {
@@ -1460,6 +1650,46 @@ private struct SidebarActionButton: View {
         }
 
         return .secondary
+    }
+}
+
+private struct SidebarSearchField: View {
+    @Binding var searchText: String
+    @FocusState.Binding var focus: DashboardFocusTarget?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            TextField("Search layouts", text: $searchText)
+                .textFieldStyle(.plain)
+                .focused($focus, equals: .layoutSearch)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .imageScale(.small)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 }
 
@@ -1842,38 +2072,39 @@ private struct DashboardDetailView: View {
     }
 
     private func header(snapshot: Snapshot, summary: SnapshotSummary) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                if editingSnapshotID == snapshot.id {
-                    TextField("Layout name", text: $draftSnapshotName)
-                        .textFieldStyle(.plain)
-                        .font(.largeTitle.weight(.semibold))
-                        .lineLimit(1)
-                        .focused($isTitleFieldFocused)
-                        .onSubmit {
-                            commitInlineRename(for: snapshot)
-                        }
-                        .onExitCommand {
-                            cancelInlineRename()
-                        }
-                } else {
-                    Text(snapshot.name)
-                        .font(.largeTitle.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .onTapGesture(count: 2) {
-                            beginInlineRename(snapshot)
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 16) {
+                Group {
+                    if editingSnapshotID == snapshot.id {
+                        TextField("Layout name", text: $draftSnapshotName)
+                            .textFieldStyle(.plain)
+                            .font(.largeTitle.weight(.semibold))
+                            .lineLimit(1)
+                            .focused($isTitleFieldFocused)
+                            .onSubmit {
+                                commitInlineRename(for: snapshot)
+                            }
+                            .onExitCommand {
+                                cancelInlineRename()
+                            }
+                    } else {
+                        Text(snapshot.name)
+                            .font(.largeTitle.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .onTapGesture(count: 2) {
+                                beginInlineRename(snapshot)
+                            }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text("Updated \(DashboardRelativeDateFormatter.string(from: summary.updatedAt))")
-                    .foregroundStyle(DashboardVisualStyle.supportingText)
+                snapshotActionStrip(snapshot: snapshot, summary: summary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            snapshotActionStrip(snapshot: snapshot, summary: summary)
+            Text("Updated \(DashboardRelativeDateFormatter.string(from: summary.updatedAt))")
+                .foregroundStyle(DashboardVisualStyle.supportingText)
         }
         .onChange(of: snapshot.id) { _, _ in
             cancelInlineRename()
@@ -1903,20 +2134,20 @@ private struct DashboardDetailView: View {
             Button {
                 restoreSnapshot()
             } label: {
-                Label("Restore Layout", systemImage: "arrow.counterclockwise")
+                Label("Restore", systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(isPrivilegedActionDisabled)
-            .help("Restore Layout")
+            .help("Restore")
 
             Button {
                 updateSnapshot()
             } label: {
-                Label("Update Layout", systemImage: "arrow.triangle.2.circlepath")
+                Label("Update", systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(isPrivilegedActionDisabled)
-            .help("Update Layout")
+            .help("Update")
 
             Button {
                 beginInlineRename(snapshot)
@@ -1924,7 +2155,20 @@ private struct DashboardDetailView: View {
                 Label("Rename", systemImage: "pencil")
             }
             .disabled(isDisabled)
-            .help("Rename Layout")
+            .help("Rename")
+
+            Button {
+                snapshotMenuController.togglePin(for: snapshot.id)
+            } label: {
+                Label(
+                    summary.isPinned ? "Unpin" : "Pin",
+                    systemImage: summary.isPinned ? "pin.fill" : "pin"
+                )
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .disabled(isDisabled)
+            .help(summary.isPinned ? "Unpin" : "Pin")
 
             Button(role: .destructive) {
                 deleteSnapshot()
@@ -1932,11 +2176,11 @@ private struct DashboardDetailView: View {
                 Image(systemName: "trash")
                     .symbolRenderingMode(.hierarchical)
                     .imageScale(.medium)
-                    .accessibilityLabel("Delete Layout")
+                    .accessibilityLabel("Delete")
             }
             .buttonStyle(.borderless)
             .disabled(isDisabled)
-            .help("Delete Layout")
+            .help("Delete")
         }
         .controlSize(.regular)
     }
@@ -2454,6 +2698,7 @@ private struct DashboardSnapshotRow: View {
     let renameSnapshotInline: (UUID, String) -> Bool
     let assignHotkey: () -> Void
     let clearHotkey: () -> Void
+    let togglePin: () -> Void
     let deleteSnapshot: () -> Void
     let isActionDisabled: Bool
 
@@ -2470,6 +2715,13 @@ private struct DashboardSnapshotRow: View {
         HStack(alignment: .center, spacing: 6) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    if snapshot.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(supportingForeground)
+                            .accessibilityLabel("Pinned layout")
+                    }
+
                     if isRenaming {
                         TextField("Layout name", text: $draftName)
                             .textFieldStyle(.plain)
@@ -2546,6 +2798,11 @@ private struct DashboardSnapshotRow: View {
     private var snapshotActions: some View {
         Button("Rename") {
             beginInlineRename()
+        }
+        .disabled(isActionDisabled)
+
+        Button(snapshot.isPinned ? "Unpin" : "Pin") {
+            togglePin()
         }
         .disabled(isActionDisabled)
 

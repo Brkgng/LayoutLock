@@ -440,6 +440,78 @@ final class AppUpdateUserDriverTests: XCTestCase {
         )
     }
 
+    func testMarkdownFeatureHeadingsGroupTitlesWithTheirDescriptions() {
+        let blocks = AppUpdateMarkdown.blocks(
+            from: """
+            ## LayoutLock 1.2
+
+            ### 📌 Pin Your Favorite Layouts
+
+            Keep favorite layouts at the top.
+
+            ### 🔍 Find Layouts Faster
+
+            Search layouts by name.
+
+            ### 📄 Edit Opening Targets
+
+            Locate missing files and folders.
+
+            Also improved: Dashboard spacing.
+            """
+        )
+
+        XCTAssertEqual(blocks.map(\.kind), [
+            .heading(level: 2),
+            .feature(systemImage: "pin.fill", title: "Pin Your Favorite Layouts"),
+            .feature(systemImage: "magnifyingglass", title: "Find Layouts Faster"),
+            .feature(systemImage: "doc.text", title: "Edit Opening Targets"),
+            .paragraph,
+        ])
+        XCTAssertEqual(blocks.map(\.plainText), [
+            "LayoutLock 1.2",
+            "Keep favorite layouts at the top.",
+            "Search layouts by name.",
+            "Locate missing files and folders.",
+            "Also improved: Dashboard spacing.",
+        ])
+        XCTAssertEqual(Set(blocks.map(\.id)).count, blocks.count)
+    }
+
+    func testMarkdownFeatureDescriptionsPreserveEmphasisAndLinks() throws {
+        let blocks = AppUpdateMarkdown.blocks(
+            from: """
+            ### 📄 Edit Opening Targets
+
+            Read the **updated** [guide](https://layoutlock.app).
+            """
+        )
+
+        let feature = try XCTUnwrap(blocks.first)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(feature.kind, .feature(systemImage: "doc.text", title: "Edit Opening Targets"))
+        XCTAssertTrue(feature.content.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+        XCTAssertEqual(
+            feature.content.runs.compactMap(\.link),
+            [try XCTUnwrap(URL(string: "https://layoutlock.app"))]
+        )
+    }
+
+    func testMarkdownOrdinaryOrIncompleteHeadingsRemainReadable() {
+        for heading in ["### Other Improvements", "### ✨ Other Improvements", "## 📌 Pinned Layouts"] {
+            let blocks = AppUpdateMarkdown.blocks(from: "\(heading)\n\nDescription.")
+            XCTAssertEqual(blocks.count, 2)
+            XCTAssertEqual(blocks.last?.kind, .paragraph)
+            XCTAssertEqual(blocks.last?.plainText, "Description.")
+        }
+
+        let blocks = AppUpdateMarkdown.blocks(from: "### 📌 Pinned Layouts")
+        XCTAssertEqual(blocks.first?.kind, .heading(level: 3))
+        XCTAssertEqual(blocks.first?.plainText, "📌 Pinned Layouts")
+    }
+
     private func makeDriver() -> (AppUpdateUserDriver, UpdateWindowPresenterSpy) {
         let presenter = UpdateWindowPresenterSpy()
         let driver = AppUpdateUserDriver(

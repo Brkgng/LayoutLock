@@ -494,6 +494,7 @@ struct AppUpdateMarkdownBlock: Identifiable {
         case paragraph
         case unorderedListItem
         case orderedListItem(ordinal: Int)
+        case feature(systemImage: String, title: String)
     }
 
     let id: Int
@@ -531,6 +532,17 @@ enum AppUpdateMarkdown {
                 return
             }
 
+            if currentKind == .paragraph,
+               let heading = blocks.last,
+               let feature = featureHeading(from: heading) {
+                blocks[blocks.count - 1] = AppUpdateMarkdownBlock(
+                    id: heading.id,
+                    kind: .feature(systemImage: feature.systemImage, title: feature.title),
+                    content: currentContent
+                )
+                return
+            }
+
             blocks.append(
                 AppUpdateMarkdownBlock(
                     id: currentID,
@@ -557,6 +569,23 @@ enum AppUpdateMarkdown {
 
         appendCurrentBlock()
         return blocks
+    }
+
+    private static func featureHeading(
+        from block: AppUpdateMarkdownBlock
+    ) -> (systemImage: String, title: String)? {
+        guard case .heading(level: 3) = block.kind else {
+            return nil
+        }
+
+        // Emoji headings also stay readable in older apps and on GitHub.
+        let symbols = ["📌": "pin.fill", "🔍": "magnifyingglass", "📄": "doc.text"]
+        guard let symbol = symbols.first(where: { block.plainText.hasPrefix($0.key + " ") }) else {
+            return nil
+        }
+
+        let title = block.plainText.dropFirst(symbol.key.count).trimmingCharacters(in: .whitespaces)
+        return title.isEmpty ? nil : (symbol.value, title)
     }
 
     private static func kind(
@@ -599,7 +628,7 @@ private struct AppUpdateMarkdownView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(blocks) { block in
                 switch block.kind {
                 case let .heading(level):
@@ -608,10 +637,29 @@ private struct AppUpdateMarkdownView: View {
                 case .paragraph:
                     Text(block.content)
                         .font(.body)
+                        .foregroundStyle(.secondary)
                 case .unorderedListItem:
                     listItem(marker: "•", content: block.content)
                 case let .orderedListItem(ordinal):
                     listItem(marker: "\(ordinal).", content: block.content)
+                case let .feature(systemImage, title):
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 28))
+                            .foregroundStyle(.tint)
+                            .frame(width: 32, height: 32)
+                            .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title)
+                                .font(.headline)
+                                .accessibilityAddTraits(.isHeader)
+                            Text(block.content)
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
@@ -634,24 +682,24 @@ private struct AppUpdateMarkdownView: View {
 @MainActor
 enum AppUpdatePreviewFixtures {
     static let details = AppUpdateDetails(
-        currentVersion: "1.2.0",
-        buildVersion: "130",
-        displayVersion: "1.3.0",
+        currentVersion: "1.1",
+        buildVersion: "7",
+        displayVersion: "1.2",
         releaseDate: .now,
         releaseNotes: """
-        ## What’s New
+        ### 📌 Pin Your Favorite Layouts
 
-        - Restores window layouts more reliably across displays.
-        - Adds clearer feedback while a layout is being restored.
-        - Improves keyboard navigation and accessibility.
+        Keep frequently used layouts at the top of the dashboard and menu bar.
 
-        ## Also Improved
+        ### 🔍 Find Layouts Faster
 
-        1. Long release notes now remain easy to scan in a flexible scroll area.
-        2. Markdown supports **emphasis**, lists, and [secure links](https://layoutlock.app/releases).
-        3. Update progress is exposed without interrupting VoiceOver on every tick.
+        Search layouts by name. Available with five or more saved layouts, with ⌘F for quick access.
 
-        Resize the window to its minimum size and verify this text remains readable.
+        ### 📄 Edit Opening Targets
+
+        Change the files, folders, and URLs your windows reopen, and locate missing files or folders.
+
+        Also improved: Dashboard spacing and title alignment, with shorter action labels.
         """,
         releaseNotesFormat: .markdown,
         releaseNotesURL: URL(string: "https://layoutlock.app/releases"),

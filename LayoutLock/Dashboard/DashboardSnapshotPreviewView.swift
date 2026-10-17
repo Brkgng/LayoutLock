@@ -457,28 +457,11 @@ private struct DashboardDisplayWindowRow: View {
                     }
                 }
 
-                ForEach(
-                    Array(openingTargetDescriptions.enumerated()),
-                    id: \.offset
-                ) { index, description in
-                    let target = window.openingConfiguration.effectiveTargets[index]
-                    HStack(spacing: 4) {
-                        if target.isMissing() {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .accessibilityLabel("Missing opening target")
-                        }
-
-                        Text(description)
-                            .font(.caption2)
-                            .foregroundStyle(
-                                target.isMissing()
-                                    ? .orange
-                                    : DashboardVisualStyle.supportingText
-                            )
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                ForEach(window.openingConfiguration.effectiveTargets) { target in
+                    DashboardOpeningTargetLabel(
+                        target: target,
+                        editOpeningTargets: editOpeningTargets
+                    )
                 }
 
                 if openingTargetDescriptions.isEmpty,
@@ -605,20 +588,11 @@ private struct DashboardUnassignedWindowRow: View {
                     .font(.caption)
                     .lineLimit(1)
 
-                ForEach(
-                    Array(openingTargetDescriptions.enumerated()),
-                    id: \.offset
-                ) { index, description in
-                    let target = window.openingConfiguration.effectiveTargets[index]
-                    Text(description)
-                        .font(.caption2)
-                        .foregroundStyle(
-                            target.isMissing()
-                                ? .orange
-                                : DashboardVisualStyle.supportingText
-                        )
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                ForEach(window.openingConfiguration.effectiveTargets) { target in
+                    DashboardOpeningTargetLabel(
+                        target: target,
+                        editOpeningTargets: editOpeningTargets
+                    )
                 }
 
                 if openingTargetDescriptions.isEmpty,
@@ -664,6 +638,39 @@ private struct DashboardUnassignedWindowRow: View {
 
     private var openingTargetCapabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
+    }
+}
+
+private struct DashboardOpeningTargetLabel: View {
+    let target: WindowOpenTarget
+    let editOpeningTargets: () -> Void
+
+    var body: some View {
+        if target.isMissing() {
+            Button(action: editOpeningTargets) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .accessibilityHidden(true)
+                    targetName
+                }
+                .foregroundStyle(.orange)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Edit opening targets to locate this missing \(target.kind == .folder ? "folder" : "file")")
+            .accessibilityLabel("Missing \(target.compactDisplayName)")
+            .accessibilityHint("Edit opening targets for this saved window")
+        } else {
+            targetName
+                .foregroundStyle(DashboardVisualStyle.supportingText)
+        }
+    }
+
+    private var targetName: some View {
+        Text(target.compactDisplayName)
+            .font(.caption2)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 }
 

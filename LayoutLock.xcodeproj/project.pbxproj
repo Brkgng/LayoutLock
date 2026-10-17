@@ -34,6 +34,7 @@
 		A00000000000000000000069 /* HotkeyCapturePrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* HotkeyCapturePrompt.swift */; };
 		A0000000000000000000006B /* HotkeyBindingValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */; };
 		A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */; };
+		F5C2972A00134B8B95E628D0 /* SnapshotPinningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C2972A00134B8B95E628D1 /* SnapshotPinningTests.swift */; };
 		A00000000000000000000070 /* HotkeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000071 /* HotkeyManagerTests.swift */; };
 		A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */; };
 		A00000000000000000000074 /* LaunchAtLoginController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000075 /* LaunchAtLoginController.swift */; };
@@ -160,6 +161,7 @@
 		A0000000000000000000006A /* HotkeyCapturePrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyCapturePrompt.swift; sourceTree = "<group>"; };
 		A0000000000000000000006C /* HotkeyBindingValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyBindingValidatorTests.swift; sourceTree = "<group>"; };
 		A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStoreHotkeyTests.swift; sourceTree = "<group>"; };
+		F5C2972A00134B8B95E628D1 /* SnapshotPinningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotPinningTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000071 /* HotkeyManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManagerTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuControllerHotkeyTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000075 /* LaunchAtLoginController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginController.swift; sourceTree = "<group>"; };
@@ -322,6 +324,7 @@
 				A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */,
 				E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */,
 				A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */,
+				F5C2972A00134B8B95E628D1 /* SnapshotPinningTests.swift */,
 				A0000000000000000000007C /* TelemetryLoggerTests.swift */,
 				A00000000000000000000094 /* TestSupport.swift */,
 				A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */,
@@ -756,6 +759,7 @@
 				A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */,
 				E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */,
 				A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */,
+				F5C2972A00134B8B95E628D0 /* SnapshotPinningTests.swift in Sources */,
 				A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */,
 				A00000000000000000000093 /* TestSupport.swift in Sources */,
 				A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */,
@@ -837,7 +841,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -856,7 +860,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -873,7 +877,7 @@
 				CODE_SIGN_ENTITLEMENTS = LayoutLock/LayoutLock.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -892,7 +896,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -908,11 +912,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -928,11 +932,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -947,13 +951,13 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -968,13 +972,13 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;

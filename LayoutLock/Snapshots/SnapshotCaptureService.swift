@@ -209,7 +209,8 @@ struct SnapshotCaptureService {
                 schemaVersion: existingSnapshot.schemaVersion,
                 sourceDisplayState: capturedState.displayState,
                 windows: mergedWindows.windows,
-                hotkey: existingSnapshot.hotkey
+                hotkey: existingSnapshot.hotkey,
+                isPinned: existingSnapshot.isPinned
             )
 
             try snapshotStore.save(snapshot)

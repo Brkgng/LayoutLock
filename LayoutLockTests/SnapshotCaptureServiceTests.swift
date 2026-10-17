@@ -220,7 +220,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
             displays: [makeDisplayRecord(id: 1)],
             primaryDisplayID: 1,
             windows: [existingWindow],
-            hotkey: hotkey
+            hotkey: hotkey,
+            isPinned: true
         ))
         let telemetryLogger = RecordingTelemetryLogger()
         let newDisplay = makeDisplayRecord(
@@ -277,6 +278,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertEqual(loadedSnapshot.createdAt, TestFixtures.createdAt)
         XCTAssertEqual(loadedSnapshot.updatedAt, TestFixtures.updatedAt)
         XCTAssertEqual(loadedSnapshot.hotkey?.displayString, hotkey.displayString)
+        XCTAssertTrue(updatedSnapshot.isPinned)
+        XCTAssertTrue(loadedSnapshot.isPinned)
         XCTAssertEqual(loadedSnapshot.sourceDisplayState.displays.map(\.id), [newDisplay.id])
         XCTAssertEqual(loadedSnapshot.windows.count, 1)
         XCTAssertEqual(loadedWindow.bundleIdentifier, TestFixtures.bundleIdentifier)

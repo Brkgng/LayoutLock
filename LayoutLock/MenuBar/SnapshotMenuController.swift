@@ -429,6 +429,33 @@ final class SnapshotMenuController: ObservableObject {
         }
     }
 
+    func togglePin(for snapshotID: UUID) {
+        guard let snapshotStore else {
+            status = Status(message: "Layout storage is unavailable.", kind: .error)
+            return
+        }
+
+        guard let snapshot = snapshotSummaries.first(where: { $0.id == snapshotID }) else {
+            status = Status(message: "The layout could not be found.", kind: .error)
+            return
+        }
+
+        do {
+            try snapshotStore.setPinned(!snapshot.isPinned, for: snapshotID)
+            if let error = refreshSummaries() {
+                reportHotkeyRegistrationFailure(error)
+                return
+            }
+
+            status = Status(
+                message: "\(snapshot.isPinned ? "Unpinned" : "Pinned") \"\(snapshot.name)\".",
+                kind: .info
+            )
+        } catch {
+            status = Status(message: error.userFacingDescription, kind: .error)
+        }
+    }
+
     func assignHotkey(to snapshotID: UUID) {
         guard snapshotStore != nil else {
             status = Status(

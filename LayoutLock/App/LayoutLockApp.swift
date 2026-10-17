@@ -317,6 +317,14 @@ private struct DashboardCommands: Commands {
             .keyboardShortcut("n")
         }
 
+        CommandGroup(after: .textEditing) {
+            Button("Search Layouts") {
+                dashboardCommandContext?.focusLayoutSearch()
+            }
+            .disabled(dashboardCommandContext?.canSearchLayouts != true)
+            .keyboardShortcut("f", modifiers: .command)
+        }
+
         CommandMenu("Layout") {
             Button("New Layout") {
                 dashboardCommandContext?.createLayout()
@@ -325,17 +333,17 @@ private struct DashboardCommands: Commands {
 
             Divider()
 
-            Button("Restore Layout") {
+            Button("Restore") {
                 dashboardCommandContext?.restoreLayout()
             }
             .disabled(dashboardCommandContext?.canRestoreLayout != true)
 
-            Button("Update Layout") {
+            Button("Update") {
                 dashboardCommandContext?.updateLayout()
             }
             .disabled(dashboardCommandContext?.canUpdateLayout != true)
 
-            Button("Rename Layout") {
+            Button("Rename") {
                 dashboardCommandContext?.renameLayout()
             }
             .disabled(dashboardCommandContext?.canRenameLayout != true)
@@ -352,7 +360,7 @@ private struct DashboardCommands: Commands {
 
             Divider()
 
-            Button("Delete Layout", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 dashboardCommandContext?.deleteLayout()
             }
             .disabled(dashboardCommandContext?.canDeleteLayout != true)
