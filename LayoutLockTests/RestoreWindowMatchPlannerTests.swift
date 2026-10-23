@@ -735,7 +735,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         )
     }
 
-    func testZOrderRestorerActivatesAndFocusesSavedFrontmostAfterReplay() {
+    func testZOrderRestorerSelectsWindowBeforeActivatingAndRaisingBackToFront() async {
         var events: [String] = []
         let windowApplier = RecordingRestoreWindowApplier { events.append($0) }
         let applicationActivator = RecordingApplicationActivator { events.append($0) }
@@ -747,19 +747,106 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         let middleWindow = makeWindowRecord(bundleIdentifier: "com.example.middle", zOrderHint: 2)
         let frontWindow = makeWindowRecord(bundleIdentifier: "com.example.front", zOrderHint: 1)
 
-        restorer.restore([
+        await restorer.restore([
             makeZOrderItem(savedWindow: frontWindow, processIdentifier: 101),
             makeZOrderItem(savedWindow: backWindow, processIdentifier: 303),
             makeZOrderItem(savedWindow: middleWindow, processIdentifier: 202)
         ])
 
         XCTAssertEqual(events, [
+            "focus:com.example.back",
+            "activate:303",
             "raise:com.example.back",
+            "focus:com.example.middle",
+            "activate:202",
             "raise:com.example.middle",
-            "raise:com.example.front",
+            "focus:com.example.front",
             "activate:101",
-            "focus:com.example.front"
+            "raise:com.example.front"
         ])
+    }
+
+    func testZOrderRestorerWaitsForDelayedWindowServerRaise() async {
+        let result = await runZOrderSettleTest(frontWindowOrder: [2, 1])
+
+        XCTAssertEqual(result.backWaits, 2)
+        XCTAssertEqual(result.frontWaits, 3)
+        XCTAssertEqual(result.events.filter { $0 == "raise:com.example.front" }.count, 2)
+        let nextFocus = result.events.firstIndex(of: "focus:com.example.front")!
+        XCTAssertEqual(result.events[..<nextFocus].filter { $0 == "wait:202" }.count, 2)
+    }
+
+    func testZOrderRestorerRequiresStableOrderAfterLateRaise() async {
+        let result = await runZOrderSettleTest(frontWindowOrder: [1, 2, 1])
+
+        XCTAssertEqual(result.frontWaits, 4)
+        XCTAssertEqual(result.events.filter { $0 == "raise:com.example.front" }.count, 2)
+    }
+
+    func testZOrderRestorerBoundsWaitWhenRaiseNeverTakesEffect() async {
+        let result = await runZOrderSettleTest(frontWindowOrder: [2])
+
+        XCTAssertEqual(result.frontWaits, 19)
+        XCTAssertEqual(result.events.filter { $0 == "raise:com.example.front" }.count, 21)
+    }
+
+    func testZOrderRestorerDoesNotWaitForWindowsOnSeparateDisplays() async {
+        let result = await runZOrderSettleTest(frontWindowOrder: [2], overlapping: false)
+
+        XCTAssertEqual(result.backWaits, 0)
+        XCTAssertEqual(result.frontWaits, 0)
+        XCTAssertEqual(result.events.filter { $0 == "raise:com.example.front" }.count, 1)
+    }
+
+    private func runZOrderSettleTest(
+        frontWindowOrder: [CGWindowID],
+        overlapping: Bool = true
+    ) async -> (events: [String], backWaits: Int, frontWaits: Int) {
+        var events: [String] = []
+        var activePID: pid_t = 0
+        var waits: [pid_t: Int] = [:]
+        let reader = CGWindowMetadataReader { _ in
+            let poll = waits[101, default: 0]
+            let frontID: CGWindowID = activePID == 101
+                ? frontWindowOrder[min(poll, frontWindowOrder.count - 1)] : 2
+            let orderedIDs: [CGWindowID] = [frontID, frontID == 1 ? 2 : 1]
+            return orderedIDs.map { id -> [String: Any] in
+                let frame = CGRect(
+                    x: !overlapping && id == 2 ? 500 : 0,
+                    y: 0, width: 300, height: 200
+                )
+                return [
+                    kCGWindowNumber as String: NSNumber(value: id),
+                    kCGWindowOwnerPID as String: NSNumber(value: id == 1 ? 101 : 202),
+                    kCGWindowLayer as String: 0,
+                    kCGWindowIsOnscreen as String: true,
+                    kCGWindowBounds as String: frame.dictionaryRepresentation
+                ]
+            }
+        }
+        let restorer = RestoreWindowZOrderRestorer(
+            windowApplier: RecordingRestoreWindowApplier { events.append($0) },
+            applicationActivator: RecordingApplicationActivator { event in
+                events.append(event)
+                activePID = event == "activate:101" ? 101 : 202
+            },
+            metadataReader: reader,
+            settleSleeper: {
+                events.append("wait:\(activePID)")
+                waits[activePID, default: 0] += 1
+            }
+        )
+        await restorer.restore([
+            makeZOrderItem(
+                savedWindow: makeWindowRecord(bundleIdentifier: "com.example.front", zOrderHint: 1),
+                processIdentifier: 101, cgWindowID: 1
+            ),
+            makeZOrderItem(
+                savedWindow: makeWindowRecord(bundleIdentifier: "com.example.back", zOrderHint: 2),
+                processIdentifier: 202, cgWindowID: 2
+            )
+        ])
+        return (events, waits[202, default: 0], waits[101, default: 0])
     }
 
     private func makeWindowRecord(
@@ -833,7 +920,8 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
 
     private func makeZOrderItem(
         savedWindow: WindowRecord,
-        processIdentifier: pid_t = 42
+        processIdentifier: pid_t = 42,
+        cgWindowID: CGWindowID? = nil
     ) -> RestoreWindowZOrderItem {
         RestoreWindowZOrderItem(
             savedWindow: savedWindow,
@@ -848,7 +936,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
                 isFullscreen: savedWindow.isFullscreen,
                 isMain: false,
                 isVisible: savedWindow.isVisible,
-                cgWindowID: savedWindow.captureSignature.cgWindowID,
+                cgWindowID: cgWindowID ?? savedWindow.captureSignature.cgWindowID,
                 ownerName: nil,
                 cgLayer: 0,
                 zOrderHint: savedWindow.zOrderHint,
@@ -1250,7 +1338,7 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(result.skippedItems.isEmpty)
         XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .scored)
         XCTAssertEqual(windowApplier.appliedBundleIdentifiers, [bundleIdentifier])
-        XCTAssertEqual(windowApplier.raiseCount, 1)
+        XCTAssertEqual(windowApplier.focusCount, 1)
     }
 
     func testLocalTargetsAreOpenedSequentiallyInOrderIncludingDuplicates() async throws {
@@ -2582,57 +2670,134 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
     }
 
-    func testConnectedBrowserSkipsWebTargetThatIsAlreadyOpen() async throws {
-        let browser = BrowserAutomationBrowser.safari
-        let target = WindowOpenTarget(
-            kind: .webURL,
-            url: URL(string: "https://example.com/open")!
-        )
-        let savedWindow = makeWindowRecord(
-            bundleIdentifier: browser.bundleIdentifier,
-            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
-        )
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        let snapshot = makeSnapshot(windows: [savedWindow])
-        try store.save(snapshot)
-        let targetOpener = RecordingTargetOpener()
-        let application = makeApplication(
-            bundleIdentifier: browser.bundleIdentifier,
-            windows: [
-                makeDiscoveredWindow(
-                    documentURL: target.url,
-                    title: savedWindow.windowTitle,
-                    frame: savedWindow.frame.cgRect
-                )
-            ]
-        )
+    func testConnectedBrowserSkipsWebTargetThatIsAlreadyOpenOnRepeatedRestores() async throws {
+        for browser in BrowserAutomationBrowser.allCases {
+            let target = WindowOpenTarget(
+                kind: .webURL,
+                url: URL(string: "https://example.com/open")!
+            )
+            let savedWindow = makeWindowRecord(
+                bundleIdentifier: browser.bundleIdentifier,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
+            )
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            let snapshot = makeSnapshot(windows: [savedWindow])
+            try store.save(snapshot)
+            let targetOpener = RecordingTargetOpener()
+            let application = makeApplication(
+                bundleIdentifier: browser.bundleIdentifier,
+                windows: [
+                    makeDiscoveredWindow(
+                        documentURL: target.url,
+                        title: savedWindow.windowTitle,
+                        frame: savedWindow.frame.cgRect
+                    )
+                ]
+            )
 
-        let result = try await makeEngine(
-            store: store,
-            launcher: RecordingApplicationLauncher(results: [:]),
-            discovery: DiscoverySequence([[application]]),
-            targetOpener: targetOpener,
-            browserTabCapturer: StubRestoreBrowserTabCapturer(
-                result: BrowserTabCaptureResult(
-                    windows: [
-                        CapturedBrowserWindow(
-                            browser: browser,
-                            scriptingIdentifier: "1",
-                            title: savedWindow.windowTitle,
-                            frame: savedWindow.frame.cgRect,
-                            frontToBackIndex: 0,
-                            tabs: [CapturedBrowserTab(title: "Open", URL: target.url)]
-                        )
-                    ],
-                    issues: []
+            let engine = makeEngine(
+                store: store,
+                launcher: RecordingApplicationLauncher(results: [:]),
+                discovery: DiscoverySequence([[application]]),
+                targetOpener: targetOpener,
+                browserTabCapturer: StubRestoreBrowserTabCapturer(
+                    result: BrowserTabCaptureResult(
+                        windows: [
+                            CapturedBrowserWindow(
+                                browser: browser,
+                                scriptingIdentifier: "1",
+                                title: savedWindow.windowTitle,
+                                frame: savedWindow.frame.cgRect,
+                                frontToBackIndex: 0,
+                                tabs: [CapturedBrowserTab(title: "Open", URL: target.url)]
+                            )
+                        ],
+                        issues: []
+                    )
                 )
             )
-        ).restoreSnapshot(id: snapshot.id)
 
-        XCTAssertTrue(targetOpener.requests.isEmpty)
-        XCTAssertEqual(result.requestedTargetCount, 0)
-        XCTAssertEqual(result.restoredWindows, 1)
-        XCTAssertTrue(result.targetIssues.isEmpty)
+            for _ in 0..<2 {
+                let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+                XCTAssertTrue(targetOpener.requests.isEmpty)
+                XCTAssertEqual(result.requestedTargetCount, 0)
+                XCTAssertEqual(result.restoredWindows, 1)
+                XCTAssertTrue(result.targetIssues.isEmpty)
+            }
+        }
+    }
+
+    func testChromeStartupInventoryIsSharedAcrossSavedWindowsAndPreservesOccurrences() async throws {
+        let browser = BrowserAutomationBrowser.chrome
+        let inboxURL = URL(string: "https://mail.google.com/mail/u/0/#inbox")!
+        let otherURL = URL(string: "https://example.com/other")!
+        for secondURL in [otherURL, inboxURL] {
+            let firstFrame = CGRect(x: 10, y: 20, width: 600, height: 500)
+            let secondFrame = CGRect(x: 800, y: 20, width: 600, height: 500)
+            let firstWindow = makeWindowRecord(
+                bundleIdentifier: browser.bundleIdentifier,
+                windowTitle: "Inbox",
+                frame: firstFrame,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: [
+                    WindowOpenTarget(kind: .webURL, url: inboxURL)
+                ])
+            )
+            let secondWindow = makeWindowRecord(
+                bundleIdentifier: browser.bundleIdentifier,
+                windowTitle: "Second",
+                frame: secondFrame,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: [
+                    WindowOpenTarget(kind: .webURL, url: secondURL)
+                ])
+            )
+            let startupWindows = [
+                CapturedBrowserWindow(
+                    browser: browser, scriptingIdentifier: "session-inbox", title: "Inbox",
+                    frame: firstFrame, frontToBackIndex: 0,
+                    tabs: [CapturedBrowserTab(title: "Inbox", URL: inboxURL)]
+                ),
+                CapturedBrowserWindow(
+                    browser: browser, scriptingIdentifier: "session-other", title: "Other",
+                    frame: secondFrame, frontToBackIndex: 1,
+                    tabs: [CapturedBrowserTab(title: "Other", URL: otherURL)]
+                )
+            ]
+            let targetOpener = RecordingTargetOpener(results: [
+                .openedNewBrowserWindow(
+                    startupWindows[0], startupWindows: startupWindows, openedTargetCount: 0
+                ),
+                .openedNewBrowserWindow(CapturedBrowserWindow(
+                    browser: browser, scriptingIdentifier: "new-inbox", title: "Second",
+                    frame: secondFrame, frontToBackIndex: 0,
+                    tabs: [CapturedBrowserTab(title: "Inbox", URL: inboxURL)]
+                ))
+            ])
+            let application = makeApplication(
+                bundleIdentifier: browser.bundleIdentifier,
+                windows: [
+                    makeDiscoveredWindow(documentURL: inboxURL, title: "Inbox", frame: firstFrame),
+                    makeDiscoveredWindow(documentURL: secondURL, title: "Second", frame: secondFrame)
+                ]
+            )
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            let snapshot = makeSnapshot(windows: [firstWindow, secondWindow])
+            try store.save(snapshot)
+
+            let result = try await makeEngine(
+                store: store,
+                launcher: RecordingApplicationLauncher(results: [:]),
+                discovery: DiscoverySequence([[], [application]]),
+                targetOpener: targetOpener
+            ).restoreSnapshot(id: snapshot.id)
+
+            let expectsSecondInbox = secondURL == inboxURL
+            XCTAssertEqual(targetOpener.requests.count, expectsSecondInbox ? 2 : 1)
+            XCTAssertEqual(result.requestedTargetCount, expectsSecondInbox ? 1 : 0)
+            XCTAssertEqual(result.restoredWindows, 2)
+            XCTAssertTrue(result.targetIssues.isEmpty)
+            XCTAssertTrue(result.skippedItems.isEmpty)
+        }
     }
 
     func testAXDiscoveredWebTargetIsNotRequestedWhenAutomationIsUnavailable() async throws {

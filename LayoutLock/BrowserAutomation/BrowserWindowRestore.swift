@@ -2,7 +2,11 @@ import AppKit
 import Foundation
 
 enum BrowserWindowOpenResult {
-    case opened(CapturedBrowserWindow)
+    case opened(
+        CapturedBrowserWindow,
+        startupWindows: [CapturedBrowserWindow] = [],
+        openedTargetCount: Int? = nil
+    )
     case unavailable
     case failed
 }
@@ -98,11 +102,72 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         }
 
         do {
+            var startupWindows: [CapturedBrowserWindow] = []
+            var targetsToOpen = targets
+            var startupWindowIdentifier: String?
+            var startupTabIdentifier: String?
+            defer {
+                if let startupWindowIdentifier, let startupTabIdentifier {
+                    do {
+                        _ = try scriptEvaluator.evaluate(Self.chromeStartupCleanupScript(
+                            windowIdentifier: startupWindowIdentifier,
+                            tabIdentifier: startupTabIdentifier
+                        ))
+                    } catch {
+                        AppLogger.browserAutomation.error("Chrome startup blank-tab cleanup failed.")
+                    }
+                }
+            }
+            if browser == .chrome {
+                // Creating Chrome's first window can itself trigger session restoration.
+                // Initialize it without opening a target, then inventory the restored tabs.
+                let startupDescriptor = try scriptEvaluator.evaluate(Self.chromeStartupScript)
+                startupWindowIdentifier = startupDescriptor.atIndex(1)?.stringValue
+                startupTabIdentifier = startupDescriptor.atIndex(2)?.stringValue
+            }
+            if browser == .chrome, !wasRunning || startupWindowIdentifier != nil {
+                for attempt in 0..<50 {
+                    let descriptor = try scriptEvaluator.evaluate(
+                        BrowserTabCaptureService.script(for: browser)
+                    )
+                    startupWindows = try BrowserScriptResultParser().parse(
+                        descriptor,
+                        browser: browser
+                    )
+                    var openTargets = OpenWebTargetIndex(
+                        captureResult: BrowserTabCaptureResult(
+                            windows: startupWindows,
+                            issues: []
+                        )
+                    )
+                    targetsToOpen = targets.filter {
+                        !openTargets.consume($0, bundleIdentifier: browser.bundleIdentifier)
+                    }
+                    if attempt == 0 || targetsToOpen.isEmpty || attempt == 49 {
+                        AppLogger.browserAutomation.info(
+                            "Chrome startup inventory attempt=\(attempt + 1) windowCount=\(startupWindows.count) tabCount=\(startupWindows.reduce(0) { $0 + $1.tabs.count }) missingTargetCount=\(targetsToOpen.count) createdStartupWindow=\(startupWindowIdentifier != nil)."
+                        )
+                    }
+                    if targetsToOpen.isEmpty {
+                        // Keep the window identity so restore can position the reused window.
+                        if let window = startupWindows.first(where: { window in
+                            window.tabs.contains { $0.URL == targets[0].url }
+                        }) {
+                            return .opened(window, startupWindows: startupWindows, openedTargetCount: 0)
+                        }
+                    }
+                    if attempt < 49 {
+                        await launchPollSleeper(0.1)
+                    }
+                }
+            }
+
             let descriptor = try scriptEvaluator.evaluate(
                 Self.script(
                     for: browser,
-                    targets: targets,
-                    reuseDisposableStartupWindow: !wasRunning
+                    targets: targetsToOpen,
+                    reuseDisposableStartupWindow: !wasRunning || startupWindowIdentifier != nil,
+                    startupWindowIdentifier: startupWindowIdentifier
                 )
             )
             guard let openedWindow = try BrowserScriptResultParser()
@@ -110,7 +175,11 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                 .first else {
                 return .failed
             }
-            return .opened(openedWindow)
+            return .opened(
+                openedWindow,
+                startupWindows: startupWindows,
+                openedTargetCount: targetsToOpen.count
+            )
         } catch {
             AppLogger.browserAutomation.error(
                 "\(browser.displayName, privacy: .public) window restore failed."
@@ -122,7 +191,8 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
     static func script(
         for browser: BrowserAutomationBrowser,
         targets: [WindowOpenTarget],
-        reuseDisposableStartupWindow: Bool = false
+        reuseDisposableStartupWindow: Bool = false,
+        startupWindowIdentifier: String? = nil
     ) -> String {
         let URLs = targets.map { appleScriptLiteral($0.url.absoluteString) }
         let URLList = "{\(URLs.joined(separator: ", "))}"
@@ -186,11 +256,25 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
             end tell
             """
         case .chrome:
+            let selectOwnedStartupWindow = startupWindowIdentifier.map { identifier in
+                """
+                repeat with browserWindow in windows
+                    if ((id of browserWindow) as text) is \(appleScriptLiteral(identifier)) then
+                        set candidateWindow to browserWindow
+                        exit repeat
+                    end if
+                end repeat
+                """
+            } ?? ""
             let selectTargetWindow = reuseDisposableStartupWindow
                 ? """
                 set shouldReuseFrontWindow to false
+                set candidateWindow to missing value
                 if (count windows) is 1 then
                     set candidateWindow to front window
+                end if
+                \(selectOwnedStartupWindow)
+                if candidateWindow is not missing value then
                     if (mode of candidateWindow) is "normal" and (count tabs of candidateWindow) is 1 then
                         set candidateURL to URL of active tab of candidateWindow
                         if candidateURL is missing value then
@@ -241,6 +325,40 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
             end tell
             """
         }
+    }
+
+    static let chromeStartupScript = """
+    tell application id "com.google.Chrome"
+        repeat with browserWindow in windows
+            if (mode of browserWindow) is "normal" then return {}
+        end repeat
+        set startupWindow to make new window with properties {mode:"normal"}
+        return {(id of startupWindow) as text, (id of active tab of startupWindow) as text}
+    end tell
+    """
+
+    static func chromeStartupCleanupScript(
+        windowIdentifier: String,
+        tabIdentifier: String
+    ) -> String {
+        """
+        tell application id "com.google.Chrome"
+            repeat with browserWindow in windows
+                if ((id of browserWindow) as text) is \(appleScriptLiteral(windowIdentifier)) then
+                    repeat with browserTab in tabs of browserWindow
+                        if ((id of browserTab) as text) is \(appleScriptLiteral(tabIdentifier)) then
+                            set tabURL to URL of browserTab
+                            if tabURL is missing value then set tabURL to ""
+                            if tabURL is "" or tabURL is "about:blank" or tabURL starts with "chrome://newtab" then
+                                close browserTab
+                            end if
+                            return
+                        end if
+                    end repeat
+                end if
+            end repeat
+        end tell
+        """
     }
 
     private func waitUntilRunning(

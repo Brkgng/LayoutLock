@@ -221,7 +221,11 @@ struct RestoreEngine {
                     disposition: request.disposition
                 )
                 if openResult.wasSubmitted {
-                    requestedTargetCount += request.targets.count
+                    if case let .openedNewBrowserWindow(_, _, openedTargetCount) = openResult {
+                        requestedTargetCount += openedTargetCount ?? request.targets.count
+                    } else {
+                        requestedTargetCount += request.targets.count
+                    }
                 }
 
                 switch openResult {
@@ -253,9 +257,18 @@ struct RestoreEngine {
                     if request.disposition == .newBrowserWindow {
                         provenanceRequiredBrowserWindowIDs.insert(savedWindow.id)
                         let openedWindow: CapturedBrowserWindow?
-                        if case let .openedNewBrowserWindow(evidence) = openResult {
+                        var submittedTargetCount = request.targets.count
+                        if case let .openedNewBrowserWindow(evidence, startupWindows, openedTargetCount) = openResult {
                             openedWindow = evidence
+                            submittedTargetCount = openedTargetCount ?? request.targets.count
                             openedBrowserWindowsBySavedWindowID[savedWindow.id] = evidence
+                            if !startupWindows.isEmpty {
+                                openWebTargets.replaceStartupWindows(
+                                    startupWindows,
+                                    consuming: request.targets,
+                                    bundleIdentifier: bundleIdentifier
+                                )
+                            }
                         } else {
                             openedWindow = nil
                             if isColdStart,
@@ -265,7 +278,7 @@ struct RestoreEngine {
                         }
                         let strategy = openedWindow == nil ? "generic" : "automated"
                         AppLogger.browserAutomation.info(
-                            "Browser restore opened bundle=\(bundleIdentifier, privacy: .public) strategy=\(strategy, privacy: .public) coldStart=\(isColdStart) scriptingIdentifierAvailable=\(openedWindow?.scriptingIdentifier != nil)."
+                            "Browser restore opened bundle=\(bundleIdentifier, privacy: .public) strategy=\(strategy, privacy: .public) coldStart=\(isColdStart) scriptingIdentifierAvailable=\(openedWindow?.scriptingIdentifier != nil) submittedTargetCount=\(submittedTargetCount)."
                         )
                     }
                 case let .failed(reason):
@@ -441,7 +454,7 @@ struct RestoreEngine {
             }
         }
 
-        RestoreWindowZOrderRestorer(
+        await RestoreWindowZOrderRestorer(
             windowApplier: windowApplier,
             applicationActivator: applicationActivator
         ).restore(restoredWindowZOrderItems)
@@ -776,35 +789,98 @@ struct RestoreWindowZOrderRestorer {
     let planner: RestoreWindowZOrderPlanner
     let windowApplier: RestoreWindowApplying
     let applicationActivator: RestoreApplicationActivating
+    let metadataReader: CGWindowMetadataReader
+    let settleSleeper: () async -> Void
 
     init(
         planner: RestoreWindowZOrderPlanner = RestoreWindowZOrderPlanner(),
         windowApplier: RestoreWindowApplying,
-        applicationActivator: RestoreApplicationActivating
+        applicationActivator: RestoreApplicationActivating,
+        metadataReader: CGWindowMetadataReader = CGWindowMetadataReader(),
+        settleSleeper: @escaping () async -> Void = {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     ) {
         self.planner = planner
         self.windowApplier = windowApplier
         self.applicationActivator = applicationActivator
+        self.metadataReader = metadataReader
+        self.settleSleeper = settleSleeper
     }
 
-    func restore(_ items: [RestoreWindowZOrderItem]) {
+    func restore(_ items: [RestoreWindowZOrderItem]) async {
         let raiseOrder = planner.raiseOrder(for: items)
         for item in raiseOrder {
-            windowApplier.raise(item.liveWindow)
+            // Select the saved window before activation brings an app's main window forward.
+            let focusResult = windowApplier.focus(item.liveWindow)
+            let didActivate = await applicationActivator.activate(
+                processIdentifier: item.processIdentifier
+            )
+            let didRaise = windowApplier.raise(item.liveWindow)
+            let didSettle = await waitUntilRaised(item, among: raiseOrder)
+            let observedOrder = observedOrder(for: raiseOrder)
+            AppLogger.restore.info(
+                "Window stacking restore bundle=\(item.savedWindow.bundleIdentifier, privacy: .public) windowID=\(item.liveWindow.cgWindowID ?? 0) savedOrder=\(item.savedWindow.zOrderHint ?? -1) activated=\(didActivate) raised=\(didRaise) settled=\(didSettle) main=\(focusResult.didSetMain) focused=\(focusResult.didSetFocused) observedFrontToBack=\(observedOrder, privacy: .public)."
+            )
         }
+    }
 
-        guard let frontmostItem = raiseOrder.last else {
-            return
+    private func waitUntilRaised(
+        _ item: RestoreWindowZOrderItem,
+        among items: [RestoreWindowZOrderItem]
+    ) async -> Bool {
+        guard let windowID = item.liveWindow.cgWindowID else { return false }
+        var stableObservations = 0
+        for attempt in 0..<20 {
+            let metadata = metadataReader.readWindowMetadata(
+                processIdentifiers: Set(items.map(\.processIdentifier))
+            )
+            guard let window = metadata[item.processIdentifier]?.first(where: { $0.windowID == windowID }),
+                  let index = window.zOrderHint else { return false }
+            let overlappingOrder = items.compactMap { other -> Int? in
+                guard let otherID = other.liveWindow.cgWindowID, otherID != windowID,
+                      let otherWindow = metadata[other.processIdentifier]?.first(where: { $0.windowID == otherID }),
+                      let otherIndex = otherWindow.zOrderHint else { return nil }
+                let overlap = window.bounds.intersection(otherWindow.bounds)
+                return overlap.width > 0 && overlap.height > 0 ? otherIndex : nil
+            }
+            guard !overlappingOrder.isEmpty else { return true }
+
+            // Activation and AXRaise can succeed before the WindowServer updates its order.
+            // Wait for a stable observed order before another app can overtake this raise.
+            if overlappingOrder.allSatisfy({ index < $0 }) {
+                stableObservations += 1
+                if stableObservations == 3 { return true }
+            } else {
+                stableObservations = 0
+                windowApplier.raise(item.liveWindow)
+            }
+            if attempt < 19 { await settleSleeper() }
         }
+        return false
+    }
 
-        applicationActivator.activate(processIdentifier: frontmostItem.processIdentifier)
-        _ = windowApplier.focus(frontmostItem.liveWindow)
+    private func observedOrder(for items: [RestoreWindowZOrderItem]) -> String {
+        guard items.contains(where: { $0.liveWindow.cgWindowID != nil }) else {
+            return "unavailable"
+        }
+        let metadata = metadataReader.readWindowMetadata(
+            processIdentifiers: Set(items.map(\.processIdentifier))
+        )
+        var orderedWindows: [(index: Int, bundle: String)] = []
+        for item in items {
+            guard let windowID = item.liveWindow.cgWindowID,
+                  let window = metadata[item.processIdentifier]?.first(where: { $0.windowID == windowID }),
+                  let index = window.zOrderHint else { continue }
+            orderedWindows.append((index, item.savedWindow.bundleIdentifier))
+        }
+        return orderedWindows.sorted { $0.index < $1.index }.map(\.bundle).joined(separator: ",")
     }
 }
 
 protocol RestoreApplicationActivating {
     @discardableResult
-    func activate(processIdentifier: pid_t) -> Bool
+    func activate(processIdentifier: pid_t) async -> Bool
 }
 
 protocol RestoreApplicationLaunching {
@@ -814,12 +890,18 @@ protocol RestoreApplicationLaunching {
 
 enum RestoreTargetOpenResult {
     case opened
-    case openedNewBrowserWindow(CapturedBrowserWindow)
+    case openedNewBrowserWindow(
+        CapturedBrowserWindow,
+        startupWindows: [CapturedBrowserWindow] = [],
+        openedTargetCount: Int? = nil
+    )
     case failed(RestoreTargetIssueReason)
 
     var wasSubmitted: Bool {
         switch self {
-        case .opened, .openedNewBrowserWindow, .failed(.openRequestFailed):
+        case .openedNewBrowserWindow(_, _, let openedTargetCount):
+            return openedTargetCount != 0
+        case .opened, .failed(.openRequestFailed):
             return true
         case .failed:
             return false
@@ -965,8 +1047,12 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
                 targets: targets,
                 browser: browser
             )
-            if case let .opened(openedWindow) = result {
-                return .openedNewBrowserWindow(openedWindow)
+            if case let .opened(openedWindow, startupWindows, openedTargetCount) = result {
+                return .openedNewBrowserWindow(
+                    openedWindow,
+                    startupWindows: startupWindows,
+                    openedTargetCount: openedTargetCount
+                )
             }
         }
 
@@ -1079,7 +1165,8 @@ struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
 }
 
 struct NSWorkspaceRestoreApplicationActivator: RestoreApplicationActivating {
-    func activate(processIdentifier: pid_t) -> Bool {
+    @MainActor
+    func activate(processIdentifier: pid_t) async -> Bool {
         guard let application = NSRunningApplication(
             processIdentifier: processIdentifier
         ) else {
@@ -1087,7 +1174,16 @@ struct NSWorkspaceRestoreApplicationActivator: RestoreApplicationActivating {
         }
 
         NSApp.yieldActivation(to: application)
-        return application.activate(options: [])
+        guard application.activate(options: []) else {
+            return false
+        }
+        for _ in 0..<20 {
+            if application.isActive {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return application.isActive
     }
 }
 
@@ -1171,7 +1267,7 @@ private struct OpenLocalWindowEvidence {
     }
 }
 
-private struct OpenWebTargetIndex {
+struct OpenWebTargetIndex {
     private var countsByBundleIdentifier: [String: [URL: Int]] = [:]
 
     init(
@@ -1224,6 +1320,21 @@ private struct OpenWebTargetIndex {
 
         countsByBundleIdentifier[bundleIdentifier]?[URL] = count - 1
         return true
+    }
+
+    mutating func replaceStartupWindows(
+        _ windows: [CapturedBrowserWindow],
+        consuming targets: [WindowOpenTarget],
+        bundleIdentifier: String
+    ) {
+        let startupIndex = OpenWebTargetIndex(
+            captureResult: BrowserTabCaptureResult(windows: windows, issues: [])
+        )
+        countsByBundleIdentifier[bundleIdentifier] =
+            startupIndex.countsByBundleIdentifier[bundleIdentifier]
+        for target in targets {
+            _ = consume(target, bundleIdentifier: bundleIdentifier)
+        }
     }
 }
 

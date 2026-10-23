@@ -346,6 +346,23 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         )
         XCTAssertFalse(runningChromeSource.contains("candidateWindow"))
         XCTAssertTrue(runningChromeSource.contains("set targetWindow to make new window"))
+
+        for source in [
+            BrowserAutomationWindowOpener.chromeStartupScript,
+            BrowserAutomationWindowOpener.chromeStartupCleanupScript(
+                windowIdentifier: "startup-window", tabIdentifier: "startup-tab"
+            ),
+            BrowserAutomationWindowOpener.script(
+                for: .chrome, targets: targets, reuseDisposableStartupWindow: true,
+                startupWindowIdentifier: "startup-window"
+            )
+        ] {
+            var error: NSDictionary?
+            XCTAssertTrue(
+                NSAppleScript(source: source)?.compileAndReturnError(&error) == true,
+                "Chrome startup script failed to compile: \(String(describing: error))"
+            )
+        }
     }
 
     func testConnectedRunningBrowserOpensDistinctWindowWithoutPrompting() async {
@@ -376,7 +393,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             browser: .safari
         )
 
-        guard case let .opened(openedWindow) = result else {
+        guard case let .opened(openedWindow, _, _) = result else {
             return XCTFail("Expected connected Safari window restore to succeed.")
         }
         XCTAssertEqual(openedWindow.scriptingIdentifier, "opened-window")
@@ -472,7 +489,9 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let userDefaults = makeBrowserUserDefaults()
         connect(.chrome, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
+        let evaluator = RecordingBrowserScriptEvaluator(
+            results: Array(repeating: .list(), count: 51) + [makeOpenedWindowDescriptor()]
+        )
         var isRunning = false
         var launchCount = 0
         let opener = BrowserAutomationWindowOpener(
@@ -509,11 +528,168 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             permissionChecker.calls,
             [.init(browser: .chrome, askUserIfNeeded: false)]
         )
-        XCTAssertEqual(evaluator.callCount, 1)
+        XCTAssertEqual(evaluator.callCount, 52)
+        XCTAssertEqual(evaluator.sources.first, BrowserAutomationWindowOpener.chromeStartupScript)
         XCTAssertTrue(evaluator.lastSource?.contains("(count windows) is 1") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("chrome://newtab") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("set targetWindow to candidateWindow") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("set targetWindow to make new window") == true)
+    }
+
+    func testColdChromeWaitsForInboxAndReusesItsWindowWithoutChangingTabs() async {
+        let userDefaults = makeBrowserUserDefaults()
+        connect(.chrome, in: userDefaults)
+        let inboxURL = "https://mail.google.com/mail/u/0/#inbox"
+        let unrelatedURL = "https://example.com/keep"
+        let restoredWindow = makeBrowserResultDescriptor(windows: [
+            ("session-window", "Inbox", CGRect(x: 10, y: 20, width: 800, height: 600),
+             [unrelatedURL, inboxURL])
+        ])
+        let evaluator = RecordingBrowserScriptEvaluator(
+            results: [.list(), .list(), .list(), restoredWindow]
+        )
+        var isRunning = false
+        var sleepCount = 0
+        let opener = BrowserAutomationWindowOpener(
+            userDefaults: userDefaults,
+            permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+            scriptEvaluator: evaluator,
+            applicationURLProvider: { _ in URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+            runningApplicationProvider: { _ in isRunning },
+            applicationLauncher: { _ in
+                isRunning = true
+                return true
+            },
+            launchPollSleeper: { _ in sleepCount += 1 }
+        )
+
+        let result = await opener.openNewWindow(
+            targets: [WindowOpenTarget(kind: .webURL, url: URL(string: inboxURL)!)],
+            browser: .chrome
+        )
+
+        guard case let .opened(window, startupWindows, openedTargetCount) = result else {
+            return XCTFail("Expected the restored inbox window to be reused.")
+        }
+        XCTAssertEqual(window.scriptingIdentifier, "session-window")
+        XCTAssertEqual(window.tabs.map(\.URL.absoluteString), [unrelatedURL, inboxURL])
+        XCTAssertEqual(startupWindows, [window])
+        XCTAssertEqual(openedTargetCount, 0)
+        XCTAssertEqual(sleepCount, 2)
+        XCTAssertEqual(evaluator.sources, [BrowserAutomationWindowOpener.chromeStartupScript] + Array(
+            repeating: BrowserTabCaptureService.script(for: .chrome), count: 3
+        ))
+    }
+
+    func testChromeFirstWindowTriggersSessionRestoreBeforeOpeningAnyURL() async {
+        for wasRunning in [false, true] {
+            let userDefaults = makeBrowserUserDefaults()
+            connect(.chrome, in: userDefaults)
+            let inboxURL = URL(string: "https://mail.google.com/mail/u/0/#inbox")!
+            let ownedWindow = NSAppleEventDescriptor.list()
+            ownedWindow.insert(NSAppleEventDescriptor(string: "startup-window"), at: 1)
+            ownedWindow.insert(NSAppleEventDescriptor(string: "startup-tab"), at: 2)
+            let restoredWindow = makeBrowserResultDescriptor(windows: [
+                ("session-window", "Inbox", CGRect(x: 10, y: 20, width: 800, height: 600),
+                 [inboxURL.absoluteString])
+            ])
+            let evaluator = RecordingBrowserScriptEvaluator(
+                results: [ownedWindow, .list(), restoredWindow, .list()]
+            )
+            var isRunning = wasRunning
+            let opener = BrowserAutomationWindowOpener(
+                userDefaults: userDefaults,
+                permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+                scriptEvaluator: evaluator,
+                applicationURLProvider: { _ in URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                runningApplicationProvider: { _ in isRunning },
+                applicationLauncher: { _ in
+                    XCTAssertFalse(wasRunning)
+                    isRunning = true
+                    return true
+                },
+                launchPollSleeper: { _ in }
+            )
+
+            let result = await opener.openNewWindow(
+                targets: [WindowOpenTarget(kind: .webURL, url: inboxURL)], browser: .chrome
+            )
+
+            guard case let .opened(window, _, openedTargetCount) = result else {
+                XCTFail("Expected to reuse the session's inbox, running=\(wasRunning)")
+                continue
+            }
+            XCTAssertEqual(window.scriptingIdentifier, "session-window")
+            XCTAssertEqual(openedTargetCount, 0)
+            XCTAssertEqual(evaluator.sources, [
+                BrowserAutomationWindowOpener.chromeStartupScript,
+                BrowserTabCaptureService.script(for: .chrome),
+                BrowserTabCaptureService.script(for: .chrome),
+                BrowserAutomationWindowOpener.chromeStartupCleanupScript(
+                    windowIdentifier: "startup-window", tabIdentifier: "startup-tab"
+                )
+            ])
+        }
+    }
+
+    func testColdChromeOpensOnlyMissingStartupTabOccurrencesAfterBoundedWait() async {
+        let inbox = "https://mail.google.com/mail/u/0/#inbox"
+        let otherAccount = "https://mail.google.com/mail/u/1/#inbox"
+        let sent = "https://mail.google.com/mail/u/0/#sent"
+        let otherPage = "https://example.com/missing"
+        let cases: [(existing: [String], saved: [String], missing: [String])] = [
+            ([], [inbox], [inbox]),
+            ([otherAccount], [inbox], [inbox]),
+            ([sent], [inbox], [inbox]),
+            ([inbox], [inbox, otherPage], [otherPage]),
+            ([inbox], [inbox, inbox], [inbox])
+        ]
+        for testCase in cases {
+            let userDefaults = makeBrowserUserDefaults()
+            connect(.chrome, in: userDefaults)
+            let startupWindow = makeBrowserResultDescriptor(windows: [
+                ("session-window", "Existing", CGRect(x: 10, y: 20, width: 800, height: 600),
+                 testCase.existing)
+            ])
+            let evaluator = RecordingBrowserScriptEvaluator(
+                results: [.list()] + Array(repeating: startupWindow, count: 50) + [makeOpenedWindowDescriptor()]
+            )
+            var isRunning = false
+            var sleepCount = 0
+            let opener = BrowserAutomationWindowOpener(
+                userDefaults: userDefaults,
+                permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+                scriptEvaluator: evaluator,
+                applicationURLProvider: { _ in URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+                runningApplicationProvider: { _ in isRunning },
+                applicationLauncher: { _ in
+                    isRunning = true
+                    return true
+                },
+                launchPollSleeper: { _ in sleepCount += 1 }
+            )
+            let targets = testCase.saved.map {
+                WindowOpenTarget(kind: .webURL, url: URL(string: $0)!)
+            }
+
+            let result = await opener.openNewWindow(targets: targets, browser: .chrome)
+
+            guard case let .opened(_, startupWindows, openedTargetCount) = result else {
+                XCTFail("Expected missing tabs to open: \(testCase)")
+                continue
+            }
+            XCTAssertEqual(startupWindows.first?.tabs.map(\.URL.absoluteString), testCase.existing)
+            XCTAssertEqual(openedTargetCount, testCase.missing.count)
+            XCTAssertEqual(sleepCount, 49)
+            XCTAssertEqual(evaluator.callCount, 52)
+            XCTAssertEqual(evaluator.lastSource, BrowserAutomationWindowOpener.script(
+                for: .chrome,
+                targets: testCase.missing.map {
+                    WindowOpenTarget(kind: .webURL, url: URL(string: $0)!)
+                },
+                reuseDisposableStartupWindow: true
+            ))
+        }
     }
 
     func testDisconnectedOrRevokedBrowserNeverExecutesRestoreScript() async {
@@ -987,6 +1163,7 @@ private final class RecordingBrowserScriptEvaluator: BrowserScriptEvaluating {
     private(set) var sources: [String] = []
     private let result: NSAppleEventDescriptor?
     private let error: Error?
+    private var results: [NSAppleEventDescriptor] = []
 
     init(result: NSAppleEventDescriptor) {
         self.result = result
@@ -998,12 +1175,21 @@ private final class RecordingBrowserScriptEvaluator: BrowserScriptEvaluating {
         self.error = error
     }
 
+    init(results: [NSAppleEventDescriptor]) {
+        self.results = results
+        result = nil
+        error = nil
+    }
+
     func evaluate(_ source: String) throws -> NSAppleEventDescriptor {
         callCount += 1
         lastSource = source
         sources.append(source)
         if let error {
             throw error
+        }
+        if !results.isEmpty {
+            return results.removeFirst()
         }
         return result ?? .list()
     }
