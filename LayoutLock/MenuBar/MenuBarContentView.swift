@@ -35,27 +35,6 @@ struct MenuBarContentView: View {
                 }
 
                 Divider()
-            } else if planStatusPresentation.isLimitReached {
-                Button {
-                    performPlanStatusAction()
-                } label: {
-                    Label("Upgrade to Pro to Save Layouts", systemImage: "lock")
-                }
-                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
-            } else {
-                Button("Save Current Layout") {
-                    handleSaveSnapshot()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
-            }
-
-            if !planStatusPresentation.isProUnlocked && !planStatusPresentation.isLimitReached {
-                PlanStatusView(
-                    presentation: planStatusPresentation,
-                    style: .menuBar,
-                    action: performPlanStatusAction
-                )
             }
 
             if let status = snapshotMenuController.status, status.kind != .info {
@@ -68,12 +47,32 @@ struct MenuBarContentView: View {
                     )
             }
 
-            Divider()
-
             snapshotSection
 
+            if !permissionCoordinator.shouldShowLimitedMode || !snapshotMenuController.snapshotSummaries.isEmpty {
+                Divider()
+            }
+
+            if !permissionCoordinator.shouldShowLimitedMode {
+                Button {
+                    if planStatusPresentation.isLimitReached {
+                        performUpgradeAction()
+                    } else {
+                        handleSaveSnapshot()
+                    }
+                } label: {
+                    if planStatusPresentation.isLimitReached {
+                        Label("Save Layout…", systemImage: "lock")
+                    } else {
+                        Text("Save Layout…")
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
+            }
+
             if !snapshotMenuController.snapshotSummaries.isEmpty {
-                Menu("Update Existing Layout") {
+                Menu("Update Layout") {
                     ForEach(snapshotMenuController.snapshotSummaries) { snapshot in
                         Button(shortMenuTitle(snapshot.name)) {
                             handleUpdateSnapshot(snapshot)
@@ -89,19 +88,27 @@ struct MenuBarContentView: View {
                 openDashboardWindow()
             }
 
-            Button("Settings") {
+            Button("Settings…") {
                 openSettingsWindow()
             }
             .keyboardShortcut(",", modifiers: .command)
 
-            Button("Send Feedback") {
-                LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+            Divider()
+
+            if !planStatusPresentation.isProUnlocked {
+                Button("Upgrade to Pro…") {
+                    performUpgradeAction()
+                }
             }
 
-            Button(updateController.actionTitle) {
+            Button("\(updateController.actionTitle)…") {
                 updateController.checkForUpdates()
             }
             .disabled(!updateController.canCheckForUpdates)
+
+            Button("Send Feedback…") {
+                LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+            }
 
             Divider()
 
@@ -130,11 +137,8 @@ struct MenuBarContentView: View {
     }
 
     @MainActor
-    private func performPlanStatusAction() {
-        switch PlanStatusActionResolver.action(
-            for: planStatusPresentation,
-            purchaseURL: LayoutLockProConfiguration.purchaseURL
-        ) {
+    private func performUpgradeAction() {
+        switch PlanStatusActionResolver.upgradeAction(purchaseURL: LayoutLockProConfiguration.purchaseURL) {
         case let .purchase(url):
             openURL(url)
         case .proSettings:
@@ -155,7 +159,7 @@ struct MenuBarContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Text("Layouts")
+            Text("Restore Layout")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

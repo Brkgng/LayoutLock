@@ -476,6 +476,12 @@ struct SettingsView: View {
                     valueTint: entitlementController.isProUnlocked ? .green : .secondary
                 )
 
+                if !entitlementController.isProUnlocked {
+                    Text("The Free plan includes up to \(LayoutLockProConfiguration.freeLayoutLimit) layouts. Upgrade to Pro to save more.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if entitlementController.isProUnlocked,
                    let lastValidatedAt = entitlementController.entitlementState.lastValidatedAt {
                     SettingsValueRow(
