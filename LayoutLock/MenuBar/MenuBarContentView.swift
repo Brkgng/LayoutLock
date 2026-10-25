@@ -9,6 +9,7 @@ struct MenuBarContentView: View {
     @Environment(\.openURL) private var openURL
 
     let bootstrapErrorMessage: String?
+    let diagnosticLogController: DiagnosticLogController?
     @ObservedObject var permissionCoordinator: PermissionCoordinator
     @ObservedObject var permissionRouter: PermissionInterventionRouter
     @ObservedObject var onboardingController: OnboardingController
@@ -92,6 +93,10 @@ struct MenuBarContentView: View {
                 openSettingsWindow()
             }
             .keyboardShortcut(",", modifiers: .command)
+
+            Button("Send Feedback") {
+                LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+            }
 
             Button(updateController.actionTitle) {
                 updateController.checkForUpdates()
@@ -270,6 +275,7 @@ struct MenuBarContentView: View {
 #Preview {
         MenuBarContentView(
             bootstrapErrorMessage: nil,
+            diagnosticLogController: nil,
             permissionCoordinator: PermissionCoordinator(
                 trustChecker: AccessibilityTrustChecker { true }
             ),

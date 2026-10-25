@@ -144,6 +144,11 @@ final class LayoutLockSettingsTests: XCTestCase {
 }
 
 final class LayoutLockSupportTests: XCTestCase {
+    func testFeedbackSubjectIncludesAvailableAppVersion() {
+        XCTAssertEqual(LayoutLockSupport.feedbackSubject(version: "1.3"), "LayoutLock Feedback (v1.3)")
+        XCTAssertEqual(LayoutLockSupport.feedbackSubject(version: nil), "LayoutLock Feedback")
+    }
+
     func testLegalURLsUsePublishedLayoutLockPages() {
         XCTAssertEqual(LayoutLockSupport.privacyPolicyURL.absoluteString, "https://layoutlock.app/privacy")
         XCTAssertEqual(LayoutLockSupport.termsOfServiceURL.absoluteString, "https://layoutlock.app/terms")

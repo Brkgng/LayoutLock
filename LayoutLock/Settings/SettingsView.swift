@@ -10,6 +10,27 @@ enum LayoutLockSupport {
     static let refundEmailSubject = "LayoutLock Refund Request"
     static let refundEmailBody = "Purchase email or Creem order ID:\n\n"
 
+    static func feedbackSubject(version: String?) -> String {
+        guard let version else { return "LayoutLock Feedback" }
+        return "LayoutLock Feedback (v\(version))"
+    }
+
+    @MainActor
+    static func openFeedbackEmail(diagnosticLogController: DiagnosticLogController?) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let subject = feedbackSubject(version: version)
+        if diagnosticLogController?.composeSupportEmail(
+            to: emailAddress,
+            subject: subject,
+            body: supportEmailBody
+        ) == true {
+            return
+        }
+
+        guard let url = mailtoURL(subject: subject, body: supportEmailBody) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     static func mailtoURL(subject: String, body: String) -> URL? {
         var components = URLComponents()
         components.scheme = "mailto"
@@ -823,28 +844,8 @@ struct SettingsView: View {
         return "Version \(versionNumber) (\(buildNumber))"
     }
 
-    private var supportSubject: String {
-        guard let versionNumber else {
-            return "LayoutLock Feedback"
-        }
-
-        return "LayoutLock Feedback (v\(versionNumber))"
-    }
-
     private func openSupportEmail() {
-        if diagnosticLogController?.composeSupportEmail(
-            to: LayoutLockSupport.emailAddress,
-            subject: supportSubject,
-            body: LayoutLockSupport.supportEmailBody
-        ) == true {
-            return
-        }
-
-        guard let url = LayoutLockSupport.mailtoURL(
-            subject: supportSubject,
-            body: LayoutLockSupport.supportEmailBody
-        ) else { return }
-        NSWorkspace.shared.open(url)
+        LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
     }
 
     private func openRefundEmail() {

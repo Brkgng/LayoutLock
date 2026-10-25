@@ -193,6 +193,7 @@ struct LayoutLockApp: App {
         Window("LayoutLock", id: DashboardWindowSupport.sceneID) {
             DashboardView(
                 bootstrapErrorMessage: bootstrapErrorMessage,
+                diagnosticLogController: diagnosticLogController,
                 permissionCoordinator: permissionCoordinator,
                 permissionRouter: permissionRouter,
                 snapshotMenuController: snapshotMenuController,
@@ -219,6 +220,7 @@ struct LayoutLockApp: App {
         MenuBarExtra("LayoutLock", systemImage: "rectangle.3.group") {
             MenuBarContentView(
                 bootstrapErrorMessage: bootstrapErrorMessage,
+                diagnosticLogController: diagnosticLogController,
                 permissionCoordinator: permissionCoordinator,
                 permissionRouter: permissionRouter,
                 onboardingController: onboardingController,

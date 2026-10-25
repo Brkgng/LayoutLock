@@ -110,6 +110,7 @@ struct DashboardView: View {
     @Environment(\.openURL) private var openURL
 
     let bootstrapErrorMessage: String?
+    let diagnosticLogController: DiagnosticLogController?
     @ObservedObject var permissionCoordinator: PermissionCoordinator
     @ObservedObject var permissionRouter: PermissionInterventionRouter
     @ObservedObject var snapshotMenuController: SnapshotMenuController
@@ -242,11 +243,23 @@ struct DashboardView: View {
                 }
 
                 SidebarActionButton(
+                    title: "Send Feedback",
+                    systemImage: "bubble.left",
+                    isPrimary: false,
+                    isDisabled: false,
+                    topPadding: updateController.availableUpdate == nil ? 8 : 0,
+                    bottomPadding: 0,
+                    action: {
+                        LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+                    }
+                )
+
+                SidebarActionButton(
                     title: "Settings",
                     systemImage: "gearshape",
                     isPrimary: false,
                     isDisabled: false,
-                    topPadding: updateController.availableUpdate == nil ? 8 : 0,
+                    topPadding: 0,
                     bottomPadding: 12,
                     action: openSettingsWindow
                 )
