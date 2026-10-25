@@ -626,11 +626,12 @@ struct SettingsView: View {
                 )
 
                 SettingsActionRow(
-                    title: LayoutLockSupport.emailAddress,
+                    title: "Contact Support",
                     systemImage: "arrow.up.forward",
                     leadingSystemImage: "envelope",
                     action: openSupportEmail
                 )
+                .help(LayoutLockSupport.emailAddress)
 
                 Text("A local diagnostic log is attached when available.")
                     .font(.caption)
