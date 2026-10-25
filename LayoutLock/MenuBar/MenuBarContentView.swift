@@ -71,6 +71,17 @@ struct MenuBarContentView: View {
 
             snapshotSection
 
+            if !snapshotMenuController.snapshotSummaries.isEmpty {
+                Menu("Update Existing Layout") {
+                    ForEach(snapshotMenuController.snapshotSummaries) { snapshot in
+                        Button(shortMenuTitle(snapshot.name)) {
+                            handleUpdateSnapshot(snapshot)
+                        }
+                    }
+                }
+                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
+            }
+
             Divider()
 
             Button("Open LayoutLock") {
@@ -192,6 +203,22 @@ struct MenuBarContentView: View {
         }
 
         snapshotMenuController.captureCurrentSnapshot()
+    }
+
+    @MainActor
+    private func handleUpdateSnapshot(_ snapshot: SnapshotSummary) {
+        guard bootstrapErrorMessage == nil, !snapshotMenuController.isOperating else {
+            return
+        }
+
+        SnapshotNamePrompt.confirmUpdate(currentName: snapshot.name) { confirmed in
+            guard confirmed, bootstrapErrorMessage == nil, !snapshotMenuController.isOperating,
+                  requestMenuBarAuthorization(kind: .saveLayout) else {
+                return
+            }
+
+            snapshotMenuController.updateSnapshot(id: snapshot.id)
+        }
     }
 
     @MainActor

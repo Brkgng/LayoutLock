@@ -78,6 +78,7 @@
 		E00000000000000000000007 /* EntitlementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000008 /* EntitlementController.swift */; };
 		E00000000000000000000009 /* EntitlementControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000A /* EntitlementControllerTests.swift */; };
 		E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */; };
+		AB15C24CFF874573A7A0E101 /* SnapshotNamePromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */; };
 		E0000000000000000000000F /* EntitlementReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000E /* EntitlementReceipt.swift */; };
 		F00000000000000000000001 /* AppUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* AppUpdateController.swift */; };
 		F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* AppUpdateControllerTests.swift */; };
@@ -205,6 +206,7 @@
 		E00000000000000000000008 /* EntitlementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementController.swift; sourceTree = "<group>"; };
 		E0000000000000000000000A /* EntitlementControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementControllerTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuControllerMonetizationTests.swift; sourceTree = "<group>"; };
+		AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotNamePromptTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000E /* EntitlementReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementReceipt.swift; sourceTree = "<group>"; };
 		F00000000000000000000004 /* AppUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateController.swift; sourceTree = "<group>"; };
 		F00000000000000000000005 /* AppUpdateControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateControllerTests.swift; sourceTree = "<group>"; };
@@ -323,6 +325,7 @@
 				A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */,
 				A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */,
 				E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */,
+				AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */,
 				A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */,
 				F5C2972A00134B8B95E628D1 /* SnapshotPinningTests.swift */,
 				A0000000000000000000007C /* TelemetryLoggerTests.swift */,
@@ -758,6 +761,7 @@
 				A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */,
 				A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */,
 				E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */,
+				AB15C24CFF874573A7A0E101 /* SnapshotNamePromptTests.swift in Sources */,
 				A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */,
 				F5C2972A00134B8B95E628D0 /* SnapshotPinningTests.swift in Sources */,
 				A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */,

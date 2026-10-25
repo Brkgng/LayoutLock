@@ -203,7 +203,15 @@ final class SnapshotMenuControllerMonetizationTests: XCTestCase {
         XCTAssertTrue(controller.renameSnapshotInline(id: snapshotID, newName: "Renamed"))
 
         let updateTask = controller.updateSnapshot(id: snapshotID)
+        XCTAssertNotNil(updateTask)
         await updateTask?.value
+
+        let updatedSnapshot = try store.loadSnapshot(id: snapshotID)
+        XCTAssertEqual(updatedSnapshot.id, snapshotID)
+        XCTAssertEqual(updatedSnapshot.name, "Renamed")
+        XCTAssertEqual(updatedSnapshot.windows.count, 1)
+        XCTAssertEqual(controller.status?.message, "Updated \"Renamed\" with 1 window.")
+        XCTAssertEqual(try store.listSummaries().count, 4)
 
         let restoreTask = controller.restoreSnapshot(id: snapshotID)
         await restoreTask?.value
