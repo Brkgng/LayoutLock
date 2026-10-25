@@ -1028,6 +1028,30 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.message, "Restored \"Coding\": 0 windows restored, 3 skipped.")
     }
 
+    func testRestoreCompletionDistinguishesGeometryFromUnconfirmedDesktopPlacement() async throws {
+        let saved = makeWindowRecord(windowTitle: "Document", displayID: 1)
+        let display = makeDisplayRecord(id: 1)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshotID = UUID()
+        try store.save(makeSnapshot(id: snapshotID, name: "Coding", windows: [saved],
+            displays: [display], primaryDisplayID: 1))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(
+            store: store, overlayPresenter: overlayPresenter, appNameResolver: { _ in "Editor" },
+            screenProvider: { [self.makeScreenSnapshot(from: display)] },
+            discoveredApplicationsProvider: {
+                [DiscoveredApplication(bundleIdentifier: saved.bundleIdentifier, pid: 42, localizedName: nil,
+                    windows: [makeDiscoveredWindow(title: "Document", subrole: "AXStandardWindow", cgWindowID: nil)])]
+            }
+        )
+        await controller.restoreSnapshot(id: snapshotID)?.value
+
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with issues")
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 window restored · desktop placement unconfirmed"])
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails,
+            ["Editor (Document): Position restored; desktop placement could not be confirmed."])
+    }
+
     func testRestoreSnapshotCompletionPreservesAllSkippedWindowDetails() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)

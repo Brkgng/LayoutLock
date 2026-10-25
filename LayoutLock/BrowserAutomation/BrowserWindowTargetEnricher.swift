@@ -66,7 +66,8 @@ struct BrowserWindowTargetEnricher {
         return Result(
             discoveryResult: WindowDiscoveryResult(
                 applications: applications,
-                diagnostics: discoveryResult.diagnostics
+                diagnostics: discoveryResult.diagnostics,
+                unexposedApplications: discoveryResult.unexposedApplications
             ),
             issues: issues.uniqued()
         )

@@ -465,7 +465,7 @@ extension TelemetryLogEvent {
 private extension TelemetryLogDetail {
     init(discoveryDiagnostic: WindowDiscoveryDiagnostic) {
         self.init(
-            kind: "windowRejected",
+            kind: discoveryDiagnostic.kind.rawValue,
             bundleIdentifier: discoveryDiagnostic.bundleIdentifier,
             processIdentifier: discoveryDiagnostic.processIdentifier,
             reason: discoveryDiagnostic.reason

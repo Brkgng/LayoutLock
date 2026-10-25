@@ -127,7 +127,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         let engine = makeEngine(
             appElement: appElement,
             attributeReader: fixture.reader,
-            metadata: [101: [metadata]]
+            metadata: [101: [metadata]],
+            windowIDProvider: { _ in 900 }
         )
 
         let result = try engine.discoverRunningWindowsWithDiagnostics()
@@ -194,7 +195,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
                 .windows.first
         )
 
-        XCTAssertEqual(window.cgWindowID, 2)
+        XCTAssertNil(window.cgWindowID, "A geometry match must not authorize Space operations.")
         XCTAssertEqual(window.zOrderHint, 3)
         XCTAssertTrue(window.isVisible)
     }
@@ -751,6 +752,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         appElement: AXUIElement,
         attributeReader: AXAttributeReader,
         metadata: [pid_t: [CGWindowMetadata]] = [:],
+        windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = { _ in nil },
         bundleIdentifier: String = "com.example.editor",
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver =
             ApplicationWindowDocumentURLResolver()
@@ -770,7 +772,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
                 ]
             },
             appElementProvider: { _ in appElement },
-            cgWindowMetadataProvider: { _ in metadata }
+            cgWindowMetadataProvider: { _ in metadata },
+            windowIDProvider: windowIDProvider
         )
     }
 

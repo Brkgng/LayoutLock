@@ -872,7 +872,11 @@ final class SnapshotMenuController: ObservableObject {
         return RestoreCompletionMessage(
             title: "\"\(snapshotName)\" restored\(hasIssues ? " with issues" : "")",
             summary: summary,
-            issues: result.targetIssues.map(targetIssueDetail) + result.skippedItems.map(skippedWindowDetail),
+            issues: result.targetIssues.map(targetIssueDetail) + result.skippedItems.map(skippedWindowDetail)
+                + result.downgradedItems.filter { $0.reason == RestoreDowngradeReason.windowIdentityUnconfirmed }.map {
+                    skippedWindowDetail(for: RestoreSkip(
+                        bundleIdentifier: $0.bundleIdentifier, windowTitle: $0.windowTitle, reason: $0.reason))
+                },
             hasIssues: hasIssues
         )
     }
@@ -883,6 +887,8 @@ final class SnapshotMenuController: ObservableObject {
         return [
             result.skippedItems.isEmpty ? nil : "\(result.skippedItems.count) skipped",
             result.targetIssues.isEmpty ? nil : "\(result.targetIssues.count) \(targetIssueLabel)",
+            result.downgradedItems.contains { $0.reason == RestoreDowngradeReason.windowIdentityUnconfirmed }
+                ? "desktop placement unconfirmed" : nil,
             result.displayFallbacks.isEmpty ? nil : "\(result.displayFallbacks.count) \(fallbackLabel)"
         ].compactMap { $0 }
     }
@@ -917,6 +923,10 @@ final class SnapshotMenuController: ObservableObject {
             return "Matching window was not found."
         case RestoreSkipReason.openedBrowserWindowNotIdentified:
             return "Opened browser window could not be matched."
+        case RestoreSkipReason.desktopUnconfirmed:
+            return "Window could not be brought to the current desktop."
+        case RestoreDowngradeReason.windowIdentityUnconfirmed:
+            return "Position restored; desktop placement could not be confirmed."
         case RestoreSkipReason.windowGeometryDidNotSettle:
             return "Window did not accept the saved position and size."
         default:

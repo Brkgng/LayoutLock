@@ -1338,7 +1338,7 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(result.skippedItems.isEmpty)
         XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .scored)
         XCTAssertEqual(windowApplier.appliedBundleIdentifiers, [bundleIdentifier])
-        XCTAssertEqual(windowApplier.focusCount, 1)
+        XCTAssertEqual(windowApplier.focusCount, 0)
     }
 
     func testLocalTargetsAreOpenedSequentiallyInOrderIncludingDuplicates() async throws {

@@ -43,6 +43,7 @@ struct RestoreEngine {
     private let launchClock: () -> Date
     private let launchPollSleeper: (TimeInterval) async -> Void
     private let telemetryLogger: TelemetryLogging
+    private let spaces: RestoreSpaceCoordinator
 
     init(
         snapshotStore: SnapshotStore,
@@ -54,8 +55,9 @@ struct RestoreEngine {
         applicationLauncher: RestoreApplicationLaunching = NSWorkspaceRestoreApplicationLauncher(),
         targetOpener: RestoreTargetOpening = NSWorkspaceRestoreTargetOpener(),
         browserTabCapturer: BrowserTabCapturing = BrowserTabCaptureService(),
-        applicationActivator: RestoreApplicationActivating = NSWorkspaceRestoreApplicationActivator(),
+        applicationActivator: RestoreApplicationActivating = AXRestoreApplicationActivator(),
         telemetryLogger: TelemetryLogging = NoOpTelemetryLogger(),
+        spaces: RestoreSpaceCoordinator = RestoreSpaceCoordinator(access: .unavailable),
         discoveredApplicationsProvider: (() throws -> [DiscoveredApplication])? = nil,
         discoveryResultProvider: (() throws -> WindowDiscoveryResult)? = nil,
         runningApplicationBundleProvider: @escaping () -> Set<String> = {
@@ -78,6 +80,7 @@ struct RestoreEngine {
         self.browserTabCapturer = browserTabCapturer
         self.applicationActivator = applicationActivator
         self.telemetryLogger = telemetryLogger
+        self.spaces = spaces
         if let discoveryResultProvider {
             self.discoveryResultProvider = discoveryResultProvider
         } else if let discoveredApplicationsProvider {
@@ -117,6 +120,8 @@ struct RestoreEngine {
         }
 
         let currentDisplayState = displayResolver.captureDisplayState()
+        let spaceInventory = currentDisplayState.displays.isEmpty ? nil :
+            spaces.access.inventory(currentDisplayState.displays.map(\.id))
         var discoveryResult: WindowDiscoveryResult
         do {
             discoveryResult = try discoveryResultProvider()
@@ -128,6 +133,31 @@ struct RestoreEngine {
                 )
             )
             throw error
+        }
+        let unexposedApplications = discoveryResult.unexposedApplications
+        var recoveredWindowsBySavedID: [UUID: (pid: pid_t, windowID: CGWindowID, allowsRestore: Bool)] = [:]
+        for savedWindow in snapshot.windows {
+            guard let spaceInventory, let recovery = RestoreCGWindowRecovery(
+                ordinarySpaceIDs: spaceInventory.ordinarySpaceIDs,
+                membership: spaces.access.membership
+            ).candidate(
+                for: savedWindow,
+                savedWindows: snapshot.windows,
+                applications: unexposedApplications
+            ) else { continue }
+            let displayPlan = displayResolver.restorePlan(for: savedWindow, from: snapshot.sourceDisplayState, to: currentDisplayState)
+            let outcome = await spaces.prepare(
+                windowID: recovery.window.windowID,
+                displayID: displayPlan.resolvedDisplayID,
+                inventory: spaceInventory,
+                ordinaryWindow: true
+            )
+            recoveredWindowsBySavedID[savedWindow.id] = (recovery.pid, recovery.window.windowID, outcome == .moved || outcome == .alreadyVisible)
+            AppLogger.restore.info("Space recovery bundle=\(savedWindow.bundleIdentifier, privacy: .public) windowID=\(recovery.window.windowID) outcome=\(outcome.rawValue, privacy: .public).")
+            if outcome == .moved || outcome == .alreadyVisible {
+                // Only normal AX discovery can authorize geometry, never the CG-only candidate.
+                discoveryResult = try await rediscoverWindow(pid: recovery.pid, windowID: recovery.window.windowID).result
+            }
         }
         var discoveredApplications = discoveryResult.applications
         var timedOutWindowIDs: Set<UUID> = []
@@ -346,7 +376,21 @@ struct RestoreEngine {
             genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
             preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
             openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs
-        )
+        ).map { plan -> RestoreWindowPlan in
+            guard let expected = recoveredWindowsBySavedID[plan.savedWindow.id] else { return plan }
+            let matchesRecovery = plan.candidate.map { candidate in
+                candidate.pid == expected.pid &&
+                    liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID == expected.windowID
+            } ?? false
+            if matchesRecovery && expected.allowsRestore { return plan }
+            // Opening a missing target can create a new window; preserve normal target matching.
+            if !matchesRecovery && successfullyRequestedWebWindowIDs.contains(plan.savedWindow.id) {
+                return plan
+            }
+            // Never substitute a sibling or resubmit an unconfirmed asynchronous recovery move.
+            return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
+        }
 
         logBrowserWindowResolution(
             plans: plans,
@@ -368,11 +412,11 @@ struct RestoreEngine {
                 $0.candidate.bundleIdentifier == plan.savedWindow.bundleIdentifier
             }
             let filteredCandidateCount = discoveryResult.diagnostics.count {
-                $0.bundleIdentifier == plan.savedWindow.bundleIdentifier
+                $0.bundleIdentifier == plan.savedWindow.bundleIdentifier && $0.kind == .windowRejected
             }
             let readinessTimedOut = timedOutWindowIDs.contains(plan.savedWindow.id)
             guard let candidate = plan.candidate,
-                  let liveWindow = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window else {
+                  var liveWindow = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window else {
                 AppLogger.restore.info(
                     "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=none candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=false geometryAttemptCount=0 displayOutcome=unavailable result=skipped reason=\(plan.skip?.reason ?? RestoreSkipReason.windowNotFound, privacy: .public)."
                 )
@@ -401,15 +445,32 @@ struct RestoreEngine {
                 from: snapshot.sourceDisplayState,
                 to: currentDisplayState
             )
-            let result = try await windowApplier.apply(
-                savedWindow: plan.savedWindow,
-                targetFrame: restoreDisplayPlan.targetFrame,
-                to: liveWindow
+            let spaceOutcome = await spaces.prepare(
+                windowID: liveWindow.cgWindowID,
+                displayID: restoreDisplayPlan.resolvedDisplayID,
+                inventory: spaceInventory,
+                ordinaryWindow: liveWindow.role == "AXWindow" && liveWindow.subrole == "AXStandardWindow" && !liveWindow.isFullscreen
             )
+            var canApplyGeometry = spaceOutcome.permitsGeometry
+            if spaceOutcome == .moved, let windowID = liveWindow.cgWindowID {
+                let rediscovery = try await rediscoverWindow(pid: candidate.pid, windowID: windowID)
+                if let window = rediscovery.window { liveWindow = window } else { canApplyGeometry = false }
+            }
+            AppLogger.restore.info("Space restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) windowID=\(liveWindow.cgWindowID ?? 0) outcome=\(spaceOutcome.rawValue, privacy: .public).")
+            let result: RestoreWindowApplyResult
+            if canApplyGeometry {
+                result = try await windowApplier.apply(
+                    savedWindow: plan.savedWindow,
+                    targetFrame: restoreDisplayPlan.targetFrame,
+                    to: liveWindow
+                )
+            } else {
+                result = .failed(reason: RestoreSkipReason.desktopUnconfirmed)
+            }
             let expectedFrame = String(describing: restoreDisplayPlan.targetFrame)
             let finalFrame = result.finalObservedFrame.map(String.init(describing:)) ?? "unavailable"
             AppLogger.restore.info(
-                "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=\(plan.matchStrategy?.rawValue ?? "unknown", privacy: .public) candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=true geometryAttemptCount=\(result.attemptCount) expectedFrame=\(expectedFrame, privacy: .public) finalFrame=\(finalFrame, privacy: .public) displayOutcome=\(restoreDisplayPlan.outcome.rawValue, privacy: .public) result=\(result.didRestore ? "restored" : "skipped", privacy: .public)."
+                "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=\(plan.matchStrategy?.rawValue ?? "unknown", privacy: .public) candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=\(canApplyGeometry) geometryAttemptCount=\(result.attemptCount) expectedFrame=\(expectedFrame, privacy: .public) finalFrame=\(finalFrame, privacy: .public) displayOutcome=\(restoreDisplayPlan.outcome.rawValue, privacy: .public) result=\(result.didRestore ? "restored" : "skipped", privacy: .public)."
             )
             windowDiagnostics.append(
                 RestoreWindowDiagnostic(
@@ -419,13 +480,13 @@ struct RestoreEngine {
                     candidateCount: candidateCount,
                     filteredCandidateCount: filteredCandidateCount,
                     readinessTimedOut: readinessTimedOut,
-                    geometryAttempted: true,
+                    geometryAttempted: canApplyGeometry,
                     geometryAttemptCount: result.attemptCount,
                     expectedFrame: restoreDisplayPlan.targetFrame,
                     finalObservedFrame: result.finalObservedFrame,
                     displayOutcome: restoreDisplayPlan.outcome,
                     result: result.didRestore ? "restored" : "skipped",
-                    reason: result.failureReason
+                    reason: result.failureReason ?? (spaceOutcome == .identityUnconfirmed ? RestoreDowngradeReason.windowIdentityUnconfirmed : nil)
                 )
             )
             if result.didRestore {
@@ -439,6 +500,13 @@ struct RestoreEngine {
                 )
                 if let downgrade = result.downgrade {
                     downgradedItems.append(downgrade)
+                }
+                if spaceOutcome == .identityUnconfirmed {
+                    downgradedItems.append(RestoreDowngrade(
+                        bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                        windowTitle: plan.savedWindow.windowTitle,
+                        reason: RestoreDowngradeReason.windowIdentityUnconfirmed
+                    ))
                 }
                 if let fallback = restoreDisplayPlan.fallback {
                     displayFallbacks.append(fallback)
@@ -456,7 +524,14 @@ struct RestoreEngine {
 
         await RestoreWindowZOrderRestorer(
             windowApplier: windowApplier,
-            applicationActivator: applicationActivator
+            applicationActivator: applicationActivator,
+            canStack: { item in
+                let displayPlan = displayResolver.restorePlan(for: item.savedWindow, from: snapshot.sourceDisplayState, to: currentDisplayState)
+                return spaces.canStack(window: item.liveWindow, displayID: displayPlan.resolvedDisplayID, inventory: spaceInventory)
+            },
+            canActivate: { item in
+                spaces.canActivate(windowID: item.liveWindow.cgWindowID, processIdentifier: item.processIdentifier, inventory: spaceInventory)
+            }
         ).restore(restoredWindowZOrderItems)
 
         let restoreResult = RestoreResult(
@@ -471,6 +546,18 @@ struct RestoreEngine {
         )
         telemetryLogger.log(.restoreCompleted(snapshot: snapshot, result: restoreResult))
         return restoreResult
+    }
+
+    private func rediscoverWindow(pid: pid_t, windowID: CGWindowID) async throws -> (result: WindowDiscoveryResult, window: DiscoveredWindow?) {
+        var result = try discoveryResultProvider()
+        for attempt in 0..<20 {
+            let windows = result.applications.filter { $0.pid == pid }.flatMap(\.windows).filter { $0.cgWindowID == windowID }
+            if windows.count == 1 { return (result, windows[0]) }
+            guard !Task.isCancelled, attempt < 19 else { break }
+            await launchPollSleeper(0.05)
+            result = try discoveryResultProvider()
+        }
+        return (result, nil)
     }
 
     private func rediscoverApplicationsUntilRestoreReadiness(
@@ -791,6 +878,8 @@ struct RestoreWindowZOrderRestorer {
     let applicationActivator: RestoreApplicationActivating
     let metadataReader: CGWindowMetadataReader
     let settleSleeper: () async -> Void
+    let canStack: (RestoreWindowZOrderItem) -> Bool
+    let canActivate: (RestoreWindowZOrderItem) -> Bool
 
     init(
         planner: RestoreWindowZOrderPlanner = RestoreWindowZOrderPlanner(),
@@ -799,28 +888,41 @@ struct RestoreWindowZOrderRestorer {
         metadataReader: CGWindowMetadataReader = CGWindowMetadataReader(),
         settleSleeper: @escaping () async -> Void = {
             try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        },
+        canStack: @escaping (RestoreWindowZOrderItem) -> Bool = { $0.liveWindow.isOnScreen == true },
+        canActivate: @escaping (RestoreWindowZOrderItem) -> Bool = { _ in true }
     ) {
         self.planner = planner
         self.windowApplier = windowApplier
         self.applicationActivator = applicationActivator
         self.metadataReader = metadataReader
         self.settleSleeper = settleSleeper
+        self.canStack = canStack
+        self.canActivate = canActivate
     }
 
     func restore(_ items: [RestoreWindowZOrderItem]) async {
         let raiseOrder = planner.raiseOrder(for: items)
         for item in raiseOrder {
-            // Select the saved window before activation brings an app's main window forward.
-            let focusResult = windowApplier.focus(item.liveWindow)
-            let didActivate = await applicationActivator.activate(
-                processIdentifier: item.processIdentifier
-            )
+            guard canStack(item) else { continue }
+            // Activation can select a sibling window. Only focus/activate after checking the
+            // whole application's fresh Space membership, and check again after AX focus.
+            var activationAllowed = canActivate(item)
+            var focusResult = RestoreWindowFocusResult(didRaise: false, didSetMain: false, didSetFocused: false)
+            var didActivate = false
+            if activationAllowed {
+                focusResult = windowApplier.focus(item.liveWindow)
+                activationAllowed = canStack(item) && canActivate(item)
+                if activationAllowed {
+                    didActivate = await applicationActivator.activate(processIdentifier: item.processIdentifier)
+                }
+            }
+            guard canStack(item) else { continue }
             let didRaise = windowApplier.raise(item.liveWindow)
             let didSettle = await waitUntilRaised(item, among: raiseOrder)
             let observedOrder = observedOrder(for: raiseOrder)
             AppLogger.restore.info(
-                "Window stacking restore bundle=\(item.savedWindow.bundleIdentifier, privacy: .public) windowID=\(item.liveWindow.cgWindowID ?? 0) savedOrder=\(item.savedWindow.zOrderHint ?? -1) activated=\(didActivate) raised=\(didRaise) settled=\(didSettle) main=\(focusResult.didSetMain) focused=\(focusResult.didSetFocused) observedFrontToBack=\(observedOrder, privacy: .public)."
+                "Window stacking restore bundle=\(item.savedWindow.bundleIdentifier, privacy: .public) windowID=\(item.liveWindow.cgWindowID ?? 0) savedOrder=\(item.savedWindow.zOrderHint ?? -1) activationAllowed=\(activationAllowed) activated=\(didActivate) raised=\(didRaise) settled=\(didSettle) main=\(focusResult.didSetMain) focused=\(focusResult.didSetFocused) observedFrontToBack=\(observedOrder, privacy: .public)."
             )
         }
     }
@@ -829,6 +931,7 @@ struct RestoreWindowZOrderRestorer {
         _ item: RestoreWindowZOrderItem,
         among items: [RestoreWindowZOrderItem]
     ) async -> Bool {
+        // This verifies order among saved items only, not visibility above unrelated apps.
         guard let windowID = item.liveWindow.cgWindowID else { return false }
         var stableObservations = 0
         for attempt in 0..<20 {
@@ -1164,7 +1267,7 @@ struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
     }
 }
 
-struct NSWorkspaceRestoreApplicationActivator: RestoreApplicationActivating {
+struct AXRestoreApplicationActivator: RestoreApplicationActivating {
     @MainActor
     func activate(processIdentifier: pid_t) async -> Bool {
         guard let application = NSRunningApplication(
@@ -1173,8 +1276,15 @@ struct NSWorkspaceRestoreApplicationActivator: RestoreApplicationActivating {
             return false
         }
 
-        NSApp.yieldActivation(to: application)
-        guard application.activate(options: []) else {
+        // AppKit can decline activation from a background menu-bar app. Restore already
+        // has Accessibility authorization, and the caller checks the app's Space membership.
+        let error = AXUIElementSetAttributeValue(
+            AXUIElementCreateApplication(processIdentifier),
+            kAXFrontmostAttribute as CFString,
+            kCFBooleanTrue
+        )
+        guard error == .success else {
+            AppLogger.restore.info("Application activation pid=\(processIdentifier) AXFrontmost error=\(error.rawValue).")
             return false
         }
         for _ in 0..<20 {
@@ -1918,8 +2028,13 @@ enum RestoreSkipReason {
     static let appNotRunning = "app not running"
     static let windowNotFound = "window not found"
     static let openedBrowserWindowNotIdentified = "opened browser window could not be identified"
+    static let desktopUnconfirmed = "window desktop could not be confirmed"
     static let restoreFailed = "restore failed"
     static let windowGeometryDidNotSettle = "window geometry did not settle"
+}
+
+enum RestoreDowngradeReason {
+    static let windowIdentityUnconfirmed = "window identity could not be confirmed"
 }
 
 private extension CGRect {

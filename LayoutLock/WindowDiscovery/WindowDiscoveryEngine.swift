@@ -37,6 +37,7 @@ struct DiscoveredWindow {
     let isFullscreen: Bool
     let isMain: Bool
     let isVisible: Bool
+    // Only a direct AX identity confirmed against the owning process's CG metadata.
     let cgWindowID: CGWindowID?
     let ownerName: String?
     let cgLayer: Int?
@@ -91,15 +92,25 @@ struct DiscoveredWindow {
     }
 }
 
+struct UnexposedApplicationWindows {
+    let bundleIdentifier: String
+    let pid: pid_t
+    let windows: [CGWindowMetadata]
+}
+
 struct WindowDiscoveryResult {
     let applications: [DiscoveredApplication]
     let diagnostics: [WindowDiscoveryDiagnostic]
+    var unexposedApplications: [UnexposedApplicationWindows] = []
 }
 
 struct WindowDiscoveryDiagnostic: Equatable {
+    enum Kind: String { case windowRejected, applicationEnumeration }
+
     let bundleIdentifier: String?
     let processIdentifier: Int32?
     let reason: String
+    var kind: Kind = .windowRejected
 }
 
 struct RunningApplicationSnapshot {
@@ -153,6 +164,7 @@ struct WindowDiscoveryEngine {
     private let runningApplicationsProvider: () -> [RunningApplicationSnapshot]
     private let appElementProvider: (pid_t) -> AXUIElement
     private let cgWindowMetadataProvider: (Set<pid_t>) -> [pid_t: [CGWindowMetadata]]
+    private let windowIDProvider: (AXUIElement) -> CGWindowID?
     private let applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
     private let currentProcessIdentifier: pid_t
 
@@ -166,7 +178,8 @@ struct WindowDiscoveryEngine {
         currentProcessIdentifier: pid_t = ProcessInfo.processInfo.processIdentifier,
         runningApplicationsProvider: (() -> [RunningApplicationSnapshot])? = nil,
         appElementProvider: @escaping (pid_t) -> AXUIElement = AXUIElementCreateApplication,
-        cgWindowMetadataProvider: ((Set<pid_t>) -> [pid_t: [CGWindowMetadata]])? = nil
+        cgWindowMetadataProvider: ((Set<pid_t>) -> [pid_t: [CGWindowMetadata]])? = nil,
+        windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = AXAttributeReader.windowID
     ) {
         self.trustChecker = trustChecker
         self.attributeReader = attributeReader
@@ -179,6 +192,7 @@ struct WindowDiscoveryEngine {
             cgWindowMetadataReader.readWindowMetadata(processIdentifiers: $0)
         }
         self.currentProcessIdentifier = currentProcessIdentifier
+        self.windowIDProvider = windowIDProvider
     }
 
     func discoverRunningWindows() throws -> [DiscoveredApplication] {
@@ -215,7 +229,17 @@ struct WindowDiscoveryEngine {
             )
         }
 
-        return WindowDiscoveryResult(applications: applications, diagnostics: diagnostics)
+        let discoveredPIDs = Set(applications.map(\.pid))
+        let unexposedApplications = candidateApplications.compactMap { application -> UnexposedApplicationWindows? in
+            guard !discoveredPIDs.contains(application.processIdentifier),
+                  let bundleIdentifier = application.bundleIdentifier else { return nil }
+            return UnexposedApplicationWindows(
+                bundleIdentifier: bundleIdentifier,
+                pid: application.processIdentifier,
+                windows: cgWindowMetadataByProcessIdentifier[application.processIdentifier] ?? []
+            )
+        }
+        return WindowDiscoveryResult(applications: applications, diagnostics: diagnostics, unexposedApplications: unexposedApplications)
     }
 
     private func candidateApplications(
@@ -283,10 +307,18 @@ struct WindowDiscoveryEngine {
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver,
         diagnostics: inout [WindowDiscoveryDiagnostic]
     ) -> [DiscoveredWindow] {
-        let windows = attributeReader.elementArray(
-            from: appElement,
-            attribute: kAXWindowsAttribute as CFString
-        ) ?? []
+        let windowRead = attributeReader.windows(from: appElement)
+        let windows = windowRead.elements
+        if windows.isEmpty {
+            diagnostics.append(WindowDiscoveryDiagnostic(
+                bundleIdentifier: bundleIdentifier,
+                processIdentifier: Int32(processIdentifier),
+                reason: windowRead.error == .success
+                    ? "AXWindows returned no windows"
+                    : "AXWindows failed (\(windowRead.error.rawValue))",
+                kind: .applicationEnumeration
+            ))
+        }
 
         var remainingCGWindowMetadata = cgWindowMetadata
         var discoveredWindows: [DiscoveredWindow] = []
@@ -308,19 +340,24 @@ struct WindowDiscoveryEngine {
                 continue
             }
 
-            let cgWindowMatch = bestCGWindowMatch(
+            let resolvedWindowID = windowIDProvider(window)
+            let identifiedMetadata = cgWindowMetadata.first {
+                $0.windowID != 0 && $0.windowID == resolvedWindowID && $0.processIdentifier == processIdentifier
+            }
+            // Geometry can supply presentation hints, but never an identity for Space operations.
+            let cgWindowMatch = identifiedMetadata ?? bestCGWindowMatch(
                 for: axWindowSnapshot,
                 candidates: remainingCGWindowMetadata
-            )
+            )?.metadata
 
             if let cgWindowMatch {
-                remainingCGWindowMetadata.remove(at: cgWindowMatch.index)
+                remainingCGWindowMetadata.removeAll { $0.windowID == cgWindowMatch.windowID }
             }
 
             if let rejectionReason = unmanageableWindowRejectionReason(
                 role: axWindowSnapshot.role,
                 subrole: axWindowSnapshot.subrole,
-                cgWindowMetadata: cgWindowMatch?.metadata
+                cgWindowMetadata: cgWindowMatch
             ) {
                 diagnostics.append(
                     WindowDiscoveryDiagnostic(
@@ -335,7 +372,8 @@ struct WindowDiscoveryEngine {
             discoveredWindows.append(discoveredWindow(
                 axElement: window,
                 from: axWindowSnapshot,
-                cgWindowMetadata: cgWindowMatch?.metadata
+                cgWindowMetadata: cgWindowMatch,
+                confirmedWindowID: identifiedMetadata?.windowID
             ))
         }
 
@@ -465,7 +503,8 @@ struct WindowDiscoveryEngine {
     private func discoveredWindow(
         axElement: AXUIElement,
         from axWindow: AXWindowSnapshot,
-        cgWindowMetadata: CGWindowMetadata?
+        cgWindowMetadata: CGWindowMetadata?,
+        confirmedWindowID: CGWindowID?
     ) -> DiscoveredWindow {
         let isVisible = cgWindowMetadata?.isOnScreen ?? !axWindow.isHidden
 
@@ -482,7 +521,7 @@ struct WindowDiscoveryEngine {
             isFullscreen: axWindow.isFullscreen,
             isMain: axWindow.isMain,
             isVisible: isVisible,
-            cgWindowID: cgWindowMetadata?.windowID,
+            cgWindowID: confirmedWindowID,
             ownerName: cgWindowMetadata?.ownerName,
             cgLayer: cgWindowMetadata?.layer,
             zOrderHint: cgWindowMetadata?.zOrderHint,

@@ -66,7 +66,8 @@ struct LayoutLockApp: App {
                 ),
                 restoreEngine: RestoreEngine(
                     snapshotStore: snapshotStore,
-                    telemetryLogger: telemetryLogger
+                    telemetryLogger: telemetryLogger,
+                    spaces: RestoreSpaceCoordinator(access: .live)
                 ),
                 operationOverlayPresenter: operationOverlayController,
                 entitlementProvider: entitlementController

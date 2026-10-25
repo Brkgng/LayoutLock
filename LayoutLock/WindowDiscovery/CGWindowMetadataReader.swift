@@ -51,6 +51,19 @@ struct CGWindowMetadataReader {
         return windowsByProcessIdentifier
     }
 
+    /// A complete fresh app inventory for activation safety; query failure must remain unknown.
+    func readWindowIDs(processIdentifier: pid_t) -> [CGWindowID]? {
+        guard let rows = windowListProvider(.optionAll) else { return nil }
+        var windowIDs: [CGWindowID] = []
+        for row in rows {
+            guard let owner = row[kCGWindowOwnerPID as String] as? NSNumber else { return nil }
+            guard owner.int32Value == processIdentifier else { continue }
+            guard let number = row[kCGWindowNumber as String] as? NSNumber, number.uint32Value != 0 else { return nil }
+            windowIDs.append(number.uint32Value)
+        }
+        return windowIDs
+    }
+
     private func onscreenZOrderByWindowID() -> [CGWindowID: Int] {
         guard let rawWindowList = windowListProvider(.optionOnScreenOnly) else {
             return [:]

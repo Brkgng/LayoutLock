@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AC0130000000000000000004 /* RestoreSpacesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000003 /* RestoreSpacesTests.swift */; };
+		AC0130000000000000000002 /* RestoreSpaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000001 /* RestoreSpaces.swift */; };
 		A00000000000000000000002 /* LayoutLockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* LayoutLockApp.swift */; };
 		A0000000000000000000001C /* MenuBarContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* MenuBarContentView.swift */; };
 		A0000000000000000000001E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001F /* SettingsView.swift */; };
@@ -133,6 +135,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AC0130000000000000000003 /* RestoreSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpacesTests.swift; sourceTree = "<group>"; };
+		AC0130000000000000000001 /* RestoreSpaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpaces.swift; sourceTree = "<group>"; };
 		A0000000000000000000000A /* LayoutLock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLock.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000012 /* LayoutLockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLockApp.swift; sourceTree = "<group>"; };
 		A0000000000000000000001D /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
@@ -322,6 +326,7 @@
 				A00000000000000000000056 /* PermissionCoordinatorTests.swift */,
 				B00000000000000000000014 /* PermissionInterventionRouterTests.swift */,
 				A00000000000000000000064 /* RestoreWindowMatchPlannerTests.swift */,
+				AC0130000000000000000003 /* RestoreSpacesTests.swift */,
 				A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */,
 				A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */,
 				E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */,
@@ -423,6 +428,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000062 /* RestoreEngine.swift */,
+				AC0130000000000000000001 /* RestoreSpaces.swift */,
 				A0000000000000000000003D /* RestoreResult.swift */,
 			);
 			path = Restore;
@@ -722,6 +728,7 @@
 				A00000000000000000000026 /* PermissionCoordinator.swift in Sources */,
 				B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */,
 				A00000000000000000000061 /* RestoreEngine.swift in Sources */,
+				AC0130000000000000000002 /* RestoreSpaces.swift in Sources */,
 				A0000000000000000000003C /* RestoreResult.swift in Sources */,
 				A0000000000000000000001E /* SettingsView.swift in Sources */,
 				A00000000000000000000042 /* SnapshotCaptureService.swift in Sources */,
@@ -758,6 +765,7 @@
 				A00000000000000000000055 /* PermissionCoordinatorTests.swift in Sources */,
 				B00000000000000000000013 /* PermissionInterventionRouterTests.swift in Sources */,
 				A00000000000000000000063 /* RestoreWindowMatchPlannerTests.swift in Sources */,
+				AC0130000000000000000004 /* RestoreSpacesTests.swift in Sources */,
 				A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */,
 				A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */,
 				E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */,
