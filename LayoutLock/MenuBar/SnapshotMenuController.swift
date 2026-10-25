@@ -1,7 +1,5 @@
 import Foundation
 
-private let restoreSkippedWindowDetailLimit = 5
-
 private func runSnapshotOperationOffMain<T>(_ operation: @escaping () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
         DispatchQueue.global(qos: .userInitiated).async {
@@ -38,11 +36,6 @@ final class SnapshotMenuController: ObservableObject {
 
         var isError: Bool { kind == .error }
         var isWarning: Bool { kind == .warning }
-    }
-
-    private struct RestoreCompletionMessage {
-        let summary: String
-        let detail: String?
     }
 
     @Published private(set) var snapshotSummaries: [SnapshotSummary]
@@ -292,10 +285,7 @@ final class SnapshotMenuController: ObservableObject {
                     kind: .info
                 )
                 let completion = restoreCompletionMessage(snapshotName: snapshotName, result: result)
-                operationOverlayPresenter.showRestoreCompletion(
-                    summary: completion.summary,
-                    detail: completion.detail
-                )
+                operationOverlayPresenter.showRestoreCompletion(completion)
                 didShowRestoreCompletion = true
                 restoreCompletionID = UUID()
             } catch {
@@ -875,12 +865,15 @@ final class SnapshotMenuController: ObservableObject {
     ) -> RestoreCompletionMessage {
         let restoredLabel = result.restoredWindows == 1 ? "window" : "windows"
         let details = restoreSummaryDetails(for: result)
-        let summaryDetails = details.isEmpty ? "" : ", \(details.joined(separator: ", "))"
-        let summary = "Restored \"\(snapshotName)\": \(result.restoredWindows) \(restoredLabel) restored\(summaryDetails)."
+        let hasIssues = !details.isEmpty
+        let summary = (["\(result.restoredWindows) \(restoredLabel) restored"] + details)
+            .joined(separator: " · ")
 
         return RestoreCompletionMessage(
+            title: "\"\(snapshotName)\" restored\(hasIssues ? " with issues" : "")",
             summary: summary,
-            detail: restoreIssueDetails(for: result)
+            issues: result.targetIssues.map(targetIssueDetail) + result.skippedItems.map(skippedWindowDetail),
+            hasIssues: hasIssues
         )
     }
 
@@ -894,70 +887,26 @@ final class SnapshotMenuController: ObservableObject {
         ].compactMap { $0 }
     }
 
-    private func restoreIssueDetails(for result: RestoreResult) -> String? {
-        let details = [
-            targetIssueDetails(for: result.targetIssues),
-            skippedWindowDetails(for: result.skippedItems)
-        ].compactMap { $0 }
-
-        return details.isEmpty ? nil : details.joined(separator: "\n")
-    }
-
-    private func targetIssueDetails(for targetIssues: [RestoreTargetIssue]) -> String? {
-        guard !targetIssues.isEmpty else {
-            return nil
-        }
-
-        var detailLines = targetIssues
-            .prefix(restoreSkippedWindowDetailLimit)
-            .map(targetIssueDetail)
-        let remainingCount = targetIssues.count - detailLines.count
-        if remainingCount > 0 {
-            detailLines.append("and \(remainingCount) more target issues")
-        }
-
-        return detailLines.joined(separator: "\n")
-    }
-
-    private func targetIssueDetail(for issue: RestoreTargetIssue) -> String {
+    private func targetIssueDetail(for issue: RestoreTargetIssue) -> RestoreCompletionIssue {
         let appName = appNameResolver(issue.bundleIdentifier)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = appName.isEmpty ? issue.bundleIdentifier : appName
         let targetDescription = issue.target.kind == .webURL
             ? issue.target.url.absoluteString
             : (issue.target.url.path as NSString).abbreviatingWithTildeInPath
-        return "\(displayName) (\(targetDescription)): \(issue.reason.userFacingDescription)"
+        return RestoreCompletionIssue(appName: displayName, context: targetDescription, reason: issue.reason.userFacingDescription)
     }
 
-    private func skippedWindowDetails(for skippedItems: [RestoreSkip]) -> String? {
-        guard !skippedItems.isEmpty else {
-            return nil
-        }
-
-        var detailLines = skippedItems
-            .prefix(restoreSkippedWindowDetailLimit)
-            .map(skippedWindowDetail)
-        let remainingCount = skippedItems.count - detailLines.count
-        if remainingCount > 0 {
-            detailLines.append("and \(remainingCount) more skipped")
-        }
-
-        return detailLines.joined(separator: "\n")
-    }
-
-    private func skippedWindowDetail(for skippedItem: RestoreSkip) -> String {
+    private func skippedWindowDetail(for skippedItem: RestoreSkip) -> RestoreCompletionIssue {
         let appName = appNameResolver(skippedItem.bundleIdentifier)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = appName.isEmpty ? skippedItem.bundleIdentifier : appName
-        let windowDescription: String
-        if let windowTitle = skippedItem.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !windowTitle.isEmpty {
-            windowDescription = "\(displayName) (\(windowTitle))"
-        } else {
-            windowDescription = displayName
-        }
-
-        return "\(windowDescription): \(friendlySkipReason(skippedItem.reason))"
+        let title = skippedItem.windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RestoreCompletionIssue(
+            appName: displayName,
+            context: title?.isEmpty == false ? title : nil,
+            reason: friendlySkipReason(skippedItem.reason)
+        )
     }
 
     private func friendlySkipReason(_ reason: String) -> String {

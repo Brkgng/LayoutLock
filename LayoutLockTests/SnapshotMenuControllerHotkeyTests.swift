@@ -1,3 +1,4 @@
+import AppKit
 import Carbon
 import Foundation
 import XCTest
@@ -823,7 +824,9 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         await task?.value
 
         XCTAssertEqual(overlayPresenter.hideCount, 0)
-        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["Restored \"Coding\": 0 windows restored."])
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["0 windows restored"])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, false)
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
     }
 
@@ -886,7 +889,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["Restored \"Desk\": 1 window restored, 1 display fallback."]
+            ["1 window restored · 1 display fallback"]
         )
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
         XCTAssertEqual(
@@ -956,7 +959,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["Restored \"Desk\": 1 window restored."]
+            ["1 window restored"]
         )
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
     }
@@ -1014,16 +1017,18 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["Restored \"Coding\": 0 windows restored, 3 skipped."]
+            ["0 windows restored · 3 skipped"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
             ["Editor (ScrollSnap): Application is not running.\nEditor (Settings): Application is not running.\nBrowser: Application is not running."]
         )
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with issues")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
         XCTAssertEqual(controller.status?.message, "Restored \"Coding\": 0 windows restored, 3 skipped.")
     }
 
-    func testRestoreSnapshotCompletionLimitsSkippedWindowDetails() async throws {
+    func testRestoreSnapshotCompletionPreservesAllSkippedWindowDetails() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         try store.save(
@@ -1050,7 +1055,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
-            ["Editor (Window 1): Application is not running.\nEditor (Window 2): Application is not running.\nEditor (Window 3): Application is not running.\nEditor (Window 4): Application is not running.\nEditor (Window 5): Application is not running.\nand 2 more skipped"]
+            ["Editor (Window 1): Application is not running.\nEditor (Window 2): Application is not running.\nEditor (Window 3): Application is not running.\nEditor (Window 4): Application is not running.\nEditor (Window 5): Application is not running.\nEditor (Window 6): Application is not running.\nEditor (Window 7): Application is not running."]
         )
     }
 
@@ -1086,7 +1091,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["Restored \"Coding\": 0 windows restored, 1 skipped, 1 target issue."]
+            ["0 windows restored · 1 skipped · 1 target issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
@@ -1132,7 +1137,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["Restored \"Browsing\": 0 windows restored, 1 skipped, 1 target issue."]
+            ["0 windows restored · 1 skipped · 1 target issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
@@ -1877,6 +1882,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 @MainActor
 private final class RecordingOperationOverlayPresenter: OperationOverlayPresenting {
     private(set) var shownKinds: [OperationOverlayKind] = []
+    private(set) var restoreCompletions: [RestoreCompletionMessage] = []
     private(set) var restoreCompletionSummaries: [String] = []
     private(set) var restoreCompletionDetails: [String?] = []
     private(set) var hideCount = 0
@@ -1885,9 +1891,14 @@ private final class RecordingOperationOverlayPresenter: OperationOverlayPresenti
         shownKinds.append(kind)
     }
 
-    func showRestoreCompletion(summary: String, detail: String?) {
-        restoreCompletionSummaries.append(summary)
-        restoreCompletionDetails.append(detail)
+    func showRestoreCompletion(_ completion: RestoreCompletionMessage) {
+        restoreCompletions.append(completion)
+        restoreCompletionSummaries.append(completion.summary)
+        let details = completion.issues.map { issue in
+            let context = issue.context.map { " (\($0))" } ?? ""
+            return "\(issue.appName)\(context): \(issue.reason)"
+        }
+        restoreCompletionDetails.append(details.isEmpty ? nil : details.joined(separator: "\n"))
     }
 
     func hideOverlay() {
@@ -1913,7 +1924,7 @@ private final class SuspendingOperationOverlayPresenter: OperationOverlayPresent
         showOverlayContinuation = nil
     }
 
-    func showRestoreCompletion(summary _: String, detail _: String?) {}
+    func showRestoreCompletion(_: RestoreCompletionMessage) {}
 
     func hideOverlay() {
         hideCount += 1
@@ -1951,5 +1962,113 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
             didSetMain: true,
             didSetFocused: true
         )
+    }
+}
+
+@MainActor
+final class OperationCompletionToastTests: XCTestCase {
+    func testLongTextStaysWithinCenteredToastOnEveryScreen() throws {
+        XCTAssertFalse(NSScreen.screens.isEmpty)
+        for screen in NSScreen.screens {
+            let completion = RestoreCompletionMessage(
+                title: "\"\(String(repeating: "Long layout name ", count: 30))\" restored with issues",
+                summary: "123 windows restored · 45 skipped · 12 target issues · 3 display fallbacks",
+                issues: (0..<50).map { _ in RestoreCompletionIssue(appName: "Chrome", context: "Very long window title", reason: "Matching window was not found.") },
+                hasIssues: true
+            )
+            let window = OperationCompletionToastWindow(screen: screen, completion: completion, onDismiss: {})
+            defer { window.close() }
+            let content = try XCTUnwrap(window.contentView)
+            content.layoutSubtreeIfNeeded()
+
+            XCTAssertEqual(window.frame.midX, screen.visibleFrame.midX, accuracy: 0.5)
+            XCTAssertEqual(content.frame.width, window.frame.width, accuracy: 0.5)
+            XCTAssertLessThan(window.frame.height, 200)
+            XCTAssertFalse(content.hasAmbiguousLayout)
+            let labels = descendants(of: content).compactMap { $0 as? NSTextField }
+            XCTAssertEqual(labels.count, 2)
+            for label in labels {
+                let frame = label.convert(label.bounds, to: content)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, content.bounds.maxX)
+                XCTAssertGreaterThanOrEqual(frame.minY, 0)
+                XCTAssertLessThanOrEqual(frame.maxY, content.bounds.maxY)
+            }
+            let closeButton = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityLabel() == "Dismiss notification" })
+            XCTAssertLessThanOrEqual(closeButton.convert(closeButton.bounds, to: content).maxX, content.bounds.maxX)
+            XCTAssertTrue(descendants(of: content).contains { ($0 as? NSButton)?.title == "Details…" })
+        }
+    }
+
+    func testSuccessHasNoDetailsButtonAndIssueLengthDoesNotResizeToast() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        func makeWindow(detail: String?) -> OperationCompletionToastWindow {
+            OperationCompletionToastWindow(
+                screen: screen,
+                completion: RestoreCompletionMessage(title: "\"test\" restored", summary: "8 windows restored", issues: detail.map { [RestoreCompletionIssue(appName: "Chrome", context: $0, reason: "Matching window was not found.")] } ?? [], hasIssues: false),
+                onDismiss: {}
+            )
+        }
+        let success = makeWindow(detail: nil)
+        let short = makeWindow(detail: "One issue")
+        let long = makeWindow(detail: String(repeating: "Long issue details\n", count: 100))
+        defer { [success, short, long].forEach { $0.close() } }
+        XCTAssertFalse(descendants(of: try XCTUnwrap(success.contentView)).contains { ($0 as? NSButton)?.title == "Details…" })
+        XCTAssertEqual(short.frame.size, long.frame.size)
+    }
+
+    func testDetailsSeparateIssuesAndWrapLongWindowTitles() throws {
+        let issues = [
+            RestoreCompletionIssue(appName: "OpenChamber", context: "Harita Kafasi | OpenChamber", reason: "Matching window was not found."),
+            RestoreCompletionIssue(appName: "Google Chrome", context: String(repeating: "Long window title · ", count: 20), reason: "Opened browser window could not be matched.")
+        ]
+        let window = RestoreCompletionDetailsWindow(completion: RestoreCompletionMessage(
+            title: "\"test\" restored with issues", summary: "6 windows restored · 2 skipped", issues: issues, hasIssues: true
+        ))
+        defer { window.close() }
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let views = descendants(of: content)
+        let labels = views.compactMap { $0 as? NSTextField }
+        XCTAssertEqual(views.compactMap { $0 as? NSBox }.count, 2)
+        for issue in issues {
+            XCTAssertTrue(labels.contains { $0.stringValue == issue.appName && $0.font?.pointSize == 14 })
+            XCTAssertTrue(labels.contains { $0.stringValue == issue.reason && $0.font?.pointSize == 14 })
+            XCTAssertTrue(labels.contains { $0.stringValue == issue.context })
+        }
+        XCTAssertFalse(content.hasAmbiguousLayout)
+        XCTAssertEqual(content.frame.width, 560, accuracy: 0.5)
+        XCTAssertLessThan(content.frame.height, 520)
+        let scroll = try XCTUnwrap(views.compactMap { $0 as? NSScrollView }.first)
+        let document = try XCTUnwrap(scroll.documentView)
+        for label in labels where label.stringValue != "\"test\" restored with issues" && label.stringValue != "6 windows restored · 2 skipped" {
+            let frame = label.convert(label.bounds, to: document)
+            XCTAssertGreaterThanOrEqual(frame.minX, 0)
+            XCTAssertLessThanOrEqual(frame.maxX, document.bounds.maxX)
+        }
+    }
+
+    func testDetailsScrollManyIssuesAndSizeToShortResults() throws {
+        let issue = RestoreCompletionIssue(appName: "Editor", context: "Project", reason: "Matching window was not found.")
+        func makeWindow(count: Int) -> RestoreCompletionDetailsWindow {
+            RestoreCompletionDetailsWindow(completion: RestoreCompletionMessage(
+                title: "Restore finished", summary: "6 windows restored", issues: Array(repeating: issue, count: count), hasIssues: true
+            ))
+        }
+        let short = makeWindow(count: 1)
+        let long = makeWindow(count: 30)
+        defer { [short, long].forEach { $0.close() } }
+        for window in [short, long] { window.contentView?.layoutSubtreeIfNeeded() }
+        XCTAssertLessThan(short.frame.height, long.frame.height)
+        let scroll = try XCTUnwrap(descendants(of: try XCTUnwrap(long.contentView)).compactMap { $0 as? NSScrollView }.first)
+        XCTAssertGreaterThan(try XCTUnwrap(scroll.documentView).frame.height, scroll.contentSize.height)
+        XCTAssertLessThanOrEqual(scroll.frame.height, 320)
+        XCTAssertEqual(scroll.documentVisibleRect.minY, 0, accuracy: 0.5)
+        XCTAssertTrue(try XCTUnwrap(scroll.documentView).isFlipped)
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
     }
 }
