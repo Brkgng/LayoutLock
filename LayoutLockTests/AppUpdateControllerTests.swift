@@ -3,31 +3,19 @@ import XCTest
 
 @MainActor
 final class AppUpdateControllerTests: XCTestCase {
-    func testLaunchCheckRunsExactlyOnceWhenEnabled() {
+    func testLaunchCheckRunsExactlyOnce() {
         var launchCheck = AppUpdateLaunchCheck()
         var checkCount = 0
 
-        launchCheck.performIfEnabled(true) {
+        launchCheck.perform {
             checkCount += 1
         }
-        launchCheck.performIfEnabled(true) {
+        launchCheck.perform {
             checkCount += 1
         }
 
         XCTAssertEqual(checkCount, 1)
         XCTAssertTrue(launchCheck.hasChecked)
-    }
-
-    func testLaunchCheckDoesNotRunWhenDisabled() {
-        var launchCheck = AppUpdateLaunchCheck()
-        var checkCount = 0
-
-        launchCheck.performIfEnabled(false) {
-            checkCount += 1
-        }
-
-        XCTAssertEqual(checkCount, 0)
-        XCTAssertFalse(launchCheck.hasChecked)
     }
 
     func testFindingUpdatePublishesVersionsAndActionTitle() {
@@ -78,22 +66,26 @@ final class AppUpdateControllerTests: XCTestCase {
         XCTAssertNotNil(controller.availableUpdate)
     }
 
-    func testAutomaticCheckPreferenceChangesRemainSynchronized() {
+    func testAutomaticChecksReenablePersistedDisabledPreference() {
+        let defaults = UserDefaults.standard
+        let preferenceKey = "SUEnableAutomaticChecks"
+        let originalPreference = defaults.object(forKey: preferenceKey)
+        defer {
+            if let originalPreference {
+                defaults.set(originalPreference, forKey: preferenceKey)
+            } else {
+                defaults.removeObject(forKey: preferenceKey)
+            }
+        }
+        defaults.set(false, forKey: preferenceKey)
         let controller = AppUpdateController(startingUpdater: false)
+        XCTAssertFalse(controller.updaterAutomaticallyChecksForUpdates)
+        XCTAssertFalse(defaults.bool(forKey: preferenceKey))
 
-        controller.setAutomaticallyChecksForUpdates(true)
-        XCTAssertTrue(controller.automaticallyChecksForUpdates)
-        XCTAssertEqual(
-            controller.automaticallyChecksForUpdates,
-            controller.updaterAutomaticallyChecksForUpdates
-        )
+        controller.enableAutomaticUpdateChecks()
 
-        controller.setAutomaticallyChecksForUpdates(false)
-        XCTAssertFalse(controller.automaticallyChecksForUpdates)
-        XCTAssertEqual(
-            controller.automaticallyChecksForUpdates,
-            controller.updaterAutomaticallyChecksForUpdates
-        )
+        XCTAssertTrue(controller.updaterAutomaticallyChecksForUpdates)
+        XCTAssertTrue(defaults.bool(forKey: preferenceKey))
     }
 
     private func controllerWithKnownUpdate() -> AppUpdateController {

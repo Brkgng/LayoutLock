@@ -205,18 +205,6 @@ struct SettingsView: View {
 
             Section {
                 SettingsValueRow(
-                    title: "Automatically Check for Updates:",
-                    systemImage: "arrow.triangle.2.circlepath",
-                    value: nil
-                ) {
-                    Toggle("", isOn: automaticallyChecksForUpdatesBinding)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-            }
-
-            Section {
-                SettingsValueRow(
                     title: "Suggest Layouts When Displays Change:",
                     systemImage: "display.2",
                     value: nil
@@ -738,13 +726,6 @@ struct SettingsView: View {
         Binding(
             get: { launchAtLoginController.isEnabled },
             set: { launchAtLoginController.setEnabled($0) }
-        )
-    }
-
-    private var automaticallyChecksForUpdatesBinding: Binding<Bool> {
-        Binding(
-            get: { updateController.automaticallyChecksForUpdates },
-            set: { updateController.setAutomaticallyChecksForUpdates($0) }
         )
     }
 
