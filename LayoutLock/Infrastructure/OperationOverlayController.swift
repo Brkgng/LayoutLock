@@ -51,10 +51,12 @@ protocol OperationOverlayPresenting: AnyObject {
     func updateRestoreProgress(_ message: String, layoutName: String)
     func showRestoreProgressInBackground(_ message: String, layoutName: String)
     func showRestoreCompletion(_ completion: RestoreCompletionMessage)
+    func showBusyNotice(message: String)
     func hideOverlay()
 }
 
 extension OperationOverlayPresenting {
+    func showBusyNotice(message _: String) {}
     func updateRestoreProgress(_: String, layoutName _: String) {}
     func showRestoreProgressInBackground(_: String, layoutName _: String) {}
 }
@@ -198,6 +200,10 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
                 self.fadeOutAndCloseOverlayWindows()
             }
         }
+    }
+
+    func showBusyNotice(message: String) {
+        showStatusNotice(message: message, duration: 3)
     }
 
     func showStatusNotice(message: String, duration: TimeInterval) {

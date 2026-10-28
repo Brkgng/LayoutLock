@@ -625,9 +625,9 @@ private struct DashboardOpeningTargetLabel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Edit opening targets to locate this missing \(target.kind == .folder ? "folder" : "file")")
+            .help("Edit saved resources to locate this missing \(target.kind == .folder ? "folder" : "file")")
             .accessibilityLabel("Missing \(target.compactDisplayName)")
-            .accessibilityHint("Edit opening targets for this saved window")
+            .accessibilityHint("Edit saved resources for this saved window")
         } else {
             targetName
                 .foregroundStyle(DashboardVisualStyle.supportingText)
@@ -647,7 +647,7 @@ private struct DashboardEditOpeningTargetsButton: View {
     let editOpeningTargets: () -> Void
 
     private var label: String {
-        hasTargets ? "Edit Opening Targets" : "Add Opening Targets"
+        hasTargets ? "Edit Saved Resources" : "Add Saved Resources"
     }
 
     var body: some View {

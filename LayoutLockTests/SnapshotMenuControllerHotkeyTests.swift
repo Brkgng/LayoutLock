@@ -479,7 +479,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             controller.status?.message,
-            "Updated \"Coding\" with 2 windows. 1 manual opening-target configuration could not be matched and needs review."
+            "Updated \"Coding\" with 2 windows. Saved resources for 1 window could not be carried over. Review this layout."
         )
         XCTAssertEqual(controller.status?.isError, true)
     }
@@ -1444,17 +1444,17 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["0 of 1 windows restored · 1 skipped · 1 target issue"]
+            ["0 of 1 windows restored · 1 skipped · 1 resource issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
             [
-                "Editor (\(missingURL.path)): Target no longer exists.\nEditor (Project): Application is not running."
+                "Editor (\(missingURL.path)): Saved file or folder no longer exists.\nEditor (Project): Application is not running."
             ]
         )
         XCTAssertEqual(
             controller.status?.message,
-            "Couldn't restore \"Coding\": 0 of 1 windows restored · 1 skipped · 1 target issue."
+            "Couldn't restore \"Coding\": 0 of 1 windows restored · 1 skipped · 1 resource issue."
         )
     }
 
@@ -1490,7 +1490,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["0 of 1 windows restored · 1 skipped · 1 target issue"]
+            ["0 of 1 windows restored · 1 skipped · 1 resource issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
@@ -1511,9 +1511,14 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         )
 
         let firstTask = controller.restoreSnapshot(id: snapshotID)
+        let progress = controller.status?.message
         let secondTask = controller.restoreSnapshot(id: snapshotID)
+        let anotherLayoutTask = controller.restoreSnapshot(id: UUID())
 
         XCTAssertNil(secondTask)
+        XCTAssertNil(anotherLayoutTask)
+        XCTAssertEqual(overlayPresenter.busyNotices, ["\"Coding\" is still restoring.", "\"Coding\" is still restoring."])
+        XCTAssertEqual(controller.status?.message, progress)
         await Task.yield()
         XCTAssertEqual(overlayPresenter.shownKinds, [.restore])
 
@@ -1521,6 +1526,25 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(overlayPresenter.hideCount, 0)
         XCTAssertEqual(overlayPresenter.restoreCompletionSummaries.count, 1)
+    }
+
+    func testRestoreWhileSavingShowsBusyNoticeWithoutReplacingSaveStatus() async throws {
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let overlay = SuspendingOperationOverlayPresenter()
+        let controller = makeCaptureController(store: store, overlayPresenter: overlay)
+        let task = try XCTUnwrap(controller.captureCurrentSnapshot(named: "Work"))
+        await Task.yield()
+
+        XCTAssertNil(controller.restoreSnapshot(id: UUID()))
+        XCTAssertEqual(overlay.busyNotices, ["LayoutLock is saving a layout. Try again when it finishes."])
+        XCTAssertEqual(controller.status?.message, "Saving...")
+        XCTAssertTrue(controller.isOperating)
+        XCTAssertEqual(overlay.shownKinds, [.save])
+
+        overlay.resumeShowOverlay()
+        await task.value
+        XCTAssertFalse(controller.isOperating)
+        XCTAssertEqual(overlay.shownKinds, [.save])
     }
 
     func testRestoreSnapshotPublishesCompletionIDAfterSuccess() async throws {
@@ -2438,6 +2462,12 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
 @MainActor
 private final class RecordingOperationOverlayPresenter: OperationOverlayPresenting {
+    private(set) var busyNotices: [String] = []
+
+    func showBusyNotice(message: String) {
+        busyNotices.append(message)
+    }
+
     private(set) var shownKinds: [OperationOverlayKind] = []
     private(set) var restoreCompletions: [RestoreCompletionMessage] = []
     private(set) var restoreCompletionSummaries: [String] = []
@@ -2512,6 +2542,12 @@ private final class ControlledMenuUISleeper {
 
 @MainActor
 private final class SuspendingOperationOverlayPresenter: OperationOverlayPresenting {
+    private(set) var busyNotices: [String] = []
+
+    func showBusyNotice(message: String) {
+        busyNotices.append(message)
+    }
+
     private(set) var shownKinds: [OperationOverlayKind] = []
     private(set) var hideCount = 0
     private var showOverlayContinuation: CheckedContinuation<Void, Never>?
@@ -2588,7 +2624,7 @@ final class OperationCompletionToastTests: XCTestCase {
         let permissionAction = RestoreCompletionAction(title: "Open Permissions", perform: { performed += 1 })
         let issues = [
             RestoreCompletionIssue(appName: "Editor", context: String(repeating: "Long saved file path / ", count: 10),
-                reason: "Target no longer exists.", actions: fileActions),
+                reason: "Saved file or folder no longer exists.", actions: fileActions),
             RestoreCompletionIssue(appName: "Accessibility", context: nil,
                 reason: "Accessibility access is required to restore layouts.", actions: [permissionAction])
         ]
@@ -2678,7 +2714,7 @@ final class OperationCompletionToastTests: XCTestCase {
         for screen in NSScreen.screens {
             let completion = RestoreCompletionMessage(
                 title: "\"\(String(repeating: "Long layout name ", count: 30))\" restored with issues",
-                summary: "123 windows restored · 45 skipped · 12 target issues · 3 display fallbacks",
+                summary: "123 windows restored · 45 skipped · 12 resource issues · 3 display fallbacks",
                 issues: (0..<50).map { _ in RestoreCompletionIssue(appName: "Chrome", context: "Very long window title", reason: "Matching window was not found.") },
                 hasIssues: true
             )

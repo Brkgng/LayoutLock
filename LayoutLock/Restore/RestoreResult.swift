@@ -85,15 +85,15 @@ enum RestoreTargetIssueReason: String {
     var userFacingDescription: String {
         switch self {
         case .missingTarget:
-            return "Target no longer exists."
+            return "Saved file or folder no longer exists."
         case .targetKindMismatch:
-            return "Target type has changed."
+            return "Saved file or folder type has changed."
         case .unsupportedURL:
             return "Only HTTP and HTTPS URLs can be opened."
         case .applicationUnavailable:
             return "Saved application is unavailable."
         case .openRequestFailed:
-            return "Target could not be opened."
+            return "Saved resource could not be opened."
         case .openingNotConfirmed:
             return "The file or folder could not be confirmed in the restored window."
         case .unsupportedTarget:

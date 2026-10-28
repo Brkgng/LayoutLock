@@ -1005,10 +1005,10 @@ private struct DashboardOpeningTargetsEditorView: View {
                     }
                 }
 
-                Section("Opening Targets") {
+                Section {
                     if draftTargets.isEmpty {
                         ContentUnavailableView(
-                            "No Opening Targets",
+                            "No Saved Resources",
                             systemImage: "app"
                         )
                         .frame(maxWidth: .infinity)
@@ -1017,6 +1017,10 @@ private struct DashboardOpeningTargetsEditorView: View {
                             targetRow(target, at: index)
                         }
                     }
+                } header: {
+                    Text("Saved Resources")
+                } footer: {
+                    Text("Files, folders, and websites to reopen with this window.")
                 }
 
                 if localTargetSelection != .none {
@@ -1112,7 +1116,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                         _ = commitURLEdit()
                     }
             )
-            .navigationTitle("Opening Targets")
+            .navigationTitle("Saved Resources")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: cancel)
@@ -1163,7 +1167,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                             validationMessage = nil
                             return .handled
                         }
-                        .accessibilityLabel("Opening target URL")
+                        .accessibilityLabel("Saved resource URL")
                 } else {
                     Text(targetDisplayName(for: target))
                         .lineLimit(1)
@@ -1192,8 +1196,8 @@ private struct DashboardOpeningTargetsEditorView: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == 0)
-            .help("Move target earlier")
-            .accessibilityLabel("Move Target Earlier")
+            .help("Move resource earlier")
+            .accessibilityLabel("Move Resource Earlier")
 
             Button {
                 moveTarget(at: index, offset: 1)
@@ -1202,8 +1206,8 @@ private struct DashboardOpeningTargetsEditorView: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == draftTargets.count - 1)
-            .help("Move target later")
-            .accessibilityLabel("Move Target Later")
+            .help("Move resource later")
+            .accessibilityLabel("Move Resource Later")
 
             Button {
                 editTarget(target)
@@ -1224,8 +1228,8 @@ private struct DashboardOpeningTargetsEditorView: View {
                 Image(systemName: "minus.circle")
             }
             .buttonStyle(.borderless)
-            .help("Remove target")
-            .accessibilityLabel("Remove Target")
+            .help("Remove resource")
+            .accessibilityLabel("Remove Resource")
         }
     }
 
@@ -1299,7 +1303,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                         )
                         .accessibilityHint(
                             suggestion.isSelectable
-                                ? "Complete this opening target path"
+                                ? "Complete this resource path"
                                 : "Open this folder to continue browsing"
                         )
                     }
@@ -2197,7 +2201,7 @@ private struct DashboardDetailView: View {
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(isPrivilegedActionDisabled)
-            .help("Restore")
+            .help("Restore the saved windows, apps, and resources in this layout")
 
             Button {
                 updateSnapshot()
@@ -2205,7 +2209,7 @@ private struct DashboardDetailView: View {
                 Label("Update", systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(isPrivilegedActionDisabled)
-            .help("Update")
+            .help("Replace this saved layout with your current windows")
 
             Button {
                 beginInlineRename(snapshot)

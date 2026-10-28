@@ -72,6 +72,7 @@ final class SnapshotMenuController: ObservableObject {
     private let openAccessibilitySettings: @MainActor () -> Void
     private var snapshotSummariesDidChange: (([SnapshotSummary]) -> Error?)?
     private var hotkeyCaptureActivityDidChange: ((Bool) -> Error?)?
+    private var activeRestoreName: String?
     private var statusClearTask: Task<Void, Never>?
     private let statusAutoClearDelay: TimeInterval
     private let uiSleep: @MainActor (TimeInterval) async throws -> Void
@@ -279,6 +280,9 @@ final class SnapshotMenuController: ObservableObject {
     @discardableResult
     func restoreSnapshot(id: UUID) -> Task<Void, Never>? {
         guard !isOperating else {
+            let message = activeRestoreName.map { "\"\($0)\" is still restoring." }
+                ?? "LayoutLock is saving a layout. Try again when it finishes."
+            operationOverlayPresenter.showBusyNotice(message: message)
             return nil
         }
 
@@ -295,6 +299,7 @@ final class SnapshotMenuController: ObservableObject {
         }
 
         isOperating = true
+        activeRestoreName = snapshotName
         let initialProgress = "Restoring \"\(snapshotName)\" · \(RestoreProgress.discovering.message)"
         restoreProgressMessage = initialProgress
         status = Status(message: initialProgress, kind: .info)
@@ -316,6 +321,7 @@ final class SnapshotMenuController: ObservableObject {
             defer {
                 loadingOverlayTask.cancel()
                 restoreProgressMessage = nil
+                activeRestoreName = nil
                 isOperating = false
                 if !didShowRestoreCompletion {
                     operationOverlayPresenter.hideOverlay()
@@ -398,15 +404,12 @@ final class SnapshotMenuController: ObservableObject {
 
                 let snapshot = result.snapshot
                 if result.unmatchedManualConfigurationCount > 0 {
-                    let configurationLabel = result.unmatchedManualConfigurationCount == 1
-                        ? "opening-target configuration"
-                        : "opening-target configurations"
                     let captureIssueMessages = result.browserCaptureIssues.map(\.message)
                     let captureWarning = captureIssueMessages.isEmpty
                         ? ""
                         : " \(captureIssueMessages.joined(separator: " "))"
                     status = Status(
-                        message: "Updated \"\(snapshot.name)\" with \(windowCountDescription(snapshot.windows.count)). \(result.unmatchedManualConfigurationCount) manual \(configurationLabel) could not be matched and needs review.\(captureWarning)",
+                        message: "Updated \"\(snapshot.name)\" with \(windowCountDescription(snapshot.windows.count)). Saved resources for \(windowCountDescription(result.unmatchedManualConfigurationCount)) could not be carried over. Review this layout.\(captureWarning)",
                         kind: .error
                     )
                 } else {
@@ -840,7 +843,7 @@ final class SnapshotMenuController: ObservableObject {
             )
             guard didUpdate else {
                 status = Status(
-                    message: "The saved window could not be found or its opening targets were unchanged.",
+                    message: "The saved window could not be found or its saved resources were unchanged.",
                     kind: .info
                 )
                 return false
@@ -852,7 +855,7 @@ final class SnapshotMenuController: ObservableObject {
             }
 
             status = Status(
-                message: "Updated opening targets for \"\(snapshotName)\".",
+                message: "Updated saved resources for \"\(snapshotName)\".",
                 kind: .info
             )
             return true
@@ -958,7 +961,7 @@ final class SnapshotMenuController: ObservableObject {
 
     private func restoreSummaryDetails(for result: RestoreResult) -> [String] {
         let fallbackLabel = result.displayFallbacks.count == 1 ? "display fallback" : "display fallbacks"
-        let targetIssueLabel = result.targetIssues.count == 1 ? "target issue" : "target issues"
+        let targetIssueLabel = result.targetIssues.count == 1 ? "resource issue" : "resource issues"
         let adjustedCount = result.downgradedItems.filter { $0.reason != RestoreDowngradeReason.windowIdentityUnconfirmed }.count
         return [
             result.skippedItems.isEmpty ? nil : "\(result.skippedItems.count) skipped",
