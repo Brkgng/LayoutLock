@@ -2317,6 +2317,17 @@ private struct DashboardDetailView: View {
     private var issueSection: some View {
         if hasDashboardIssues {
             VStack(alignment: .leading, spacing: 8) {
+                if let progress = snapshotMenuController.restoreProgressMessage {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(progress)
+                            .font(.callout)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .dashboardCardSurface(cornerRadius: 10)
+                }
                 if let bootstrapErrorMessage {
                     DashboardIssueBanner(
                         title: "Storage Setup Failed",
@@ -2339,9 +2350,9 @@ private struct DashboardDetailView: View {
                 }
 
                 if let status = snapshotMenuController.status,
-                   status.isError || status.isWarning {
+                   (status.isError || status.isWarning) && snapshotMenuController.restoreProgressMessage == nil {
                     DashboardIssueBanner(
-                        title: status.isWarning ? "Layout Saved with Warnings" : "Layout Action Failed",
+                        title: status.isWarning ? "Layout Needs Attention" : "Layout Action Failed",
                         message: status.message,
                         systemImage: "exclamationmark.triangle.fill",
                         tint: status.isWarning ? .orange : .red
@@ -2353,6 +2364,7 @@ private struct DashboardDetailView: View {
 
     private var hasDashboardIssues: Bool {
         bootstrapErrorMessage != nil
+            || snapshotMenuController.restoreProgressMessage != nil
             || showsAccessibilityIssueBanner
             || snapshotMenuController.status?.isError == true
             || snapshotMenuController.status?.isWarning == true

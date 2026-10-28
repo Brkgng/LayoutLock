@@ -51,6 +51,7 @@ final class SnapshotMenuController: ObservableObject {
     }
     @Published private(set) var lastCapturedSnapshotID: UUID?
     @Published private(set) var restoreCompletionID: UUID?
+    @Published private(set) var restoreProgressMessage: String?
 
     private let snapshotStore: SnapshotStore?
     private let snapshotCaptureService: SnapshotCaptureService?
@@ -269,21 +270,27 @@ final class SnapshotMenuController: ObservableObject {
             return nil
         }
 
+        let snapshotName = snapshotSummaries.first(where: { $0.id == id })?.name ?? "Layout"
         guard let restoreEngine else {
             status = Status(
                 message: "Layout restore is unavailable.",
                 kind: .error
             )
+            operationOverlayPresenter.showRestoreCompletion(restoreFailureMessage(
+                snapshotName: snapshotName, message: "Layout restore is unavailable."
+            ))
             return nil
         }
 
-        let snapshotName = snapshotSummaries.first(where: { $0.id == id })?.name ?? "Layout"
-
         isOperating = true
-        status = Status(message: "Restoring...", kind: .info)
+        let initialProgress = "Restoring \"\(snapshotName)\" · \(RestoreProgress.discovering.message)"
+        restoreProgressMessage = initialProgress
+        status = Status(message: initialProgress, kind: .info)
 
         return Task { @MainActor [self] in
             await operationOverlayPresenter.showOverlay(kind: .restore)
+            var restorePhase = RestoreProgress.discovering
+            operationOverlayPresenter.updateRestoreProgress(restorePhase.message, layoutName: snapshotName)
             let loadingOverlayTask = Task { @MainActor [self] in
                 do {
                     try await uiSleep(15)
@@ -291,12 +298,12 @@ final class SnapshotMenuController: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                operationOverlayPresenter.hideOverlay()
-                status = Status(message: "Restoring in the background", kind: .info)
+                operationOverlayPresenter.showRestoreProgressInBackground(restorePhase.message, layoutName: snapshotName)
             }
             var didShowRestoreCompletion = false
             defer {
                 loadingOverlayTask.cancel()
+                restoreProgressMessage = nil
                 isOperating = false
                 if !didShowRestoreCompletion {
                     operationOverlayPresenter.hideOverlay()
@@ -306,16 +313,22 @@ final class SnapshotMenuController: ObservableObject {
             do {
                 try Task.checkCancellation()
                 let result = try await withTaskCancellationHandler {
-                    try await restoreEngine.restoreSnapshot(id: id)
+                    try await restoreEngine.restoreSnapshot(id: id) { progress in
+                        let message = "Restoring \"\(snapshotName)\" · \(progress.message)"
+                        restoreProgressMessage = message
+                        status = Status(message: message, kind: .info)
+                        restorePhase = progress
+                        operationOverlayPresenter.updateRestoreProgress(progress.message, layoutName: snapshotName)
+                    }
                 } onCancel: {
                     loadingOverlayTask.cancel()
                 }
                 try Task.checkCancellation()
-                status = Status(
-                    message: restoreStatusMessage(snapshotName: snapshotName, result: result),
-                    kind: .info
-                )
                 let completion = restoreCompletionMessage(snapshotName: snapshotName, result: result)
+                status = Status(
+                    message: "\(completion.title): \(completion.summary).",
+                    kind: completion.isFailure ? .error : completion.hasIssues ? .warning : .info
+                )
                 operationOverlayPresenter.showRestoreCompletion(completion)
                 didShowRestoreCompletion = true
                 restoreCompletionID = UUID()
@@ -326,6 +339,10 @@ final class SnapshotMenuController: ObservableObject {
                     message: error.userFacingDescription,
                     kind: .error
                 )
+                operationOverlayPresenter.showRestoreCompletion(restoreFailureMessage(
+                    snapshotName: snapshotName, message: error.userFacingDescription
+                ))
+                didShowRestoreCompletion = true
             }
         }
     }
@@ -878,20 +895,6 @@ final class SnapshotMenuController: ObservableObject {
         return false
     }
 
-    private func restoreStatusMessage(
-        snapshotName: String,
-        result: RestoreResult
-    ) -> String {
-        let restoredLabel = result.restoredWindows == 1 ? "window" : "windows"
-        let details = restoreSummaryDetails(for: result)
-
-        guard !details.isEmpty else {
-            return "Restored \"\(snapshotName)\": \(result.restoredWindows) \(restoredLabel) restored."
-        }
-
-        return "Restored \"\(snapshotName)\": \(result.restoredWindows) \(restoredLabel) restored, \(details.joined(separator: ", "))."
-    }
-
     private func restoreCompletionMessage(
         snapshotName: String,
         result: RestoreResult
@@ -899,31 +902,70 @@ final class SnapshotMenuController: ObservableObject {
         let restoredLabel = result.restoredWindows == 1 ? "window" : "windows"
         let details = restoreSummaryDetails(for: result)
         let hasIssues = !details.isEmpty
-        let summary = (["\(result.restoredWindows) \(restoredLabel) restored"] + details)
+        let isFailure = result.restoredWindows == 0
+        let title: String
+        if isFailure {
+            title = "Couldn't restore \"\(snapshotName)\""
+        } else if !result.skippedItems.isEmpty || !result.targetIssues.isEmpty {
+            title = "\"\(snapshotName)\" partially restored"
+        } else {
+            title = "\"\(snapshotName)\" restored\(hasIssues ? " with changes" : "")"
+        }
+        let windowSummary = result.skippedItems.isEmpty
+            ? "\(result.restoredWindows) \(restoredLabel) restored"
+            : "\(result.restoredWindows) of \(result.restoredWindows + result.skippedItems.count) windows restored"
+        let summary = ([windowSummary] + details)
             .joined(separator: " · ")
 
         return RestoreCompletionMessage(
-            title: "\"\(snapshotName)\" restored\(hasIssues ? " with issues" : "")",
+            title: title,
             summary: summary,
             issues: result.targetIssues.map(targetIssueDetail) + result.skippedItems.map(skippedWindowDetail)
-                + result.downgradedItems.filter { $0.reason == RestoreDowngradeReason.windowIdentityUnconfirmed }.map {
+                + result.downgradedItems.map {
                     skippedWindowDetail(for: RestoreSkip(
                         bundleIdentifier: $0.bundleIdentifier, windowTitle: $0.windowTitle, reason: $0.reason))
-                },
-            hasIssues: hasIssues
+                } + result.displayFallbacks.map(displayFallbackDetail),
+            hasIssues: hasIssues || isFailure,
+            isFailure: isFailure
+        )
+    }
+
+    private func restoreFailureMessage(snapshotName: String, message: String) -> RestoreCompletionMessage {
+        RestoreCompletionMessage(
+            title: "Couldn't restore \"\(snapshotName)\"", summary: message,
+            issues: [], hasIssues: true, isFailure: true
         )
     }
 
     private func restoreSummaryDetails(for result: RestoreResult) -> [String] {
         let fallbackLabel = result.displayFallbacks.count == 1 ? "display fallback" : "display fallbacks"
         let targetIssueLabel = result.targetIssues.count == 1 ? "target issue" : "target issues"
+        let adjustedCount = result.downgradedItems.filter { $0.reason != RestoreDowngradeReason.windowIdentityUnconfirmed }.count
         return [
             result.skippedItems.isEmpty ? nil : "\(result.skippedItems.count) skipped",
             result.targetIssues.isEmpty ? nil : "\(result.targetIssues.count) \(targetIssueLabel)",
             result.downgradedItems.contains { $0.reason == RestoreDowngradeReason.windowIdentityUnconfirmed }
                 ? "desktop placement unconfirmed" : nil,
+            adjustedCount == 0 ? nil : "\(adjustedCount) \(adjustedCount == 1 ? "window adjusted" : "windows adjusted")",
             result.displayFallbacks.isEmpty ? nil : "\(result.displayFallbacks.count) \(fallbackLabel)"
         ].compactMap { $0 }
+    }
+
+    private func displayFallbackDetail(for fallback: DisplayFallbackEvent) -> RestoreCompletionIssue {
+        let appName = fallback.bundleIdentifier.map(appNameResolver) ?? "Display"
+        let destination = fallback.resolvedDisplayName?.nonEmptyValue ?? "the main display"
+        let reason: String
+        switch fallback.outcome {
+        case .primaryFallback:
+            reason = "Saved display could not be matched; window moved to \(destination)."
+        case .semanticFallback:
+            reason = "Saved display was matched by name to \(destination); window position may differ."
+        case .unavailable:
+            reason = "No display was available to restore this window."
+        case .exact, .hardwareRemap:
+            reason = "Window restored on \(destination)."
+        }
+        return RestoreCompletionIssue(appName: appName, context: fallback.savedDisplayName, reason: reason)
     }
 
     private func targetIssueDetail(for issue: RestoreTargetIssue) -> RestoreCompletionIssue {
@@ -964,6 +1006,8 @@ final class SnapshotMenuController: ObservableObject {
             return "Inspected window could not be returned to its original desktop and position."
         case RestoreDowngradeReason.windowIdentityUnconfirmed:
             return "Position restored; desktop placement could not be confirmed."
+        case "fullscreen restored as standard window":
+            return "Full-screen window restored as a regular window."
         case RestoreSkipReason.windowGeometryDidNotSettle:
             return "Window did not accept the saved position and size."
         default:

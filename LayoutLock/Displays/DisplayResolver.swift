@@ -131,6 +131,8 @@ struct DisplayResolver {
                     outcome: resolvedDisplay.outcome,
                     savedDisplayID: window.displayID,
                     resolvedDisplayID: resolvedDisplay.display.id,
+                    savedDisplayName: sourceDisplayState.displays.first { $0.id == window.displayID }?.localizedName,
+                    resolvedDisplayName: resolvedDisplay.display.localizedName,
                     reason: resolvedDisplay.outcome.reason
                 ) : nil
         )

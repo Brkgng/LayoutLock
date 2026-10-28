@@ -37,7 +37,10 @@ struct MenuBarContentView: View {
                 Divider()
             }
 
-            if let status = snapshotMenuController.status, status.kind != .info {
+            if let progress = snapshotMenuController.restoreProgressMessage {
+                Text(progress)
+                    .font(.caption)
+            } else if let status = snapshotMenuController.status, status.kind != .info {
                 Text(status.message)
                     .font(.caption)
                     .foregroundStyle(

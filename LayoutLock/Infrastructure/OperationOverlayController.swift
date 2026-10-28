@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import Symbols
 
 @MainActor
 enum OperationOverlayKind {
@@ -21,6 +22,15 @@ struct RestoreCompletionMessage {
     let summary: String
     let issues: [RestoreCompletionIssue]
     let hasIssues: Bool
+    var isFailure = false
+
+    var symbolName: String {
+        isFailure ? "xmark.circle.fill" : hasIssues ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+    }
+
+    var tintColor: NSColor {
+        isFailure ? .systemRed : hasIssues ? .systemOrange : .systemGreen
+    }
 }
 
 struct RestoreCompletionIssue {
@@ -32,8 +42,15 @@ struct RestoreCompletionIssue {
 @MainActor
 protocol OperationOverlayPresenting: AnyObject {
     func showOverlay(kind: OperationOverlayKind) async
+    func updateRestoreProgress(_ message: String, layoutName: String)
+    func showRestoreProgressInBackground(_ message: String, layoutName: String)
     func showRestoreCompletion(_ completion: RestoreCompletionMessage)
     func hideOverlay()
+}
+
+extension OperationOverlayPresenting {
+    func updateRestoreProgress(_: String, layoutName _: String) {}
+    func showRestoreProgressInBackground(_: String, layoutName _: String) {}
 }
 
 @MainActor
@@ -119,6 +136,22 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
         }
 
         shownAt = Date()
+    }
+
+    func updateRestoreProgress(_ message: String, layoutName: String) {
+        for window in overlayWindows {
+            (window.contentView as? OperationOverlayContentView)?.updateMessage(message, layoutName: layoutName)
+        }
+    }
+
+    func showRestoreProgressInBackground(_ message: String, layoutName: String) {
+        generation += 1
+        closeOverlayWindows()
+        guard let screen = screenContainingMousePointer() ?? NSScreen.main else { return }
+        let window = OperationOverlayWindow(screen: screen, message: message, layoutName: layoutName, compact: true)
+        overlayWindows = [window]
+        shownAt = Date()
+        window.orderFrontRegardless()
     }
 
     func showRestoreCompletion(_ completion: RestoreCompletionMessage) {
@@ -589,19 +622,27 @@ private final class DisplayRestoreSuggestionChooserToastWindow: NSPanel {
     }
 }
 
-private final class OperationOverlayWindow: NSPanel {
-    init(screen: NSScreen, message: String) {
+final class OperationOverlayWindow: NSPanel {
+    init(screen: NSScreen, message: String, layoutName: String? = nil, compact: Bool = false) {
+        let visibleFrame = screen.visibleFrame
+        let width = min(460, visibleFrame.width - 48)
+        let frame = compact ? CGRect(
+            x: visibleFrame.midX - width / 2,
+            y: visibleFrame.maxY - 160,
+            width: width,
+            height: 132
+        ) : screen.frame
         super.init(
-            contentRect: screen.frame,
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        setFrame(screen.frame, display: false)
+        setFrame(frame, display: false)
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        hasShadow = compact
         ignoresMouseEvents = true
         level = .statusBar
         collectionBehavior = [
@@ -610,7 +651,7 @@ private final class OperationOverlayWindow: NSPanel {
             .stationary,
             .ignoresCycle
         ]
-        contentView = OperationOverlayContentView(message: message)
+        contentView = OperationOverlayContentView(message: message, layoutName: layoutName, compact: compact)
     }
 
     override var canBecomeKey: Bool {
@@ -637,10 +678,9 @@ private final class OperationCompletionToastContentView: NSView {
     required init?(coder: NSCoder) { nil }
 
     private func buildView(width: CGFloat) {
-        let symbol = completion.hasIssues ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+        let icon = NSImageView(image: NSImage(systemSymbolName: completion.symbolName, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 22, weight: .semibold)
-        icon.contentTintColor = completion.hasIssues ? .systemOrange : .systemGreen
+        icon.contentTintColor = completion.tintColor
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let closeButton = OperationToastCloseButton(target: self, action: #selector(dismiss))
@@ -770,10 +810,9 @@ private final class RestoreCompletionDetailsContentView: NSView {
         super.init(frame: .zero)
         let width: CGFloat = 560
         let contentWidth = width - 48
-        let symbol = completion.hasIssues ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+        let icon = NSImageView(image: NSImage(systemSymbolName: completion.symbolName, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 28, weight: .medium)
-        icon.contentTintColor = completion.hasIssues ? .systemOrange : .systemGreen
+        icon.contentTintColor = completion.tintColor
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let titleLabel = Self.label(completion.title, width: contentWidth - 48, size: 19, weight: .semibold)
@@ -1281,13 +1320,23 @@ private final class OperationToastCloseButton: NSButton {
     }
 }
 
-private final class OperationOverlayContentView: NSView {
-    private let message: String
+final class OperationOverlayContentView: NSView {
+    private let label: NSTextField
+    private let layoutLabel = NSTextField(labelWithString: "")
+    private let progressIndicator = NSImageView()
 
-    init(message: String) {
-        self.message = message
+    init(message: String, layoutName: String? = nil, compact: Bool = false) {
+        label = NSTextField(wrappingLabelWithString: message)
         super.init(frame: .zero)
-        buildView()
+        layoutLabel.stringValue = layoutName ?? ""
+        layoutLabel.isHidden = layoutName == nil
+        buildView(compact: compact)
+    }
+
+    func updateMessage(_ message: String, layoutName: String) {
+        label.stringValue = message
+        layoutLabel.stringValue = layoutName
+        layoutLabel.isHidden = false
     }
 
     @available(*, unavailable)
@@ -1295,7 +1344,7 @@ private final class OperationOverlayContentView: NSView {
         nil
     }
 
-    private func buildView() {
+    private func buildView(compact: Bool) {
         let backgroundEffectView = NSVisualEffectView()
         backgroundEffectView.material = .underWindowBackground
         backgroundEffectView.blendingMode = .behindWindow
@@ -1307,18 +1356,33 @@ private final class OperationOverlayContentView: NSView {
         dimView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
         dimView.translatesAutoresizingMaskIntoConstraints = false
 
-        let progressIndicator = NSProgressIndicator()
-        progressIndicator.style = .spinning
-        progressIndicator.controlSize = .regular
-        progressIndicator.startAnimation(nil)
+        progressIndicator.image = NSImage(systemSymbolName: "progress.indicator", accessibilityDescription: "In progress")
+        progressIndicator.symbolConfiguration = .init(pointSize: 24, weight: .medium)
+        progressIndicator.contentTintColor = compact ? .labelColor : .white
+        progressIndicator.addSymbolEffect(.variableColor.iterative, options: .repeating)
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
 
-        let label = NSTextField(labelWithString: message)
         label.font = .systemFont(ofSize: 15, weight: .semibold)
-        label.textColor = .white
+        label.textColor = compact ? .labelColor : .white
         label.alignment = .center
+        label.maximumNumberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.preferredMaxLayoutWidth = 412
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let stackView = NSStackView(views: [progressIndicator, label])
+        layoutLabel.font = .systemFont(ofSize: 12)
+        layoutLabel.textColor = compact ? .secondaryLabelColor : NSColor.white.withAlphaComponent(0.75)
+        layoutLabel.alignment = .center
+        layoutLabel.lineBreakMode = .byTruncatingMiddle
+        layoutLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let textStack = NSStackView(views: [label, layoutLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .centerX
+        textStack.spacing = 4
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let stackView = NSStackView(views: [progressIndicator, textStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
         stackView.spacing = 12
@@ -1333,26 +1397,35 @@ private final class OperationOverlayContentView: NSView {
         hudView.layer?.masksToBounds = true
         hudView.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(backgroundEffectView)
-        addSubview(dimView)
+        if !compact {
+            addSubview(backgroundEffectView)
+            addSubview(dimView)
+            NSLayoutConstraint.activate([
+                backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
+                backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                dimView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                dimView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                dimView.topAnchor.constraint(equalTo: topAnchor),
+                dimView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+        }
         addSubview(hudView)
         hudView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
-            backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            dimView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            dimView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            dimView.topAnchor.constraint(equalTo: topAnchor),
-            dimView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
             hudView.centerXAnchor.constraint(equalTo: centerXAnchor),
             hudView.centerYAnchor.constraint(equalTo: centerYAnchor),
             hudView.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
+            hudView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor),
+            hudView.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
             hudView.heightAnchor.constraint(greaterThanOrEqualToConstant: 112),
+            progressIndicator.widthAnchor.constraint(equalToConstant: 24),
+            progressIndicator.heightAnchor.constraint(equalToConstant: 24),
+            label.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            layoutLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            textStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
 
             stackView.leadingAnchor.constraint(equalTo: hudView.leadingAnchor, constant: 24),
             stackView.trailingAnchor.constraint(equalTo: hudView.trailingAnchor, constant: -24),

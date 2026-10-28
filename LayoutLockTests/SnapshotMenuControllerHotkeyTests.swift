@@ -810,28 +810,33 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
     func testRestoreSnapshotShowsCompletionAfterSuccess() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
         let overlayPresenter = RecordingOperationOverlayPresenter()
-        let controller = makeRestoreController(
+        let controller = try makeWaitingRestoreController(
             store: store,
-            overlayPresenter: overlayPresenter
+            snapshotID: snapshotID,
+            overlayPresenter: overlayPresenter,
+            uiSleep: { interval in
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            },
+            beforeApply: {}
         )
 
-        let task = controller.restoreSnapshot(id: snapshotID)
+        await controller.restoreSnapshot(id: snapshotID)?.value
 
-        await Task.yield()
         XCTAssertEqual(overlayPresenter.shownKinds, [.restore])
-
-        await task?.value
-
         XCTAssertEqual(overlayPresenter.hideCount, 0)
-        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["0 windows restored"])
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 window restored"])
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored")
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, false)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, false)
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
+        XCTAssertTrue(overlayPresenter.progressMessages.contains("Restoring \"Coding\" · Finding saved windows…"))
+        XCTAssertTrue(overlayPresenter.progressMessages.contains("Restoring \"Coding\" · Positioning windows…"))
+        XCTAssertEqual(overlayPresenter.progressMessages.last, "Restoring \"Coding\" · Restoring window order…")
+        XCTAssertTrue(overlayPresenter.backgroundProgressMessages.isEmpty)
     }
 
-    func testSlowRestoreHidesLoadingOverlayWhileBusyStatusPersistsUntilCompletion() async throws {
+    func testSlowRestoreKeepsNamedProgressVisibleUntilCompletion() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let overlayPresenter = RecordingOperationOverlayPresenter()
@@ -843,14 +848,14 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         }
         let overlayDelayStarted = expectation(description: "overlay delay started")
         let restoreStarted = expectation(description: "restore is waiting for verification")
-        let overlayHidden = expectation(description: "loading overlay hidden")
+        let backgroundProgressShown = expectation(description: "compact progress shown")
         let statusDelayStarted = expectation(description: "completed status can expire")
         uiSleeper.didSleep = { interval in
             if interval == 15 { overlayDelayStarted.fulfill() }
             if interval == 5 { statusDelayStarted.fulfill() }
         }
         restoreGate.didSleep = { _ in restoreStarted.fulfill() }
-        overlayPresenter.didHide = { overlayHidden.fulfill() }
+        overlayPresenter.didShowBackgroundProgress = { backgroundProgressShown.fulfill() }
         let controller = try makeWaitingRestoreController(
             store: store,
             snapshotID: snapshotID,
@@ -861,30 +866,31 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         let task = controller.restoreSnapshot(id: snapshotID)
         await fulfillment(of: [overlayDelayStarted, restoreStarted], timeout: 1)
-        XCTAssertEqual(controller.status?.message, "Restoring...")
+        XCTAssertEqual(controller.status?.message, "Restoring \"Coding\" · Positioning windows…")
         XCTAssertEqual(overlayPresenter.hideCount, 0)
 
         uiSleeper.resumeFirst(interval: 15)
-        await fulfillment(of: [overlayHidden], timeout: 1)
+        await fulfillment(of: [backgroundProgressShown], timeout: 1)
 
+        XCTAssertEqual(overlayPresenter.backgroundProgressMessages, ["Restoring \"Coding\" · Positioning windows…"])
         XCTAssertTrue(controller.isOperating)
-        XCTAssertEqual(controller.status?.message, "Restoring in the background")
+        XCTAssertEqual(controller.status?.message, "Restoring \"Coding\" · Positioning windows…")
         XCTAssertFalse(uiSleeper.intervals.contains(5))
         XCTAssertTrue(overlayPresenter.restoreCompletions.isEmpty)
         XCTAssertNil(controller.restoreCompletionID)
         XCTAssertNil(controller.restoreSnapshot(id: snapshotID))
         XCTAssertNil(controller.captureCurrentSnapshot(named: "Second layout"))
-        XCTAssertEqual(controller.status?.message, "Restoring in the background")
+        XCTAssertEqual(controller.status?.message, "Restoring \"Coding\" · Positioning windows…")
 
         restoreGate.resumeFirst(interval: 0)
         await task?.value
         await fulfillment(of: [statusDelayStarted], timeout: 1)
 
         XCTAssertFalse(controller.isOperating)
-        XCTAssertEqual(overlayPresenter.hideCount, 1)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
         XCTAssertEqual(overlayPresenter.restoreCompletions.count, 1)
         XCTAssertNotNil(controller.restoreCompletionID)
-        XCTAssertTrue(controller.status?.message.hasPrefix("Restored \"Coding\": 1 window restored") == true)
+        XCTAssertEqual(controller.status?.message, "\"Coding\" restored: 1 window restored.")
 
         let statusCleared = expectation(description: "completed status cleared")
         let statusObserver = controller.$status.sink { status in
@@ -953,7 +959,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(overlayPresenter.shownKinds, [.restore, .restore])
         XCTAssertEqual(overlayPresenter.hideCount, 0)
         XCTAssertEqual(overlayPresenter.restoreCompletions.count, 1)
-        XCTAssertEqual(controller.status?.message, "Restoring...")
+        XCTAssertEqual(controller.status?.message, "Restoring \"Coding\" · Positioning windows…")
         XCTAssertTrue(controller.isOperating)
 
         uiSleeper.didWake = nil
@@ -997,8 +1003,11 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertFalse(controller.isOperating)
         XCTAssertEqual(controller.status?.message, "Accessibility access is required to restore layouts.")
         XCTAssertEqual(controller.status?.isError, true)
-        XCTAssertEqual(overlayPresenter.hideCount, 1)
-        XCTAssertTrue(overlayPresenter.restoreCompletions.isEmpty)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Coding\"")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.summary, "Accessibility access is required to restore layouts.")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
+        XCTAssertTrue(overlayPresenter.backgroundProgressMessages.isEmpty)
         XCTAssertNil(controller.restoreCompletionID)
     }
 
@@ -1045,12 +1054,14 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertTrue(controller.isOperating)
         XCTAssertEqual(overlayPresenter.hideCount, 0)
-        XCTAssertEqual(controller.status?.message, "Restoring...")
+        XCTAssertEqual(controller.status?.message, "Restoring \"Coding\" · Positioning windows…")
 
         restoreGate.resumeFirst(interval: 0)
         await task?.value
 
         XCTAssertFalse(controller.isOperating)
+        XCTAssertNil(controller.restoreProgressMessage)
+        XCTAssertTrue(overlayPresenter.backgroundProgressMessages.isEmpty)
         XCTAssertEqual(controller.status?.message, "Restore cancelled.")
         XCTAssertEqual(controller.status?.isError, false)
         XCTAssertEqual(overlayPresenter.hideCount, 1)
@@ -1092,6 +1103,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         let controller = makeRestoreController(
             store: store,
             overlayPresenter: overlayPresenter,
+            appNameResolver: { _ in "Editor" },
             screenProvider: { [self.makeScreenSnapshot(from: currentPrimaryDisplay)] },
             discoveredApplicationsProvider: {
                 [
@@ -1119,10 +1131,15 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             overlayPresenter.restoreCompletionSummaries,
             ["1 window restored · 1 display fallback"]
         )
-        XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [
+            "Editor (Removed): Saved display could not be matched; window moved to Built-in."
+        ])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Desk\" restored with changes")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, false)
         XCTAssertEqual(
             controller.status?.message,
-            "Restored \"Desk\": 1 window restored, 1 display fallback."
+            "\"Desk\" restored with changes: 1 window restored · 1 display fallback."
         )
     }
 
@@ -1192,7 +1209,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
     }
 
-    func testRestoreSnapshotShowsAndHidesOverlayAfterFailure() async throws {
+    func testRestoreSnapshotShowsFailureCompletion() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
@@ -1210,8 +1227,11 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         await task?.value
 
-        XCTAssertEqual(overlayPresenter.hideCount, 1)
-        XCTAssertTrue(overlayPresenter.restoreCompletionSummaries.isEmpty)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Coding\"")
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["Accessibility access is required to restore layouts."])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
     }
 
     func testRestoreSnapshotCompletionIncludesSkippedWindowDetails() async throws {
@@ -1245,15 +1265,62 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["0 windows restored · 3 skipped"]
+            ["0 of 3 windows restored · 3 skipped"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
             ["Editor (ScrollSnap): Application is not running.\nEditor (Settings): Application is not running.\nBrowser: Application is not running."]
         )
-        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with issues")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Coding\"")
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
-        XCTAssertEqual(controller.status?.message, "Restored \"Coding\": 0 windows restored, 3 skipped.")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
+        XCTAssertEqual(controller.status?.isError, true)
+        XCTAssertEqual(controller.status?.message, "Couldn't restore \"Coding\": 0 of 3 windows restored · 3 skipped.")
+    }
+
+    func testRestoreSnapshotReportsPartialSuccessWithoutCallingItFailure() async throws {
+        let snapshotID = UUID()
+        let display = makeDisplayRecord(id: 1)
+        let restored = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Document", displayID: 1)
+        let missing = makeWindow(bundleIdentifier: "com.example.browser", windowTitle: "Browser", displayID: 1)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Coding", windows: [restored, missing],
+            displays: [display], primaryDisplayID: 1))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(
+            store: store,
+            overlayPresenter: overlayPresenter,
+            appNameResolver: { $0 == "com.example.editor" ? "Editor" : "Browser" },
+            screenProvider: { [self.makeScreenSnapshot(from: display)] },
+            discoveredApplicationsProvider: {
+                [DiscoveredApplication(bundleIdentifier: restored.bundleIdentifier, pid: 1, localizedName: "Editor",
+                    windows: [makeDiscoveredWindow(title: restored.windowTitle, subrole: restored.subrole)])]
+            }
+        )
+
+        await controller.restoreSnapshot(id: snapshotID)?.value
+
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" partially restored")
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 of 2 windows restored · 1 skipped"])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, false)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails, ["Browser (Browser): Application is not running."])
+        XCTAssertEqual(controller.status?.isWarning, true)
+        XCTAssertNotNil(controller.restoreCompletionID)
+    }
+
+    func testRestoreSnapshotShowsFailureForEmptyLegacyLayout() async throws {
+        let snapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Empty"))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(store: store, overlayPresenter: overlayPresenter)
+
+        await controller.restoreSnapshot(id: snapshotID)?.value
+
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Empty\"")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
+        XCTAssertEqual(controller.status?.isError, true)
     }
 
     func testRestoreCompletionDistinguishesGeometryFromUnconfirmedDesktopPlacement() async throws {
@@ -1274,10 +1341,44 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         )
         await controller.restoreSnapshot(id: snapshotID)?.value
 
-        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with issues")
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with changes")
         XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 window restored · desktop placement unconfirmed"])
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails,
             ["Editor (Document): Position restored; desktop placement could not be confirmed."])
+    }
+
+    func testRestoreSnapshotCompletionExplainsFullscreenDowngrade() async throws {
+        let snapshotID = UUID()
+        let display = makeDisplayRecord(id: 1)
+        let window = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Document", displayID: 1)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Coding", windows: [window],
+            displays: [display], primaryDisplayID: 1))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(
+            store: store,
+            overlayPresenter: overlayPresenter,
+            appNameResolver: { _ in "Editor" },
+            screenProvider: { [self.makeScreenSnapshot(from: display)] },
+            discoveredApplicationsProvider: {
+                [DiscoveredApplication(bundleIdentifier: window.bundleIdentifier, pid: 1, localizedName: "Editor",
+                    windows: [makeDiscoveredWindow(title: window.windowTitle, subrole: window.subrole)])]
+            },
+            windowApplier: RestoringWindowApplier(downgrade: RestoreDowngrade(
+                bundleIdentifier: window.bundleIdentifier,
+                windowTitle: window.windowTitle,
+                reason: "fullscreen restored as standard window"
+            ))
+        )
+
+        await controller.restoreSnapshot(id: snapshotID)?.value
+
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored with changes")
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 window restored · 1 window adjusted"])
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails,
+            ["Editor (Document): Full-screen window restored as a regular window."])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, false)
     }
 
     func testRestoreSnapshotCompletionPreservesAllSkippedWindowDetails() async throws {
@@ -1343,7 +1444,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["0 windows restored · 1 skipped · 1 target issue"]
+            ["0 of 1 windows restored · 1 skipped · 1 target issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
@@ -1353,7 +1454,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         )
         XCTAssertEqual(
             controller.status?.message,
-            "Restored \"Coding\": 0 windows restored, 1 skipped, 1 target issue."
+            "Couldn't restore \"Coding\": 0 of 1 windows restored · 1 skipped · 1 target issue."
         )
     }
 
@@ -1389,7 +1490,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(
             overlayPresenter.restoreCompletionSummaries,
-            ["0 windows restored · 1 skipped · 1 target issue"]
+            ["0 of 1 windows restored · 1 skipped · 1 target issue"]
         )
         XCTAssertEqual(
             overlayPresenter.restoreCompletionDetails,
@@ -2181,9 +2282,21 @@ private final class RecordingOperationOverlayPresenter: OperationOverlayPresenti
     private(set) var restoreCompletionDetails: [String?] = []
     private(set) var hideCount = 0
     var didHide: (() -> Void)?
+    private(set) var progressMessages: [String] = []
+    private(set) var backgroundProgressMessages: [String] = []
+    var didShowBackgroundProgress: (() -> Void)?
 
     func showOverlay(kind: OperationOverlayKind) async {
         shownKinds.append(kind)
+    }
+
+    func updateRestoreProgress(_ message: String, layoutName: String) {
+        progressMessages.append("Restoring \"\(layoutName)\" · \(message)")
+    }
+
+    func showRestoreProgressInBackground(_ message: String, layoutName: String) {
+        backgroundProgressMessages.append("Restoring \"\(layoutName)\" · \(message)")
+        didShowBackgroundProgress?()
     }
 
     func showRestoreCompletion(_ completion: RestoreCompletionMessage) {
@@ -2274,9 +2387,11 @@ private struct NoOpRestoreApplicationActivator: RestoreApplicationActivating {
 
 private final class RestoringWindowApplier: RestoreWindowApplying {
     private let beforeApply: @MainActor () async throws -> Void
+    private let downgrade: RestoreDowngrade?
 
-    init(beforeApply: @escaping @MainActor () async throws -> Void = {}) {
+    init(beforeApply: @escaping @MainActor () async throws -> Void = {}, downgrade: RestoreDowngrade? = nil) {
         self.beforeApply = beforeApply
+        self.downgrade = downgrade
     }
 
     func apply(
@@ -2285,7 +2400,7 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
         to _: DiscoveredWindow
     ) async throws -> RestoreWindowApplyResult {
         try await beforeApply()
-        return .restored()
+        return .restored(downgrade: downgrade)
     }
 
     func raise(_ discoveredWindow: DiscoveredWindow) -> Bool {
@@ -2303,6 +2418,52 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
 
 @MainActor
 final class OperationCompletionToastTests: XCTestCase {
+    func testRestoreProgressKeepsEachPhaseReadableAboveLongLayoutNames() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let name = String(repeating: "Layout – 2026 · Long saved layout name ", count: 20)
+        let phases: [RestoreProgress] = [.discovering, .recoveringWindows, .opening, .waiting, .positioning, .stacking]
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for compact in [false, true] {
+                let window = OperationOverlayWindow(screen: screen, message: "Restoring layout…", compact: compact)
+                defer { window.close() }
+                window.appearance = NSAppearance(named: appearance)
+                let content = try XCTUnwrap(window.contentView as? OperationOverlayContentView)
+                for phase in phases {
+                    content.updateMessage(phase.message, layoutName: name)
+                    content.layoutSubtreeIfNeeded()
+                    let labels = descendants(of: content).compactMap { $0 as? NSTextField }
+                    let phaseLabel = try XCTUnwrap(labels.first { $0.stringValue == phase.message })
+                    let nameLabel = try XCTUnwrap(labels.first { $0.stringValue == name })
+                    XCTAssertFalse(phaseLabel.hasAmbiguousLayout)
+                    XCTAssertEqual(phaseLabel.lineBreakMode, .byWordWrapping)
+                    let requiredHeight = try XCTUnwrap(phaseLabel.cell).cellSize(forBounds: CGRect(
+                        x: 0, y: 0, width: phaseLabel.bounds.width, height: .greatestFiniteMagnitude
+                    )).height
+                    XCTAssertGreaterThanOrEqual(phaseLabel.bounds.height + 0.5, requiredHeight)
+                    let phaseFrame = phaseLabel.convert(phaseLabel.bounds, to: content)
+                    let nameFrame = nameLabel.convert(nameLabel.bounds, to: content)
+                    XCTAssertLessThan(nameFrame.maxY, phaseFrame.minY)
+                    XCTAssertEqual(nameLabel.lineBreakMode, .byTruncatingMiddle)
+                    for frame in [phaseFrame, nameFrame] {
+                        XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                        XCTAssertLessThanOrEqual(frame.maxX, content.bounds.maxX)
+                        XCTAssertGreaterThanOrEqual(frame.minY, 0)
+                        XCTAssertLessThanOrEqual(frame.maxY, content.bounds.maxY)
+                    }
+                }
+                if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                    content.cacheDisplay(in: content.bounds, to: bitmap)
+                    if let png = bitmap.representation(using: .png, properties: [:]) {
+                        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                        attachment.name = "Restore progress – \(appearance.rawValue) – \(compact ? "compact" : "full")"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                    }
+                }
+            }
+        }
+    }
+
     func testLongTextStaysWithinCenteredToastOnEveryScreen() throws {
         XCTAssertFalse(NSScreen.screens.isEmpty)
         for screen in NSScreen.screens {

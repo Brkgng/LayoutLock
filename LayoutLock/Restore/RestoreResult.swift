@@ -1,5 +1,31 @@
 import Foundation
 
+enum RestoreProgress: Sendable {
+    case discovering
+    case recoveringWindows
+    case opening
+    case waiting
+    case positioning
+    case stacking
+
+    var message: String {
+        switch self {
+        case .discovering:
+            return "Finding saved windows…"
+        case .recoveringWindows:
+            return "Bringing windows to the current desktop…"
+        case .opening:
+            return "Opening apps and saved resources…"
+        case .waiting:
+            return "Waiting for apps and windows…"
+        case .positioning:
+            return "Positioning windows…"
+        case .stacking:
+            return "Restoring window order…"
+        }
+    }
+}
+
 struct RestoreResult {
     let restoredWindows: Int
     let skippedItems: [RestoreSkip]
@@ -146,6 +172,8 @@ struct DisplayFallbackEvent: Identifiable {
     let outcome: RestoreDisplayOutcome
     let savedDisplayID: UInt32?
     let resolvedDisplayID: UInt32?
+    let savedDisplayName: String?
+    let resolvedDisplayName: String?
     let reason: String
 
     init(
@@ -155,6 +183,8 @@ struct DisplayFallbackEvent: Identifiable {
         outcome: RestoreDisplayOutcome = .primaryFallback,
         savedDisplayID: UInt32?,
         resolvedDisplayID: UInt32?,
+        savedDisplayName: String? = nil,
+        resolvedDisplayName: String? = nil,
         reason: String
     ) {
         self.id = id
@@ -163,6 +193,8 @@ struct DisplayFallbackEvent: Identifiable {
         self.outcome = outcome
         self.savedDisplayID = savedDisplayID
         self.resolvedDisplayID = resolvedDisplayID
+        self.savedDisplayName = savedDisplayName
+        self.resolvedDisplayName = resolvedDisplayName
         self.reason = reason
     }
 }

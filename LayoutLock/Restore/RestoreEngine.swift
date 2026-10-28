@@ -130,7 +130,10 @@ struct RestoreEngine {
         self.launchPollSleeper = launchPollSleeper
     }
 
-    func restoreSnapshot(id: UUID) async throws -> RestoreResult {
+    func restoreSnapshot(
+        id: UUID,
+        progress: @MainActor (RestoreProgress) -> Void = { _ in }
+    ) async throws -> RestoreResult {
         let startedAt = ProcessInfo.processInfo.systemUptime
         var stageStartedAt = startedAt
         var stage: String? = "discovery"
@@ -161,6 +164,7 @@ struct RestoreEngine {
             throw RestoreEngineError.accessibilityPermissionDenied
         }
 
+        if !Task.isCancelled { await progress(.discovering) }
         let snapshot: Snapshot
         do {
             snapshot = try snapshotStore.loadSnapshot(id: id)
@@ -207,6 +211,7 @@ struct RestoreEngine {
         var inspectionBlockedWindows: [UUID: String] = [:]
         var didRediscoverRecoveredWindow = false
         finishStage(next: "spaceRecovery")
+        if !Task.isCancelled { await progress(.recoveringWindows) }
         for savedWindow in snapshot.windows where !exposedSavedIDs.contains(savedWindow.id) {
             guard let spaceInventory, let recovery = RestoreCGWindowRecovery(
                 ordinarySpaceIDs: spaceInventory.ordinarySpaceIDs,
@@ -275,6 +280,7 @@ struct RestoreEngine {
             }
         }
         finishStage(next: "opening")
+        if !Task.isCancelled { await progress(.opening) }
         let discoveredApplications = discoveryResult.applications
         var timedOutWindowIDs: Set<UUID> = []
 
@@ -608,6 +614,7 @@ struct RestoreEngine {
             var windowDiagnostics: [RestoreWindowDiagnostic] = []
 
             finishStage(next: "positioning")
+            if !Task.isCancelled, !plans.isEmpty { await progress(.positioning) }
             for plan in plans {
                 let candidateCount = liveWindowsByCandidateID.count {
                     $0.candidate.bundleIdentifier == plan.savedWindow.bundleIdentifier
@@ -739,6 +746,7 @@ struct RestoreEngine {
 
             finishStage(next: "readiness")
             if !readinessBundleIdentifiers.isEmpty {
+                if !Task.isCancelled { await progress(.waiting) }
                 let readiness = try await rediscoverApplicationsUntilRestoreReadiness(
                     windows: remainingWindows, deadline: readinessDeadline,
                     requestedBundleIdentifiers: readinessBundleIdentifiers,
@@ -766,6 +774,7 @@ struct RestoreEngine {
         }
 
         finishStage(next: "stacking")
+        if !Task.isCancelled { await progress(.stacking) }
         await RestoreWindowZOrderRestorer(
             windowApplier: windowApplier,
             applicationActivator: applicationActivator,
