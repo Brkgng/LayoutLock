@@ -995,6 +995,70 @@ final class DashboardPresentationModelsTests: XCTestCase {
         )
     }
 
+    func testWindowListTitlesOnlyAppearForRepeatedAppsAcrossWholeLayout() {
+        let first = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "First", displayID: 1)
+        let second = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Second", displayID: 2)
+        let unassigned = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Third", displayID: nil)
+        let single = makeWindow(bundleIdentifier: "com.example.browser", windowTitle: "Only window", displayID: 1)
+        let snapshot = makeSnapshot(windows: [first, second, unassigned, single])
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: snapshot), [
+            first.id: "First", second.id: "Second", unassigned.id: "Third"
+        ])
+    }
+
+    func testWindowListTitlesTrimSavedTitlesAndOmitMissingTitles() {
+        let titled = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "  Project — zsh  ")
+        let blank = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: " \n ")
+        let missing = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: nil)
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [titled, blank, missing])),
+            [titled.id: "Project — zsh"])
+    }
+
+    func testWindowListTitlesDisappearWhenOnlyOneAppWindowRemains() {
+        let first = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "First")
+        let second = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Second")
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [first, second])).count, 2)
+        XCTAssertTrue(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [first])).isEmpty)
+        XCTAssertTrue(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [])).isEmpty)
+    }
+
+    @MainActor
+    func testRepeatedAppWindowTitlePreviewRenders() throws {
+        let snapshot = makeSnapshot(displays: [makeDisplay(id: 1, name: "Built-in Display", x: 0)], windows: [
+            makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "LayoutLock — zsh", zOrderHint: 0),
+            makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "ZapPDF — zsh", zOrderHint: 1),
+            makeWindow(bundleIdentifier: "com.apple.Safari", windowTitle: "Documentation", zOrderHint: 2)
+        ])
+        for scheme in [ColorScheme.light, .dark] {
+            let preview = DashboardSnapshotPreviewView(
+                snapshot: snapshot, appIdentityResolver: .shared,
+                removeWindow: { _ in }, editOpeningTargets: { _ in }, reorderWindows: { _, _ in true }
+            )
+            .frame(width: 560)
+            .padding(20)
+            .background(scheme == .dark ? Color.black : Color.white)
+            .environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: preview)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 600),
+                styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            window.contentView = host
+            window.setContentSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            attachment.name = "Repeated app window titles — \(scheme == .dark ? "dark" : "light")"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testDisplayPreviewModelsGroupWindowsByDisplayID() {
         let snapshot = makeSnapshot(windows: [
             makeWindow(bundleIdentifier: "com.example.editor", displayID: 1),

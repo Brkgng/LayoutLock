@@ -143,6 +143,17 @@ enum DashboardSidebarSearch {
 enum DashboardSnapshotPresentation {
     static let windowOverlapThreshold = 0.35
 
+    static func windowListTitles(for snapshot: Snapshot) -> [UUID: String] {
+        let windowsByApp = Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier)
+        var titles: [UUID: String] = [:]
+        for windows in windowsByApp.values where windows.count > 1 {
+            for window in windows {
+                titles[window.id] = window.windowTitle?.nonEmptyValue
+            }
+        }
+        return titles
+    }
+
     static func displayPreviewModels(for snapshot: Snapshot) -> [DashboardDisplayPreviewModel] {
         let windowsByDisplayID = Dictionary(grouping: assignedWindows(in: snapshot)) { window in
             window.displayID ?? 0

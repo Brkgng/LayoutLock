@@ -29,7 +29,8 @@ struct DashboardSnapshotPreviewView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let windowTitles = DashboardSnapshotPresentation.windowListTitles(for: snapshot)
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Layout Preview")
                 .font(.headline)
 
@@ -41,6 +42,7 @@ struct DashboardSnapshotPreviewView: View {
                     ForEach(displayModels) { model in
                         DashboardDisplayPreviewColumn(
                             model: model,
+                            windowTitles: windowTitles,
                             appIdentityResolver: appIdentityResolver,
                             removeWindow: removeWindow,
                             editOpeningTargets: editOpeningTargets,
@@ -57,6 +59,7 @@ struct DashboardSnapshotPreviewView: View {
 
                 DashboardUnassignedWindowsView(
                     windows: unassignedWindows,
+                    windowTitles: windowTitles,
                     appIdentityResolver: appIdentityResolver,
                     removeWindow: removeWindow,
                     editOpeningTargets: editOpeningTargets
@@ -71,6 +74,7 @@ struct DashboardSnapshotPreviewView: View {
 
 private struct DashboardDisplayPreviewColumn: View {
     let model: DashboardDisplayPreviewModel
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -121,6 +125,7 @@ private struct DashboardDisplayPreviewColumn: View {
                 DashboardDisplayWindowList(
                     displayID: model.display.id,
                     windows: model.windows,
+                    windowTitles: windowTitles,
                     appIdentityResolver: appIdentityResolver,
                     removeWindow: removeWindow,
                     editOpeningTargets: editOpeningTargets,
@@ -301,6 +306,7 @@ private struct DashboardWindowLabel: View {
 private struct DashboardDisplayWindowList: View {
     let displayID: UInt32
     let windows: [WindowRecord]
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -325,6 +331,7 @@ private struct DashboardDisplayWindowList: View {
             ForEach(displayOrderedWindows) { window in
                 DashboardDisplayWindowRow(
                     window: window,
+                    savedWindowTitle: windowTitles[window.id],
                     identity: appIdentityResolver.identity(for: window.bundleIdentifier),
                     removeWindow: {
                         removeWindow(window)
@@ -413,6 +420,7 @@ private struct DashboardDisplayWindowList: View {
 
 private struct DashboardDisplayWindowRow: View {
     let window: WindowRecord
+    let savedWindowTitle: String?
     let identity: DashboardAppIdentity
     let removeWindow: () -> Void
     let editOpeningTargets: () -> Void
@@ -455,6 +463,15 @@ private struct DashboardDisplayWindowRow: View {
                             .padding(.vertical, 1)
                             .background(.quaternary, in: Capsule())
                     }
+                }
+
+                if let savedWindowTitle {
+                    Text(savedWindowTitle)
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(savedWindowTitle)
                 }
 
                 ForEach(window.openingConfiguration.effectiveTargets) { target in
@@ -524,6 +541,7 @@ private struct DashboardDisplayWindowRow: View {
 
 private struct DashboardUnassignedWindowsView: View {
     let windows: [WindowRecord]
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -536,6 +554,7 @@ private struct DashboardUnassignedWindowsView: View {
             ForEach(windows) { window in
                 DashboardUnassignedWindowRow(
                     window: window,
+                    savedWindowTitle: windowTitles[window.id],
                     identity: appIdentityResolver.identity(for: window.bundleIdentifier),
                     editOpeningTargets: {
                         editOpeningTargets(window)
@@ -552,6 +571,7 @@ private struct DashboardUnassignedWindowsView: View {
 
 private struct DashboardUnassignedWindowRow: View {
     let window: WindowRecord
+    let savedWindowTitle: String?
     let identity: DashboardAppIdentity
     let editOpeningTargets: () -> Void
     let removeWindow: () -> Void
@@ -571,6 +591,15 @@ private struct DashboardUnassignedWindowRow: View {
                 Text(identity.name)
                     .font(.caption)
                     .lineLimit(1)
+
+                if let savedWindowTitle {
+                    Text(savedWindowTitle)
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(savedWindowTitle)
+                }
 
                 ForEach(window.openingConfiguration.effectiveTargets) { target in
                     DashboardOpeningTargetLabel(
