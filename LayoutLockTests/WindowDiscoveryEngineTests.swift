@@ -164,8 +164,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
 
         let snapshot = try service.captureSnapshot(named: "AX rejection regression")
 
-        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [900, 903])
-        XCTAssertEqual(snapshot.windows.map(\.captureSignature.source), [.accessibility, .coreGraphics])
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [900])
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.source), [.accessibility])
     }
 
     func testRejectedAXWindowWithoutConfirmedIdentitySuppressesOnlyItsOwnersCGFallback() throws {
@@ -638,6 +638,61 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         XCTAssertNil(window.cgWindowID, "A geometry match must not authorize Space operations.")
         XCTAssertEqual(window.zOrderHint, 3)
         XCTAssertTrue(window.isVisible)
+    }
+
+    func testCaptureRejectsInactiveWindowBorrowingVisibleWindowsMetadata() throws {
+        let app = AXUIElementCreateApplication(101)
+        let inactive = AXUIElementCreateApplication(201)
+        let visible = AXUIElementCreateApplication(202)
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        let fixture = AXAttributeFixture()
+        fixture.set([inactive, visible] as CFArray, for: app, attribute: kAXWindowsAttribute)
+        for window in [inactive, visible] {
+            fixture.setWindow(window, title: "Terminal", role: "AXWindow",
+                subrole: "AXStandardWindow", frame: frame)
+        }
+        let engine = makeEngine(
+            appElement: app,
+            attributeReader: fixture.reader,
+            metadata: [101: [
+                cgMetadata(id: 900, title: "Terminal", frame: frame, isOnScreen: false),
+                cgMetadata(id: 901, title: "Terminal", frame: frame, isOnScreen: true)
+            ]],
+            windowIDProvider: { CFEqual($0, visible) ? 901 : nil }
+        )
+        let discovery = try engine.discoverRunningWindowsWithDiagnostics()
+        let windows = try XCTUnwrap(discovery.applications.first?.windows)
+        XCTAssertNil(windows[0].cgWindowID)
+        XCTAssertEqual(windows[0].isOnScreen, true, "Geometry can borrow the visible window's hints.")
+        XCTAssertEqual(windows[1].cgWindowID, 901)
+
+        let display = makeDisplayRecord()
+        let spaceAccess = RestoreSpaceAccess(
+            inventory: { _ in RestoreSpaceInventory(activeByDisplay: [display.id: 1], ordinarySpaceIDs: [1, 2]) },
+            membership: { $0 == 901 ? [1] : [2] },
+            submitMove: { _, _ in XCTFail("Capture must not move windows"); return false }
+        )
+        for access in [spaceAccess, .unavailable] {
+            let directory = try TestTemporaryDirectory()
+            let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+            let service = SnapshotCaptureService(
+                displayResolver: DisplayResolver(screenProvider: {
+                    [DisplayResolver.ScreenSnapshot(
+                        id: display.id, localizedName: display.localizedName,
+                        frame: display.frameRect, visibleFrame: display.visibleFrameRect,
+                        backingScaleFactor: display.backingScaleFactor, isPrimary: display.isPrimary,
+                        vendorID: nil, productID: nil, serialNumber: nil)]
+                }),
+                snapshotStore: store,
+                discoveryResultProvider: { discovery },
+                restoreSpaceAccess: access
+            )
+
+            let snapshot = try service.captureSnapshot(named: "Active Space")
+
+            XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [901])
+            XCTAssertEqual(try store.loadSnapshot(id: snapshot.id).windows.count, 1)
+        }
     }
 
     func testDiscoversExistingLocalDocumentURL() throws {

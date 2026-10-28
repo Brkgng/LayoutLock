@@ -159,7 +159,7 @@ func makeDiscoveredWindow(
     ownerName: String? = nil,
     cgLayer: Int? = nil,
     zOrderHint: Int? = nil,
-    isOnScreen: Bool? = nil
+    isOnScreen: Bool? = true
 ) -> DiscoveredWindow {
     DiscoveredWindow(
         axElement: axElement,

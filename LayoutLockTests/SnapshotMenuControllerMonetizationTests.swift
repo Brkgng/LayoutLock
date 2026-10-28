@@ -309,7 +309,7 @@ final class SnapshotMenuControllerMonetizationTests: XCTestCase {
                             bundleIdentifier: "com.example.editor",
                             pid: 42,
                             localizedName: "Editor",
-                            windows: [makeDiscoveredWindow()]
+                            windows: [makeDiscoveredWindow(cgWindowID: 123)]
                         )
                     ],
                     diagnostics: []

@@ -347,8 +347,18 @@ struct SnapshotCaptureService {
             throw SnapshotCaptureServiceError.noDisplaysAvailable
         }
 
-        var windows = try discoveryResult.applications.flatMap { application in
-            try application.windows.map { window in
+        let activeSpaces = restoreSpaceAccess.inventory(displayState.displays.map(\.id))
+            .map { Set($0.activeByDisplay.values) }
+        let windows = try discoveryResult.applications.flatMap { application in
+            try application.windows.filter { window in
+                guard let windowID = window.cgWindowID else { return false }
+                if let activeSpaces, !activeSpaces.isEmpty,
+                   let membership = restoreSpaceAccess.membership(windowID), !membership.isEmpty {
+                    return !membership.isDisjoint(with: activeSpaces)
+                }
+                // Only trust the on-screen hint when discovery confirmed this window's CG identity.
+                return window.isOnScreen == true
+            }.map { window in
                 try makeWindowRecord(
                     application: application,
                     window: window,
@@ -356,7 +366,6 @@ struct SnapshotCaptureService {
                 )
             }
         }
-        windows += captureUnexposedWindows(in: discoveryResult, displayState: displayState)
         guard !windows.isEmpty else {
             throw SnapshotCaptureServiceError.noWindowsAvailable
         }
@@ -367,82 +376,6 @@ struct SnapshotCaptureService {
             discoveryDiagnostics: discoveryResult.diagnostics,
             browserCaptureIssues: enrichment.issues
         )
-    }
-
-    private func captureUnexposedWindows(
-        in discoveryResult: WindowDiscoveryResult,
-        displayState: DisplayState
-    ) -> [WindowRecord] {
-        guard !discoveryResult.unexposedApplications.isEmpty,
-              let inventory = restoreSpaceAccess.inventory(displayState.displays.map(\.id)) else {
-            return []
-        }
-        let activeSpaces = Set(inventory.activeByDisplay.values)
-        guard !activeSpaces.isEmpty else { return [] }
-        let representedIDs = Set(discoveryResult.applications.flatMap { $0.windows.compactMap(\.cgWindowID) })
-        let ownersWithUnknownWindowIDs = Set(discoveryResult.applications.filter {
-            $0.windows.contains { $0.cgWindowID == nil }
-        }.map(\.pid))
-        let occurrences = Dictionary(grouping: discoveryResult.unexposedApplications.flatMap(\.windows), by: \.windowID)
-        var records: [WindowRecord] = []
-
-        for owner in discoveryResult.unexposedApplications {
-            guard !ownersWithUnknownWindowIDs.contains(owner.pid) else { continue }
-            let eligible = owner.windows.compactMap { candidate -> CGWindowMetadata? in
-                guard candidate.processIdentifier == owner.pid,
-                      candidate.windowID != 0,
-                      !representedIDs.contains(candidate.windowID),
-                      occurrences[candidate.windowID]?.count == 1,
-                      let current = restoreSpaceAccess.windowMetadata(owner.pid, candidate.windowID),
-                      current.windowID == candidate.windowID, current.processIdentifier == owner.pid,
-                      current.layer == 0, !current.isOnScreen,
-                      current.bounds.origin.x.isFinite, current.bounds.origin.y.isFinite,
-                      current.bounds.size.width.isFinite, current.bounds.size.height.isFinite,
-                      current.bounds.size.width > 0, current.bounds.size.height > 0,
-                      let spaces = restoreSpaceAccess.membership(current.windowID), spaces.count == 1,
-                      let space = spaces.first, inventory.ordinarySpaceIDs.contains(space),
-                      !activeSpaces.contains(space) else {
-                    return nil
-                }
-                return current
-            }
-            let targets = owner.documentURLs.compactMap {
-                WindowOpenTargetValidator().existingLocalTarget(url: $0)
-            }
-            for window in eligible {
-                guard window.title?.nonEmptyValue != nil || eligible.count == 1,
-                      let display = displayResolver.resolveDisplay(for: window.bounds, in: displayState) else {
-                    continue
-                }
-                let signature = WindowSignature(
-                    bundleIdentifier: owner.bundleIdentifier,
-                    owningPid: owner.pid,
-                    windowTitle: window.title,
-                    role: "AXWindow",
-                    subrole: nil,
-                    capturedFrame: CGRectCodable(window.bounds),
-                    cgWindowID: window.windowID,
-                    source: .coreGraphics
-                )
-                records.append(WindowRecord(
-                    bundleIdentifier: owner.bundleIdentifier,
-                    pidAtCapture: owner.pid,
-                    windowTitle: window.title,
-                    role: "AXWindow",
-                    subrole: nil,
-                    frame: CGRectCodable(window.bounds),
-                    displayID: display.id,
-                    normalizedFrame: displayResolver.normalizedFrame(for: window.bounds, in: display),
-                    zOrderHint: window.zOrderHint,
-                    isMinimized: false,
-                    isFullscreen: false,
-                    isVisible: false,
-                    captureSignature: signature,
-                    openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: targets)
-                ))
-            }
-        }
-        return records
     }
 
     private struct CapturedWindowState {

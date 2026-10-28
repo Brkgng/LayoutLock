@@ -462,8 +462,8 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
                                 pid: 42,
                                 localizedName: "Editor",
                                 windows: [
-                                    makeDiscoveredWindow(title: "Same"),
-                                    makeDiscoveredWindow(title: "Same")
+                                    makeDiscoveredWindow(title: "Same", cgWindowID: 123),
+                                    makeDiscoveredWindow(title: "Same", cgWindowID: 124)
                                 ]
                             )
                         ],
@@ -2088,7 +2088,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
     }
 
     private func makeWindowDiscoveryResult() -> WindowDiscoveryResult {
-        let window = makeDiscoveredWindow()
+        let window = makeDiscoveredWindow(cgWindowID: 123)
         let application = DiscoveredApplication(
             bundleIdentifier: "com.example.editor",
             pid: 42,
