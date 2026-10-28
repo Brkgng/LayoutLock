@@ -463,24 +463,6 @@ private struct DashboardDisplayWindowRow: View {
                         editOpeningTargets: editOpeningTargets
                     )
                 }
-
-                if openingTargetDescriptions.isEmpty,
-                   let description = DashboardSnapshotPresentation.primaryWindowDescription(
-                       for: window,
-                       applicationName: identity.name
-                   ) {
-                    Text(description)
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                if window.openingConfiguration.effectiveTargets.isEmpty {
-                    Text("Window position only")
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
-                }
             }
 
             Spacer(minLength: 0)
@@ -511,16 +493,12 @@ private struct DashboardDisplayWindowRow: View {
         }
     }
 
-    private var openingTargetDescriptions: [String] {
-        DashboardSnapshotPresentation.openingTargetDescriptions(for: window)
-    }
-
     private var openingTargetCapabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
     }
 
     private var rowAlignment: VerticalAlignment {
-        openingTargetDescriptions.isEmpty ? .center : .top
+        window.openingConfiguration.effectiveTargets.isEmpty ? .center : .top
     }
 
     private var showsActions: Bool {
@@ -583,7 +561,7 @@ private struct DashboardUnassignedWindowRow: View {
     @FocusState private var isRemoveButtonFocused: Bool
 
     var body: some View {
-        HStack(alignment: openingTargetDescriptions.isEmpty ? .center : .top, spacing: 8) {
+        HStack(alignment: window.openingConfiguration.effectiveTargets.isEmpty ? .center : .top, spacing: 8) {
             Image(nsImage: identity.icon)
                 .resizable()
                 .frame(width: 18, height: 18)
@@ -599,24 +577,6 @@ private struct DashboardUnassignedWindowRow: View {
                         target: target,
                         editOpeningTargets: editOpeningTargets
                     )
-                }
-
-                if openingTargetDescriptions.isEmpty,
-                   let description = DashboardSnapshotPresentation.primaryWindowDescription(
-                       for: window,
-                       applicationName: identity.name
-                   ) {
-                    Text(description)
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                if window.openingConfiguration.effectiveTargets.isEmpty {
-                    Text("Window position only")
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
                 }
             }
 
@@ -642,10 +602,6 @@ private struct DashboardUnassignedWindowRow: View {
 
     private var showsActions: Bool {
         isHovered || isOpeningTargetsButtonFocused || isRemoveButtonFocused
-    }
-
-    private var openingTargetDescriptions: [String] {
-        DashboardSnapshotPresentation.openingTargetDescriptions(for: window)
     }
 
     private var openingTargetCapabilities: DashboardOpeningTargetCapabilities {
