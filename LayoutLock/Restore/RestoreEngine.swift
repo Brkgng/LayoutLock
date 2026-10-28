@@ -63,7 +63,7 @@ struct RestoreEngine {
     private let targetOpener: RestoreTargetOpening
     private let browserTabCapturer: BrowserTabCapturing
     private let applicationActivator: RestoreApplicationActivating
-    private let discoveryResultProvider: () throws -> WindowDiscoveryResult
+    private let discoveryResultProvider: (Set<String>?, pid_t?) throws -> WindowDiscoveryResult
     private let runningApplicationBundleProvider: () -> Set<String>
     private let launchTimeout: TimeInterval
     private let launchPollInterval: TimeInterval
@@ -109,16 +109,19 @@ struct RestoreEngine {
         self.telemetryLogger = telemetryLogger
         self.spaces = spaces
         if let discoveryResultProvider {
-            self.discoveryResultProvider = discoveryResultProvider
+            self.discoveryResultProvider = { _, _ in try discoveryResultProvider() }
         } else if let discoveredApplicationsProvider {
-            self.discoveryResultProvider = {
+            self.discoveryResultProvider = { _, _ in
                 WindowDiscoveryResult(
                     applications: try discoveredApplicationsProvider(),
                     diagnostics: []
                 )
             }
         } else {
-            self.discoveryResultProvider = windowDiscoveryEngine.discoverRunningWindowsWithDiagnostics
+            self.discoveryResultProvider = { bundles, pid in
+                try windowDiscoveryEngine.discoverRunningWindowsWithDiagnostics(
+                    bundleIdentifiers: bundles, processIdentifier: pid)
+            }
         }
         self.runningApplicationBundleProvider = runningApplicationBundleProvider
         self.launchTimeout = launchTimeout
@@ -135,7 +138,7 @@ struct RestoreEngine {
         func finishStage(next: String? = nil) {
             let now = ProcessInfo.processInfo.systemUptime
             if let stage {
-                timingsMilliseconds[stage] = (now - stageStartedAt) * 1_000
+                timingsMilliseconds[stage, default: 0] += (now - stageStartedAt) * 1_000
             }
             stage = next
             stageStartedAt = now
@@ -166,12 +169,13 @@ struct RestoreEngine {
             throw error
         }
 
+        let savedBundleIdentifiers = Set(snapshot.windows.map(\.bundleIdentifier))
         let currentDisplayState = displayResolver.captureDisplayState()
         let spaceInventory = currentDisplayState.displays.isEmpty ? nil :
             spaces.access.inventory(currentDisplayState.displays.map(\.id))
         var discoveryResult: WindowDiscoveryResult
         do {
-            discoveryResult = try discoveryResultProvider()
+            discoveryResult = try discoveryResultProvider(savedBundleIdentifiers, nil)
         } catch {
             telemetryLogger.log(
                 .restoreFailed(
@@ -201,6 +205,7 @@ struct RestoreEngine {
         var reservedRecoveryIDs: Set<CGWindowID> = []
         var ruledOutWindows: [UUID: (pid: pid_t, windowID: CGWindowID)] = [:]
         var inspectionBlockedWindows: [UUID: String] = [:]
+        var didRediscoverRecoveredWindow = false
         finishStage(next: "spaceRecovery")
         for savedWindow in snapshot.windows where !exposedSavedIDs.contains(savedWindow.id) {
             guard let spaceInventory, let recovery = RestoreCGWindowRecovery(
@@ -230,10 +235,12 @@ struct RestoreEngine {
                 case .unchanged: break
                 case let .confirmed(result, recovered):
                     discoveryResult = result
+                    didRediscoverRecoveredWindow = true
                     recoveredWindowsBySavedID[savedWindow.id] = recovered
                     reservedRecoveryIDs.insert(recovery.window.windowID)
                 case let .returned(result, ruledOut):
                     discoveryResult = result
+                    didRediscoverRecoveredWindow = true
                     if ruledOut { ruledOutWindows[savedWindow.id] = (recovery.pid, recovery.window.windowID) }
                 case let .blocked(reason): inspectionBlockedWindows[savedWindow.id] = reason
                 }
@@ -252,10 +259,23 @@ struct RestoreEngine {
             if outcome == .moved || outcome == .alreadyVisible {
                 // Only normal AX discovery can authorize geometry, never the CG-only candidate.
                 discoveryResult = try await rediscoverWindow(pid: recovery.pid, windowID: recovery.window.windowID).result
+                didRediscoverRecoveredWindow = true
+            }
+        }
+        if didRediscoverRecoveredWindow {
+            // PID-scoped recovery must not replace the full layout's discovery context.
+            do {
+                discoveryResult = try discoveryResultProvider(savedBundleIdentifiers, nil)
+            } catch {
+                let blocked = await returnUnusedInspections(recoveredWindowsBySavedID,
+                    plannedWindowIDs: [:], snapshot: snapshot, inventory: spaceInventory)
+                let restoreError: Error = blocked.isEmpty ? error : RestoreEngineError.inspectionNotReturned
+                telemetryLogger.log(.restoreFailed(snapshotID: id, error: restoreError))
+                throw restoreError
             }
         }
         finishStage(next: "opening")
-        var discoveredApplications = discoveryResult.applications
+        let discoveredApplications = discoveryResult.applications
         var timedOutWindowIDs: Set<UUID> = []
 
         let initiallyRunningBundleIdentifiers = runningBundleIdentifiers(from: discoveredApplications)
@@ -462,11 +482,265 @@ struct RestoreEngine {
         let preferredBrowserScriptingIdentifiers = openedBrowserWindowsBySavedWindowID
             .compactMapValues(\.scriptingIdentifier)
 
-        finishStage(next: "readiness")
-        if !readinessBundleIdentifiers.isEmpty {
-            do {
-                let readinessResult = try await rediscoverApplicationsUntilRestoreReadiness(
-                    snapshot: snapshot,
+        // Keep one app's matching and instance assignment together across the two batches.
+        let readinessDeadline = launchClock().addingTimeInterval(launchTimeout)
+        // Keep return receipts while matching replacement processes under their new identities.
+        var pendingInspections = recoveredWindowsBySavedID
+        for (windowID, pid) in appInstances.processIdentifiers {
+            if let recovered = recoveredWindowsBySavedID[windowID], recovered.allowsRestore, recovered.pid != pid {
+                recoveredWindowsBySavedID[windowID] = nil
+            }
+        }
+        var restoredWindowZOrderItems: [RestoreWindowZOrderItem] = []
+        func restoreWindows(_ windows: [WindowRecord], from discoveryResult: WindowDiscoveryResult,
+            timedOutWindowIDs: Set<UUID>, onlyReadyApps: Bool) async throws -> RestoreResult {
+            finishStage(next: "matching")
+            let discoveredApplications = discoveryResult.applications
+            let liveWindowsByCandidateID = Self.liveWindowsByCandidateID(from: discoveredApplications)
+            let recoveredCandidateIdentifiers = recoveredWindowsBySavedID.filter {
+                !successfullyRequestedWebWindowIDs.contains($0.key)
+            }.compactMapValues { recovered -> Int? in
+                let candidates = liveWindowsByCandidateID.filter {
+                    $0.candidate.pid == recovered.pid && $0.window.cgWindowID == recovered.windowID
+                }
+                return candidates.count == 1 ? candidates.first?.candidate.id : nil
+            }
+            let matchedPlans = matchPlanner.plans(
+                for: windows.filter { appInstances.blockedWindows[$0.id] == nil && inspectionBlockedWindows[$0.id] == nil },
+                candidates: liveWindowsByCandidateID.map { $0.candidate },
+                runningBundleIdentifiers: runningBundleIdentifiers(from: discoveredApplications),
+                genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
+                preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
+                openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+                preferredProcessIdentifiers: recoveredWindowsBySavedID.mapValues(\.pid)
+                    .merging(appInstances.processIdentifiers, uniquingKeysWith: { _, instance in instance }),
+                preferredCandidateIdentifiers: recoveredCandidateIdentifiers
+            )
+            let matchedPlansByID = Dictionary(uniqueKeysWithValues: matchedPlans.map { ($0.savedWindow.id, $0) })
+            var plans = windows.compactMap { savedWindow -> RestoreWindowPlan? in
+                if let reason = inspectionBlockedWindows[savedWindow.id] ?? appInstances.blockedWindows[savedWindow.id] {
+                    return RestoreWindowPlan(savedWindow: savedWindow, candidate: nil, matchStrategy: nil,
+                        skip: RestoreSkip(bundleIdentifier: savedWindow.bundleIdentifier, windowTitle: savedWindow.windowTitle, reason: reason))
+                }
+                return matchedPlansByID[savedWindow.id]
+            }.map { plan -> RestoreWindowPlan in
+                if plan.candidate == nil, unconfirmedLocalWindowIDs.contains(plan.savedWindow.id) {
+                    return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                        skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                            windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
+                }
+                if plan.candidate == nil, let pid = appInstances.processIdentifiers[plan.savedWindow.id],
+                   !discoveredApplications.contains(where: { $0.pid == pid }) {
+                    return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                        skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
+                                          reason: RestoreSkipReason.appInstanceUnconfirmed))
+                }
+                guard let expected = recoveredWindowsBySavedID[plan.savedWindow.id] else { return plan }
+                let matchesRecovery = plan.candidate.map { candidate in
+                    candidate.pid == expected.pid &&
+                        liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID == expected.windowID
+                } ?? false
+                if matchesRecovery && expected.allowsRestore { return plan }
+                // Opening a missing target can create a new window; preserve normal target matching.
+                if !matchesRecovery && successfullyRequestedWebWindowIDs.contains(plan.savedWindow.id) {
+                    return plan
+                }
+                // Never substitute a sibling or resubmit an unconfirmed asynchronous recovery move.
+                return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                    skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
+            }
+
+            if onlyReadyApps {
+                let readyBundles = Set(Dictionary(grouping: plans, by: { $0.savedWindow.bundleIdentifier }).compactMap { bundle, plans in
+                    !readinessBundleIdentifiers.contains(bundle) && plans.allSatisfy({ $0.candidate != nil }) ? bundle : nil
+                })
+                plans.removeAll { !readyBundles.contains($0.savedWindow.bundleIdentifier) }
+                if plans.isEmpty {
+                    return RestoreResult(restoredWindows: 0, skippedItems: [], downgradedItems: [], displayFallbacks: [])
+                }
+            }
+            let selectedIDs = Set(plans.map { $0.savedWindow.id })
+            let selectedBundles = Set(plans.map { $0.savedWindow.bundleIdentifier })
+            let selectedMatchedPlans = matchedPlans.filter { selectedIDs.contains($0.savedWindow.id) }
+            let plannedWindowIDs = selectedMatchedPlans.reduce(into: [UUID: CGWindowID]()) { result, plan in
+                guard let candidate = plan.candidate,
+                    let windowID = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID
+                else { return }
+                result[plan.savedWindow.id] = windowID
+            }
+            let compensationBlocks = await returnUnusedInspections(pendingInspections.filter { selectedIDs.contains($0.key) },
+                plannedWindowIDs: plannedWindowIDs, snapshot: snapshot, inventory: spaceInventory)
+            inspectionBlockedWindows.merge(compensationBlocks, uniquingKeysWith: { existing, _ in existing })
+            for id in selectedIDs { pendingInspections[id] = nil }
+            if Task.isCancelled, !compensationBlocks.isEmpty { throw RestoreEngineError.inspectionNotReturned }
+            try Task.checkCancellation()
+            if !compensationBlocks.isEmpty {
+                plans = plans.map { plan in
+                    guard let reason = inspectionBlockedWindows[plan.savedWindow.id] else { return plan }
+                    return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                        skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                            windowTitle: plan.savedWindow.windowTitle, reason: reason))
+                }
+            }
+            // Document evidence is independent of whether subsequent Space placement succeeds.
+            for plan in selectedMatchedPlans {
+                for target in plan.savedWindow.openingConfiguration.effectiveTargets where target.kind != .webURL {
+                    guard localTargetValidationIssue(for: target) == nil,
+                          plan.candidate?.referencesLocalTarget(target) != true,
+                          !targetIssues.contains(where: { $0.windowID == plan.savedWindow.id && $0.target.id == target.id }) else { continue }
+                    targetIssues.append(RestoreTargetIssue(windowID: plan.savedWindow.id,
+                        bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
+                        target: target, reason: .openingNotConfirmed))
+                }
+            }
+            logBrowserWindowResolution(
+                plans: plans,
+                candidates: liveWindowsByCandidateID.map(\.candidate),
+                openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID,
+                openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+                initiallyRunningBundleIdentifiers: initiallyRunningBundleIdentifiers
+            )
+
+            var restoredWindows = 0
+            var skippedItems = plans.compactMap(\.skip)
+            var downgradedItems: [RestoreDowngrade] = []
+            var displayFallbacks: [DisplayFallbackEvent] = []
+            var windowDiagnostics: [RestoreWindowDiagnostic] = []
+
+            finishStage(next: "positioning")
+            for plan in plans {
+                let candidateCount = liveWindowsByCandidateID.count {
+                    $0.candidate.bundleIdentifier == plan.savedWindow.bundleIdentifier
+                }
+                let filteredCandidateCount = discoveryResult.diagnostics.count {
+                    $0.bundleIdentifier == plan.savedWindow.bundleIdentifier && $0.kind == .windowRejected
+                }
+                let readinessTimedOut = timedOutWindowIDs.contains(plan.savedWindow.id)
+                guard let candidate = plan.candidate,
+                      var liveWindow = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window else {
+                    AppLogger.restore.info(
+                        "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=none candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=false geometryAttemptCount=0 displayOutcome=unavailable result=skipped reason=\(plan.skip?.reason ?? RestoreSkipReason.windowNotFound, privacy: .public)."
+                    )
+                    windowDiagnostics.append(
+                        RestoreWindowDiagnostic(
+                            windowID: plan.savedWindow.id,
+                            bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                            matchStrategy: nil,
+                            candidateCount: candidateCount,
+                            filteredCandidateCount: filteredCandidateCount,
+                            readinessTimedOut: readinessTimedOut,
+                            geometryAttempted: false,
+                            geometryAttemptCount: 0,
+                            expectedFrame: nil,
+                            finalObservedFrame: nil,
+                            displayOutcome: nil,
+                            result: "skipped",
+                            reason: plan.skip?.reason ?? RestoreSkipReason.windowNotFound
+                        )
+                    )
+                    continue
+                }
+
+                let restoreDisplayPlan = displayResolver.restorePlan(
+                    for: plan.savedWindow,
+                    from: snapshot.sourceDisplayState,
+                    to: currentDisplayState
+                )
+                let spaceOutcome = await spaces.prepare(
+                    windowID: liveWindow.cgWindowID,
+                    displayID: restoreDisplayPlan.resolvedDisplayID,
+                    inventory: spaceInventory,
+                    ordinaryWindow: liveWindow.role == "AXWindow" && liveWindow.subrole == "AXStandardWindow" && !liveWindow.isFullscreen
+                )
+                var canApplyGeometry = spaceOutcome.permitsGeometry
+                if spaceOutcome == .moved, let windowID = liveWindow.cgWindowID {
+                    let rediscovery = try await rediscoverWindow(pid: candidate.pid, windowID: windowID)
+                    if let window = rediscovery.window { liveWindow = window } else { canApplyGeometry = false }
+                }
+                AppLogger.restore.info("Space restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) windowID=\(liveWindow.cgWindowID ?? 0) outcome=\(spaceOutcome.rawValue, privacy: .public).")
+                let result: RestoreWindowApplyResult
+                if canApplyGeometry {
+                    result = try await windowApplier.apply(
+                        savedWindow: plan.savedWindow,
+                        targetFrame: restoreDisplayPlan.targetFrame,
+                        to: liveWindow
+                    )
+                } else {
+                    result = .failed(reason: RestoreSkipReason.desktopUnconfirmed)
+                }
+                let expectedFrame = String(describing: restoreDisplayPlan.targetFrame)
+                let finalFrame = result.finalObservedFrame.map(String.init(describing:)) ?? "unavailable"
+                AppLogger.restore.info(
+                    "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=\(plan.matchStrategy?.rawValue ?? "unknown", privacy: .public) candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=\(canApplyGeometry) geometryAttemptCount=\(result.attemptCount) expectedFrame=\(expectedFrame, privacy: .public) finalFrame=\(finalFrame, privacy: .public) displayOutcome=\(restoreDisplayPlan.outcome.rawValue, privacy: .public) result=\(result.didRestore ? "restored" : "skipped", privacy: .public)."
+                )
+                windowDiagnostics.append(
+                    RestoreWindowDiagnostic(
+                        windowID: plan.savedWindow.id,
+                        bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                        matchStrategy: plan.matchStrategy,
+                        candidateCount: candidateCount,
+                        filteredCandidateCount: filteredCandidateCount,
+                        readinessTimedOut: readinessTimedOut,
+                        geometryAttempted: canApplyGeometry,
+                        geometryAttemptCount: result.attemptCount,
+                        expectedFrame: restoreDisplayPlan.targetFrame,
+                        finalObservedFrame: result.finalObservedFrame,
+                        displayOutcome: restoreDisplayPlan.outcome,
+                        result: result.didRestore ? "restored" : "skipped",
+                        reason: result.failureReason ?? (spaceOutcome == .identityUnconfirmed ? RestoreDowngradeReason.windowIdentityUnconfirmed : nil)
+                    )
+                )
+                if result.didRestore {
+                    restoredWindows += 1
+                    restoredWindowZOrderItems.append(
+                        RestoreWindowZOrderItem(
+                            savedWindow: plan.savedWindow,
+                            processIdentifier: candidate.pid,
+                            liveWindow: liveWindow
+                        )
+                    )
+                    if let downgrade = result.downgrade {
+                        downgradedItems.append(downgrade)
+                    }
+                    if spaceOutcome == .identityUnconfirmed {
+                        downgradedItems.append(RestoreDowngrade(
+                            bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                            windowTitle: plan.savedWindow.windowTitle,
+                            reason: RestoreDowngradeReason.windowIdentityUnconfirmed
+                        ))
+                    }
+                    if let fallback = restoreDisplayPlan.fallback {
+                        displayFallbacks.append(fallback)
+                    }
+                } else {
+                    skippedItems.append(
+                        RestoreSkip(
+                            bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                            windowTitle: plan.savedWindow.windowTitle,
+                            reason: result.failureReason ?? RestoreSkipReason.restoreFailed
+                        )
+                    )
+                }
+            }
+
+            return RestoreResult(restoredWindows: restoredWindows, skippedItems: skippedItems,
+                downgradedItems: downgradedItems, displayFallbacks: displayFallbacks,
+                windowDiagnostics: windowDiagnostics,
+                discoveryDiagnostics: discoveryResult.diagnostics.filter { selectedBundles.contains($0.bundleIdentifier ?? "") })
+        }
+
+        var batches: [RestoreResult] = []
+        do {
+            let ready = try await restoreWindows(snapshot.windows, from: discoveryResult,
+                timedOutWindowIDs: [], onlyReadyApps: true)
+            batches.append(ready)
+            let processedIDs = Set(ready.windowDiagnostics.map(\.windowID))
+            let remainingWindows = snapshot.windows.filter { !processedIDs.contains($0.id) }
+
+            finishStage(next: "readiness")
+            if !readinessBundleIdentifiers.isEmpty {
+                let readiness = try await rediscoverApplicationsUntilRestoreReadiness(
+                    windows: remainingWindows, deadline: readinessDeadline,
                     requestedBundleIdentifiers: readinessBundleIdentifiers,
                     expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
                     successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
@@ -475,238 +749,20 @@ struct RestoreEngine {
                     openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID,
                     preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
                     genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-                    appInstances: appInstances
-                )
-                discoveryResult = readinessResult.discoveryResult
-                discoveredApplications = discoveryResult.applications
-                timedOutWindowIDs = readinessResult.timedOutWindowIDs
-            } catch {
-                let blocked = await returnUnusedInspections(recoveredWindowsBySavedID,
-                    plannedWindowIDs: [:], snapshot: snapshot, inventory: spaceInventory)
-                let restoreError: Error = blocked.isEmpty ? error : RestoreEngineError.inspectionNotReturned
-                telemetryLogger.log(
-                    .restoreFailed(
-                        snapshotID: id,
-                        error: restoreError
-                    )
-                )
-                throw restoreError
+                    appInstances: appInstances)
+                discoveryResult = readiness.discoveryResult
+                timedOutWindowIDs = readiness.timedOutWindowIDs
             }
-        }
-
-        finishStage(next: "matching")
-        // Keep return receipts while matching replacement processes under their new identities.
-        let inspectedWindows = recoveredWindowsBySavedID
-        for (windowID, pid) in appInstances.processIdentifiers {
-            if let recovered = recoveredWindowsBySavedID[windowID], recovered.allowsRestore, recovered.pid != pid {
-                recoveredWindowsBySavedID[windowID] = nil
+            if !remainingWindows.isEmpty || snapshot.windows.isEmpty {
+                batches.append(try await restoreWindows(remainingWindows, from: discoveryResult,
+                    timedOutWindowIDs: timedOutWindowIDs, onlyReadyApps: false))
             }
-        }
-        let liveWindowsByCandidateID = Self.liveWindowsByCandidateID(from: discoveredApplications)
-        let recoveredCandidateIdentifiers = recoveredWindowsBySavedID.filter {
-            !successfullyRequestedWebWindowIDs.contains($0.key)
-        }.compactMapValues { recovered -> Int? in
-            let candidates = liveWindowsByCandidateID.filter {
-                $0.candidate.pid == recovered.pid && $0.window.cgWindowID == recovered.windowID
-            }
-            return candidates.count == 1 ? candidates.first?.candidate.id : nil
-        }
-        let matchedPlans = matchPlanner.plans(
-            for: snapshot.windows.filter { appInstances.blockedWindows[$0.id] == nil && inspectionBlockedWindows[$0.id] == nil },
-            candidates: liveWindowsByCandidateID.map { $0.candidate },
-            runningBundleIdentifiers: runningBundleIdentifiers(from: discoveredApplications),
-            genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-            preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
-            preferredProcessIdentifiers: recoveredWindowsBySavedID.mapValues(\.pid)
-                .merging(appInstances.processIdentifiers, uniquingKeysWith: { _, instance in instance }),
-            preferredCandidateIdentifiers: recoveredCandidateIdentifiers
-        )
-        let plannedWindowIDs = matchedPlans.reduce(into: [UUID: CGWindowID]()) { result, plan in
-            guard let candidate = plan.candidate,
-                let windowID = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID
-            else { return }
-            result[plan.savedWindow.id] = windowID
-        }
-        let compensationBlocks = await returnUnusedInspections(inspectedWindows,
-            plannedWindowIDs: plannedWindowIDs, snapshot: snapshot, inventory: spaceInventory)
-        inspectionBlockedWindows.merge(compensationBlocks, uniquingKeysWith: { existing, _ in existing })
-        if Task.isCancelled, !compensationBlocks.isEmpty { throw RestoreEngineError.inspectionNotReturned }
-        try Task.checkCancellation()
-        // Document evidence is independent of whether subsequent Space placement succeeds.
-        for plan in matchedPlans {
-            for target in plan.savedWindow.openingConfiguration.effectiveTargets where target.kind != .webURL {
-                guard localTargetValidationIssue(for: target) == nil,
-                      plan.candidate?.referencesLocalTarget(target) != true,
-                      !targetIssues.contains(where: { $0.windowID == plan.savedWindow.id && $0.target.id == target.id }) else { continue }
-                targetIssues.append(RestoreTargetIssue(windowID: plan.savedWindow.id,
-                    bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
-                    target: target, reason: .openingNotConfirmed))
-            }
-        }
-        let matchedPlansByID = Dictionary(uniqueKeysWithValues: matchedPlans.map { ($0.savedWindow.id, $0) })
-        let plans = snapshot.windows.compactMap { savedWindow -> RestoreWindowPlan? in
-            if let reason = inspectionBlockedWindows[savedWindow.id] ?? appInstances.blockedWindows[savedWindow.id] {
-                return RestoreWindowPlan(savedWindow: savedWindow, candidate: nil, matchStrategy: nil,
-                    skip: RestoreSkip(bundleIdentifier: savedWindow.bundleIdentifier, windowTitle: savedWindow.windowTitle, reason: reason))
-            }
-            return matchedPlansByID[savedWindow.id]
-        }.map { plan -> RestoreWindowPlan in
-            if plan.candidate == nil, unconfirmedLocalWindowIDs.contains(plan.savedWindow.id) {
-                return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
-                    skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier,
-                        windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
-            }
-            if plan.candidate == nil, let pid = appInstances.processIdentifiers[plan.savedWindow.id],
-               !discoveredApplications.contains(where: { $0.pid == pid }) {
-                return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
-                    skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
-                                      reason: RestoreSkipReason.appInstanceUnconfirmed))
-            }
-            guard let expected = recoveredWindowsBySavedID[plan.savedWindow.id] else { return plan }
-            let matchesRecovery = plan.candidate.map { candidate in
-                candidate.pid == expected.pid &&
-                    liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID == expected.windowID
-            } ?? false
-            if matchesRecovery && expected.allowsRestore { return plan }
-            // Opening a missing target can create a new window; preserve normal target matching.
-            if !matchesRecovery && successfullyRequestedWebWindowIDs.contains(plan.savedWindow.id) {
-                return plan
-            }
-            // Never substitute a sibling or resubmit an unconfirmed asynchronous recovery move.
-            return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
-                skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
-        }
-
-        logBrowserWindowResolution(
-            plans: plans,
-            candidates: liveWindowsByCandidateID.map(\.candidate),
-            openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID,
-            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
-            initiallyRunningBundleIdentifiers: initiallyRunningBundleIdentifiers
-        )
-
-        var restoredWindows = 0
-        var skippedItems = plans.compactMap(\.skip)
-        var downgradedItems: [RestoreDowngrade] = []
-        var displayFallbacks: [DisplayFallbackEvent] = []
-        var windowDiagnostics: [RestoreWindowDiagnostic] = []
-        var restoredWindowZOrderItems: [RestoreWindowZOrderItem] = []
-
-        finishStage(next: "positioning")
-        for plan in plans {
-            let candidateCount = liveWindowsByCandidateID.count {
-                $0.candidate.bundleIdentifier == plan.savedWindow.bundleIdentifier
-            }
-            let filteredCandidateCount = discoveryResult.diagnostics.count {
-                $0.bundleIdentifier == plan.savedWindow.bundleIdentifier && $0.kind == .windowRejected
-            }
-            let readinessTimedOut = timedOutWindowIDs.contains(plan.savedWindow.id)
-            guard let candidate = plan.candidate,
-                  var liveWindow = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window else {
-                AppLogger.restore.info(
-                    "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=none candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=false geometryAttemptCount=0 displayOutcome=unavailable result=skipped reason=\(plan.skip?.reason ?? RestoreSkipReason.windowNotFound, privacy: .public)."
-                )
-                windowDiagnostics.append(
-                    RestoreWindowDiagnostic(
-                        windowID: plan.savedWindow.id,
-                        bundleIdentifier: plan.savedWindow.bundleIdentifier,
-                        matchStrategy: nil,
-                        candidateCount: candidateCount,
-                        filteredCandidateCount: filteredCandidateCount,
-                        readinessTimedOut: readinessTimedOut,
-                        geometryAttempted: false,
-                        geometryAttemptCount: 0,
-                        expectedFrame: nil,
-                        finalObservedFrame: nil,
-                        displayOutcome: nil,
-                        result: "skipped",
-                        reason: plan.skip?.reason ?? RestoreSkipReason.windowNotFound
-                    )
-                )
-                continue
-            }
-
-            let restoreDisplayPlan = displayResolver.restorePlan(
-                for: plan.savedWindow,
-                from: snapshot.sourceDisplayState,
-                to: currentDisplayState
-            )
-            let spaceOutcome = await spaces.prepare(
-                windowID: liveWindow.cgWindowID,
-                displayID: restoreDisplayPlan.resolvedDisplayID,
-                inventory: spaceInventory,
-                ordinaryWindow: liveWindow.role == "AXWindow" && liveWindow.subrole == "AXStandardWindow" && !liveWindow.isFullscreen
-            )
-            var canApplyGeometry = spaceOutcome.permitsGeometry
-            if spaceOutcome == .moved, let windowID = liveWindow.cgWindowID {
-                let rediscovery = try await rediscoverWindow(pid: candidate.pid, windowID: windowID)
-                if let window = rediscovery.window { liveWindow = window } else { canApplyGeometry = false }
-            }
-            AppLogger.restore.info("Space restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) windowID=\(liveWindow.cgWindowID ?? 0) outcome=\(spaceOutcome.rawValue, privacy: .public).")
-            let result: RestoreWindowApplyResult
-            if canApplyGeometry {
-                result = try await windowApplier.apply(
-                    savedWindow: plan.savedWindow,
-                    targetFrame: restoreDisplayPlan.targetFrame,
-                    to: liveWindow
-                )
-            } else {
-                result = .failed(reason: RestoreSkipReason.desktopUnconfirmed)
-            }
-            let expectedFrame = String(describing: restoreDisplayPlan.targetFrame)
-            let finalFrame = result.finalObservedFrame.map(String.init(describing:)) ?? "unavailable"
-            AppLogger.restore.info(
-                "Window restore bundle=\(plan.savedWindow.bundleIdentifier, privacy: .public) matchStrategy=\(plan.matchStrategy?.rawValue ?? "unknown", privacy: .public) candidateCount=\(candidateCount) filteredCandidateCount=\(filteredCandidateCount) readinessTimedOut=\(readinessTimedOut) geometryAttempted=\(canApplyGeometry) geometryAttemptCount=\(result.attemptCount) expectedFrame=\(expectedFrame, privacy: .public) finalFrame=\(finalFrame, privacy: .public) displayOutcome=\(restoreDisplayPlan.outcome.rawValue, privacy: .public) result=\(result.didRestore ? "restored" : "skipped", privacy: .public)."
-            )
-            windowDiagnostics.append(
-                RestoreWindowDiagnostic(
-                    windowID: plan.savedWindow.id,
-                    bundleIdentifier: plan.savedWindow.bundleIdentifier,
-                    matchStrategy: plan.matchStrategy,
-                    candidateCount: candidateCount,
-                    filteredCandidateCount: filteredCandidateCount,
-                    readinessTimedOut: readinessTimedOut,
-                    geometryAttempted: canApplyGeometry,
-                    geometryAttemptCount: result.attemptCount,
-                    expectedFrame: restoreDisplayPlan.targetFrame,
-                    finalObservedFrame: result.finalObservedFrame,
-                    displayOutcome: restoreDisplayPlan.outcome,
-                    result: result.didRestore ? "restored" : "skipped",
-                    reason: result.failureReason ?? (spaceOutcome == .identityUnconfirmed ? RestoreDowngradeReason.windowIdentityUnconfirmed : nil)
-                )
-            )
-            if result.didRestore {
-                restoredWindows += 1
-                restoredWindowZOrderItems.append(
-                    RestoreWindowZOrderItem(
-                        savedWindow: plan.savedWindow,
-                        processIdentifier: candidate.pid,
-                        liveWindow: liveWindow
-                    )
-                )
-                if let downgrade = result.downgrade {
-                    downgradedItems.append(downgrade)
-                }
-                if spaceOutcome == .identityUnconfirmed {
-                    downgradedItems.append(RestoreDowngrade(
-                        bundleIdentifier: plan.savedWindow.bundleIdentifier,
-                        windowTitle: plan.savedWindow.windowTitle,
-                        reason: RestoreDowngradeReason.windowIdentityUnconfirmed
-                    ))
-                }
-                if let fallback = restoreDisplayPlan.fallback {
-                    displayFallbacks.append(fallback)
-                }
-            } else {
-                skippedItems.append(
-                    RestoreSkip(
-                        bundleIdentifier: plan.savedWindow.bundleIdentifier,
-                        windowTitle: plan.savedWindow.windowTitle,
-                        reason: result.failureReason ?? RestoreSkipReason.restoreFailed
-                    )
-                )
-            }
+        } catch {
+            let blocked = await returnUnusedInspections(pendingInspections,
+                plannedWindowIDs: [:], snapshot: snapshot, inventory: spaceInventory)
+            let restoreError: Error = blocked.isEmpty ? error : RestoreEngineError.inspectionNotReturned
+            telemetryLogger.log(.restoreFailed(snapshotID: id, error: restoreError))
+            throw restoreError
         }
 
         finishStage(next: "stacking")
@@ -724,14 +780,14 @@ struct RestoreEngine {
         finishStage()
 
         let restoreResult = RestoreResult(
-            restoredWindows: restoredWindows,
-            skippedItems: skippedItems,
-            downgradedItems: downgradedItems,
-            displayFallbacks: displayFallbacks,
+            restoredWindows: batches.reduce(0) { $0 + $1.restoredWindows },
+            skippedItems: batches.flatMap(\.skippedItems),
+            downgradedItems: batches.flatMap(\.downgradedItems),
+            displayFallbacks: batches.flatMap(\.displayFallbacks),
             requestedTargetCount: requestedTargetCount,
             targetIssues: targetIssues,
-            windowDiagnostics: windowDiagnostics,
-            discoveryDiagnostics: discoveryResult.diagnostics
+            windowDiagnostics: batches.flatMap(\.windowDiagnostics),
+            discoveryDiagnostics: batches.flatMap(\.discoveryDiagnostics) + discoveryResult.diagnostics.filter { $0.bundleIdentifier == nil }
         )
         telemetryLogger.log(.restoreCompleted(snapshot: snapshot, result: restoreResult))
         return restoreResult
@@ -976,7 +1032,7 @@ struct RestoreEngine {
         try Task.checkCancellation()
         guard returned else { return .blocked(RestoreSkipReason.inspectionNotReturned) }
         // Discard the wrong-file hint and rebuild discovery before ordinary file opening.
-        return .returned(try discoveryResultProvider(), ruledOut: ruledOut)
+        return .returned(try discoveryResultProvider(nil, pid), ruledOut: ruledOut)
     }
 
     private func returnInspectedWindow(
@@ -1015,19 +1071,20 @@ struct RestoreEngine {
     }
 
     private func rediscoverWindow(pid: pid_t, windowID: CGWindowID) async throws -> (result: WindowDiscoveryResult, window: DiscoveredWindow?) {
-        var result = try discoveryResultProvider()
+        var result = try discoveryResultProvider(nil, pid)
         for attempt in 0..<20 {
             let windows = result.applications.filter { $0.pid == pid }.flatMap(\.windows).filter { $0.cgWindowID == windowID }
             if windows.count == 1 { return (result, windows[0]) }
             guard !Task.isCancelled, attempt < 19 else { break }
             await launchPollSleeper(0.05)
-            result = try discoveryResultProvider()
+            result = try discoveryResultProvider(nil, pid)
         }
         return (result, nil)
     }
 
     private func rediscoverApplicationsUntilRestoreReadiness(
-        snapshot: Snapshot,
+        windows: [WindowRecord],
+        deadline: Date,
         requestedBundleIdentifiers: Set<String>,
         expectedOpenedLocalTargetCounts: [String: [URL: Int]],
         successfullyRequestedTargetWindowIDs: Set<UUID>,
@@ -1038,10 +1095,10 @@ struct RestoreEngine {
         genericColdOpenedBrowserWindowIDs: Set<UUID>,
         appInstances: RestoreAppInstancePreparation
     ) async throws -> RestoreReadinessResult {
-        let deadline = launchClock().addingTimeInterval(launchTimeout)
+        let savedBundleIdentifiers = Set(windows.map(\.bundleIdentifier))
         let identityReadinessBundles = Set(expectedOpenedLocalTargetCounts.keys).union(appInstances.requestedBundles)
         var discoveryResult = enrichedRestoreDiscoveryResult(
-            try discoveryResultProvider(),
+            try discoveryResultProvider(savedBundleIdentifiers, nil),
             openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID
         )
         // Newly opened AX documents can precede their owner-validated WindowServer IDs.
@@ -1050,7 +1107,7 @@ struct RestoreEngine {
             try Task.checkCancellation()
             let applications = discoveryResult.applications
             let contentReady = requestedApplicationsAreReady(
-                snapshot: snapshot,
+                windows: windows,
                 requestedBundleIdentifiers: requestedBundleIdentifiers,
                 expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
                 successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
@@ -1075,7 +1132,7 @@ struct RestoreEngine {
             } else if launchClock() >= deadline {
                 return RestoreReadinessResult(discoveryResult: discoveryResult,
                     timedOutWindowIDs: unreadyRequestedWindowIDs(
-                        snapshot: snapshot,
+                        windows: windows,
                         requestedBundleIdentifiers: requestedBundleIdentifiers,
                         expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
                         successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
@@ -1089,14 +1146,14 @@ struct RestoreEngine {
             await launchPollSleeper(contentReady ? 0.05 : launchPollInterval)
             try Task.checkCancellation()
             discoveryResult = enrichedRestoreDiscoveryResult(
-                try discoveryResultProvider(),
+                try discoveryResultProvider(savedBundleIdentifiers, nil),
                 openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID
             )
         }
     }
 
     private func requestedApplicationsAreReady(
-        snapshot: Snapshot,
+        windows: [WindowRecord],
         requestedBundleIdentifiers: Set<String>,
         expectedOpenedLocalTargetCounts: [String: [URL: Int]],
         successfullyRequestedTargetWindowIDs: Set<UUID>,
@@ -1108,7 +1165,7 @@ struct RestoreEngine {
         appInstances: RestoreAppInstancePreparation
     ) -> Bool {
         unreadyRequestedWindowIDs(
-            snapshot: snapshot,
+            windows: windows,
             requestedBundleIdentifiers: requestedBundleIdentifiers,
             expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
             successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
@@ -1122,7 +1179,7 @@ struct RestoreEngine {
     }
 
     private func unreadyRequestedWindowIDs(
-        snapshot: Snapshot,
+        windows: [WindowRecord],
         requestedBundleIdentifiers: Set<String>,
         expectedOpenedLocalTargetCounts: [String: [URL: Int]],
         successfullyRequestedTargetWindowIDs: Set<UUID>,
@@ -1152,7 +1209,7 @@ struct RestoreEngine {
         var instanceTargets = Dictionary(uniqueKeysWithValues: Set(appInstances.processIdentifiers.values).map { pid in
             (pid, OpenLocalTargetIndex(from: discoveredApplications.filter { $0.pid == pid }))
         })
-        for window in snapshot.windows {
+        for window in windows {
             guard let pid = appInstances.processIdentifiers[window.id],
                   let targets = appInstances.targetsByWindowID[window.id],
                   var index = instanceTargets[pid] else { continue }
@@ -1164,7 +1221,7 @@ struct RestoreEngine {
 
         let liveWindowsByCandidateID = Self.liveWindowsByCandidateID(from: discoveredApplications)
         let runningBundleIdentifiers = runningBundleIdentifiers(from: discoveredApplications)
-        let savedWindowsForRequests = snapshot.windows.filter { savedWindow in
+        let savedWindowsForRequests = windows.filter { savedWindow in
             appInstances.blockedWindows[savedWindow.id] == nil && (
                 successfullyRequestedTargetWindowIDs.contains(savedWindow.id) ||
                 successfullyRequestedWebWindowIDs.contains(savedWindow.id) ||

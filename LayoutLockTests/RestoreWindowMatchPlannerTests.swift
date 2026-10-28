@@ -1510,6 +1510,101 @@ final class RestoreEngineTests: XCTestCase {
         }
     }
 
+    func testReadyAppInstancesRestoreBeforePendingAppWithinSharedDeadline() async throws {
+        for applyDuration: TimeInterval in [0, 5] {
+            let readyBundle = "com.example.ready"
+            let pendingBundle = "com.example.pending"
+            let targets = try ["Ready-A.txt", "Ready-B.txt", "Pending.txt"].map {
+                WindowOpenTarget(kind: .file, url: try makeFile(named: $0))
+            }
+            let readyWindows = targets.prefix(2).enumerated().map { index, target in
+                makeWindowRecord(bundleIdentifier: readyBundle, pidAtCapture: Int32(42 + index),
+                    openingConfiguration: WindowOpeningConfiguration(manualTargets: [target]))
+            }
+            let pendingWindow = makeWindowRecord(bundleIdentifier: pendingBundle,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: [targets[2]]))
+            let snapshot = makeSnapshot(windows: readyWindows + [pendingWindow])
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let clock = TestClock()
+            let start = clock.now()
+            let applier = RecordingEngineWindowApplier(onApply: { await clock.sleep(interval: applyDuration) })
+            let opener = RecordingTargetOpener()
+            let live = targets.prefix(2).enumerated().map { index, target in
+                makeApplication(bundleIdentifier: readyBundle, pid: Int32(900 + index), windows: [
+                    makeDiscoveredWindow(documentURL: target.url, title: "Ready \(index)",
+                        frame: readyWindows[index].frame.cgRect, cgWindowID: CGWindowID(9001 + index))
+                ])
+            }
+            var sleeps = 0
+            let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+                windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+                applicationLauncher: RecordingApplicationLauncher(results: [:]), targetOpener: opener,
+                browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+                applicationActivator: RecordingApplicationActivator { _ in },
+                discoveredApplicationsProvider: { live },
+                runningApplicationBundleProvider: { [readyBundle, pendingBundle] }, launchClock: clock.now,
+                launchPollSleeper: { _ in
+                    XCTAssertEqual(Set(applier.appliedSavedWindowIDs), Set(readyWindows.map(\.id)))
+                    XCTAssertEqual(applier.raiseCount, 0)
+                    XCTAssertEqual(applier.focusCount, 0)
+                    sleeps += 1
+                    await clock.sleep(interval: 5)
+                })
+
+            let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(result.restoredWindows, 2)
+            XCTAssertEqual(result.skippedItems.count, 1)
+            XCTAssertEqual(result.windowDiagnostics.filter(\.readinessTimedOut).map(\.windowID), [pendingWindow.id])
+            XCTAssertEqual(clock.now().timeIntervalSince(start), 15)
+            XCTAssertEqual(sleeps, applyDuration == 0 ? 3 : 1)
+            XCTAssertEqual(opener.requests.map(\.bundleIdentifier), [pendingBundle])
+            XCTAssertEqual(applier.appliedCGWindowIDs.compactMap { $0 }.sorted(), [9001, 9002])
+        }
+    }
+
+    func testPendingTargetKeepsSameAppWindowsTogetherWhenOpeningReusesWindow() async throws {
+        let bundle = "com.example.editor"
+        let targets = try ["Reused-A.txt", "Reused-B.txt"].map {
+            WindowOpenTarget(kind: .file, url: try makeFile(named: $0))
+        }
+        let saved = targets.map { target in
+            makeWindowRecord(bundleIdentifier: bundle,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: [target]))
+        }
+        let snapshot = makeSnapshot(windows: saved)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let clock = TestClock()
+        let start = clock.now()
+        let applier = RecordingEngineWindowApplier()
+        let opener = RecordingTargetOpener()
+        let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+            windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+            applicationLauncher: RecordingApplicationLauncher(results: [:]), targetOpener: opener,
+            browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+            applicationActivator: RecordingApplicationActivator { _ in },
+            discoveredApplicationsProvider: {
+                let index = clock.now() == start ? 0 : 1
+                return [self.makeApplication(bundleIdentifier: bundle, windows: [
+                    self.makeDiscoveredWindow(documentURL: targets[index].url, title: "Reused window",
+                        frame: saved[index].frame.cgRect, cgWindowID: 9001)
+                ])]
+            }, runningApplicationBundleProvider: { [bundle] }, launchClock: clock.now,
+            launchPollSleeper: { _ in
+                XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+                await clock.sleep(interval: 5)
+            })
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertEqual(result.skippedItems.count, 1)
+        XCTAssertEqual(applier.appliedSavedWindowIDs, [saved[1].id])
+        XCTAssertEqual(opener.requests.flatMap(\.targets).map(\.url), [targets[1].url])
+    }
+
     func testDefaultReadinessBudgetRestoresFastAndSlowAppInstancesWithoutReopening() async throws {
         let bundle = "com.example.editor"
         for readyAfter: TimeInterval in [0, 10, 15] {
@@ -5016,6 +5111,38 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(fixture.applier.restoredFrames.isEmpty)
     }
 
+    func testLayoutRefreshFailureReturnsConfirmedInspectionBeforeThrowing() async throws {
+        for returnSucceeds in [true, false] {
+            let fixture = try makeLocalTargetInspection()
+            fixture.state.confirmsReturnMove = returnSucceeds
+            fixture.state.onDiscovery = { [unowned state = fixture.state] in
+                if state.didInspect {
+                    XCTAssertEqual(state.membership, [11])
+                    throw WindowDiscoveryError.accessibilityPermissionDenied
+                }
+            }
+
+            do {
+                _ = try await fixture.engine.restoreSnapshot(id: fixture.snapshot.id)
+                XCTFail("Expected the layout refresh to fail")
+            } catch WindowDiscoveryError.accessibilityPermissionDenied {
+                XCTAssertTrue(returnSucceeds)
+            } catch RestoreEngineError.inspectionNotReturned {
+                XCTAssertFalse(returnSucceeds)
+            }
+
+            XCTAssertEqual(fixture.state.moveDestinations, [11, 10])
+            XCTAssertEqual(fixture.state.returnTaskWasCancelled, false)
+            XCTAssertEqual(fixture.state.membership, returnSucceeds ? [10] : [11])
+            XCTAssertEqual(fixture.state.frame, returnSucceeds ? fixture.state.originalFrame : fixture.state.gatheredFrame)
+            XCTAssertTrue(fixture.opener.requests.isEmpty)
+            XCTAssertTrue(fixture.applier.appliedCGWindowIDs.isEmpty)
+            XCTAssertTrue(fixture.applier.restoredFrames.isEmpty)
+            XCTAssertEqual(fixture.applier.raiseCount, 0)
+            XCTAssertEqual(fixture.applier.focusCount, 0)
+        }
+    }
+
     func testGenericMultipleProjectsRecoverHiddenCGWindowWithoutOpeningOnRepeatedRestores() async throws {
         let fixture = try makeMultipleProjectInspection()
 
@@ -5740,6 +5867,7 @@ final class RestoreEngineTests: XCTestCase {
             browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
             applicationActivator: RecordingApplicationActivator { _ in }, spaces: spaces,
             discoveryResultProvider: {
+                try state.onDiscovery?()
                 let siblingWindows = siblingTarget.map { target in
                     [self.makeDiscoveredWindow(documentURL: target.url, title: "Complete sibling",
                         frame: saved.frame.cgRect, cgWindowID: 9003)]
@@ -6121,10 +6249,13 @@ private final class RecordingEngineWindowApplier: RestoreWindowApplying {
     private(set) var focusCount = 0
     private let result: RestoreWindowApplyResult
     private let onRestoreFrame: ((CGRect, DiscoveredWindow) -> Void)?
+    private let onApply: (() async -> Void)?
 
-    init(result: RestoreWindowApplyResult = .restored(), onRestoreFrame: ((CGRect, DiscoveredWindow) -> Void)? = nil) {
+    init(result: RestoreWindowApplyResult = .restored(), onRestoreFrame: ((CGRect, DiscoveredWindow) -> Void)? = nil,
+        onApply: (() async -> Void)? = nil) {
         self.result = result
         self.onRestoreFrame = onRestoreFrame
+        self.onApply = onApply
     }
 
     func apply(
@@ -6136,6 +6267,7 @@ private final class RecordingEngineWindowApplier: RestoreWindowApplying {
         appliedWindowTitles.append(discoveredWindow.title)
         appliedSavedWindowIDs.append(savedWindow.id)
         appliedCGWindowIDs.append(discoveredWindow.cgWindowID)
+        await onApply?()
         return result
     }
 
@@ -6202,6 +6334,7 @@ private final class LocalTargetInspectionState {
     var returnTaskWasCancelled: Bool?
     var onForwardMove: (() -> Void)?
     var onMovePoll: (() -> Void)?
+    var onDiscovery: (() throws -> Void)?
     var onInspection: (() throws -> Void)?
     var onOpen: (() -> Void)?
 

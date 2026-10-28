@@ -212,6 +212,18 @@ struct WindowDiscoveryEngine {
     }
 
     func discoverRunningWindowsWithDiagnostics(
+        bundleIdentifiers: Set<String>?,
+        processIdentifier: pid_t? = nil
+    ) throws -> WindowDiscoveryResult {
+        try discoverRunningWindowsWithDiagnostics(
+            runningApplications: runningApplicationsProvider().filter { application in
+                (bundleIdentifiers.map { $0.contains(application.bundleIdentifier ?? "") } ?? true) &&
+                    (processIdentifier == nil || application.processIdentifier == processIdentifier)
+            }
+        )
+    }
+
+    func discoverRunningWindowsWithDiagnostics(
         runningApplications: [RunningApplicationSnapshot]
     ) throws -> WindowDiscoveryResult {
         guard trustChecker.isTrusted() else {
@@ -326,7 +338,7 @@ struct WindowDiscoveryEngine {
         unexposedCGWindows: inout [CGWindowMetadata]
     ) -> [DiscoveredWindow] {
         let windowRead = attributeReader.windows(from: appElement)
-        let windows = windowRead.elements
+        var windows = windowRead.elements
         if windows.isEmpty {
             diagnostics.append(WindowDiscoveryDiagnostic(
                 bundleIdentifier: bundleIdentifier,
@@ -336,6 +348,18 @@ struct WindowDiscoveryEngine {
                     : "AXWindows failed (\(windowRead.error.rawValue))",
                 kind: .applicationEnumeration
             ))
+        }
+
+        // Some apps omit off-Space windows from AXWindows while exposing their main/focused handle.
+        for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            guard let window = attributeReader.element(from: appElement, attribute: attribute as CFString),
+                !windows.contains(where: { CFEqual($0, window) }),
+                let windowID = windowIDProvider(window),
+                cgWindowMetadata.contains(where: {
+                    $0.windowID == windowID && $0.processIdentifier == processIdentifier
+                }),
+                !windows.contains(where: { windowIDProvider($0) == windowID }) else { continue }
+            windows.append(window)
         }
 
         var remainingCGWindowMetadata = cgWindowMetadata

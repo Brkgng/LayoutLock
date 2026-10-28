@@ -5,6 +5,75 @@ import XCTest
 @testable import LayoutLock
 
 final class WindowDiscoveryEngineTests: XCTestCase {
+    func testMainAndFocusedFallbackDeduplicatesOwnedWindowByCGIdentity() throws {
+        let app = AXUIElementCreateApplication(101)
+        let main = AXUIElementCreateApplication(201)
+        let focused = AXUIElementCreateApplication(202)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([] as CFArray, for: app, attribute: kAXWindowsAttribute)
+        fixture.set(main, for: app, attribute: kAXMainWindowAttribute)
+        fixture.set(focused, for: app, attribute: kAXFocusedWindowAttribute)
+        for window in [main, focused] {
+            fixture.setWindow(window, title: "Document", role: kAXWindowRole as String,
+                subrole: kAXStandardWindowSubrole as String, frame: frame)
+        }
+        let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Document"), cgMetadata(id: 901, title: "Other hidden document")]],
+            windowIDProvider: { _ in 900 })
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+        XCTAssertEqual(result.applications.first?.windows.map(\.cgWindowID), [900])
+        XCTAssertEqual(result.unexposedApplications.first?.windows.map(\.windowID), [901])
+    }
+
+    func testMainFallbackComplementsPartialAXWindowList() throws {
+        let app = AXUIElementCreateApplication(101)
+        let listed = AXUIElementCreateApplication(201)
+        let main = AXUIElementCreateApplication(202)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([listed] as CFArray, for: app, attribute: kAXWindowsAttribute)
+        fixture.set(main, for: app, attribute: kAXMainWindowAttribute)
+        fixture.set(main, for: app, attribute: kAXFocusedWindowAttribute)
+        for window in [listed, main] {
+            fixture.setWindow(window, title: "Document", role: kAXWindowRole as String,
+                subrole: kAXStandardWindowSubrole as String, frame: frame)
+        }
+        let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Listed"), cgMetadata(id: 901, title: "Main")]],
+            windowIDProvider: { CFEqual($0, listed) ? 900 : 901 })
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+        XCTAssertEqual(result.applications.first?.windows.map(\.cgWindowID), [900, 901])
+        XCTAssertTrue(result.unexposedApplications.isEmpty)
+    }
+
+    func testFallbackRequiresCurrentOwnerIdentityAndRetainsRoleFiltering() throws {
+        for id: CGWindowID? in [nil, 0, 999, 901, 900] {
+            let app = AXUIElementCreateApplication(101)
+            let main = AXUIElementCreateApplication(201)
+            let fixture = AXAttributeFixture()
+            fixture.set([] as CFArray, for: app, attribute: kAXWindowsAttribute)
+            fixture.set(main, for: app, attribute: kAXMainWindowAttribute)
+            fixture.setWindow(main, title: "Panel", role: kAXSheetRole as String,
+                frame: CGRect(x: 20, y: 30, width: 400, height: 300))
+            let foreign = CGWindowMetadata(windowID: 901, processIdentifier: 102, ownerName: "Other",
+                layer: 0, bounds: CGRect(x: 20, y: 30, width: 400, height: 300), title: "Other", isOnScreen: false, zOrderHint: nil)
+            let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+                metadata: [101: [cgMetadata(id: 900, title: "Hidden")], 102: [foreign]],
+                windowIDProvider: { _ in id })
+
+            let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+            XCTAssertTrue(result.applications.isEmpty)
+            XCTAssertEqual(result.unexposedApplications.first?.windows.map(\.windowID) ?? [], id == 900 ? [] : [900])
+            XCTAssertEqual(result.diagnostics.contains { $0.reason == WindowDiscoveryDiagnosticReason.transientRole }, id == 900)
+        }
+    }
+
     func testPartiallyExposedOwnerRetainsOnlyUnmatchedCGWindow() throws {
         let appElement = AXUIElementCreateApplication(101)
         let windowElement = AXUIElementCreateApplication(201)
@@ -272,6 +341,121 @@ final class WindowDiscoveryEngineTests: XCTestCase {
                 return XCTFail("Expected accessibility error, got \(error).")
             }
         }
+    }
+
+    func testScopedDiscoveryFiltersBeforeCGAndAXReadsWithoutChangingCapture() throws {
+        let applications = [
+            RunningApplicationSnapshot(bundleIdentifier: "com.example.editor", processIdentifier: 101, localizedName: "One"),
+            RunningApplicationSnapshot(bundleIdentifier: "com.example.editor", processIdentifier: 102, localizedName: "Two"),
+            RunningApplicationSnapshot(bundleIdentifier: "com.example.other", processIdentifier: 103, localizedName: "Other")
+        ]
+        var cgPIDs: Set<pid_t> = []
+        var axPIDs: Set<pid_t> = []
+        let engine = WindowDiscoveryEngine(
+            trustChecker: AccessibilityTrustChecker { true },
+            attributeReader: AXAttributeReader(attributeValueProvider: { _, _ in nil }),
+            currentProcessIdentifier: 500,
+            runningApplicationsProvider: { applications },
+            appElementProvider: { pid in axPIDs.insert(pid); return AXUIElementCreateApplication(pid) },
+            cgWindowMetadataProvider: { cgPIDs = $0; return [:] }
+        )
+
+        let scopes: [(Set<String>?, pid_t?, Set<pid_t>)] = [
+            (["com.example.editor"], nil, [101, 102]),
+            (nil, 102, [102]),
+            (["com.example.editor"], 103, []),
+            ([], nil, [])
+        ]
+        for (bundles, pid, expected) in scopes {
+            axPIDs = []
+            _ = try engine.discoverRunningWindowsWithDiagnostics(bundleIdentifiers: bundles, processIdentifier: pid)
+            XCTAssertEqual(cgPIDs, expected)
+            XCTAssertEqual(axPIDs, expected)
+        }
+
+        axPIDs = []
+        _ = try engine.discoverRunningWindowsWithDiagnostics()
+        XCTAssertEqual(cgPIDs, [101, 102, 103])
+        XCTAssertEqual(axPIDs, [101, 102, 103])
+    }
+
+    func testRestoreRetainsOtherLayoutWindowsAfterPIDScopedSpaceRecovery() async throws {
+        let directory = try TestTemporaryDirectory()
+        let fixture = AXAttributeFixture()
+        let hiddenApp = AXUIElementCreateApplication(101)
+        let recoveredApp = AXUIElementCreateApplication(201)
+        let otherApp = AXUIElementCreateApplication(102)
+        let hiddenWindow = AXUIElementCreateApplication(301)
+        let otherWindow = AXUIElementCreateApplication(302)
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([] as CFArray, for: hiddenApp, attribute: kAXWindowsAttribute)
+        fixture.set([hiddenWindow] as CFArray, for: recoveredApp, attribute: kAXWindowsAttribute)
+        fixture.set([otherWindow] as CFArray, for: otherApp, attribute: kAXWindowsAttribute)
+        fixture.setWindow(hiddenWindow, title: "Hidden", role: kAXWindowRole as String,
+            subrole: kAXStandardWindowSubrole as String, frame: frame)
+        fixture.setWindow(otherWindow, title: "Other", role: kAXWindowRole as String,
+            subrole: kAXStandardWindowSubrole as String, frame: frame)
+        var moved = false
+        var queries: [Set<pid_t>] = []
+        let discovery = WindowDiscoveryEngine(
+            trustChecker: AccessibilityTrustChecker { true }, attributeReader: fixture.reader,
+            currentProcessIdentifier: 500,
+            runningApplicationsProvider: {
+                [RunningApplicationSnapshot(bundleIdentifier: "com.example.editor", processIdentifier: 101, localizedName: "Editor"),
+                 RunningApplicationSnapshot(bundleIdentifier: "com.example.other", processIdentifier: 102, localizedName: "Other"),
+                 RunningApplicationSnapshot(bundleIdentifier: "com.example.unrelated", processIdentifier: 103, localizedName: "Unrelated")]
+            },
+            appElementProvider: { pid in
+                XCTAssertNotEqual(pid, 103)
+                return pid == 101 ? (moved ? recoveredApp : hiddenApp) : otherApp
+            },
+            cgWindowMetadataProvider: { pids in
+                queries.append(pids)
+                return [
+                    101: [self.cgMetadata(id: 900, title: "Hidden", frame: frame, isOnScreen: moved)],
+                    102: [CGWindowMetadata(windowID: 901, processIdentifier: 102, ownerName: "Other", layer: 0,
+                        bounds: frame, title: "Other", isOnScreen: true, zOrderHint: nil)]
+                ].filter { pids.contains($0.key) }
+            },
+            windowIDProvider: { CFEqual($0, hiddenWindow) ? 900 : 901 }
+        )
+        let display = makeDisplayRecord()
+        let windows = [("com.example.editor", "Hidden", Int32(101)), ("com.example.other", "Other", Int32(102))].map { bundle, title, pid in
+            WindowRecord(bundleIdentifier: bundle, pidAtCapture: pid, windowTitle: title,
+                role: kAXWindowRole as String, subrole: kAXStandardWindowSubrole as String,
+                frame: CGRectCodable(frame), displayID: display.id,
+                normalizedFrame: NormalizedRect(windowFrame: frame, displayFrame: display.frameRect),
+                zOrderHint: nil, isMinimized: false, isFullscreen: false, isVisible: true,
+                captureSignature: WindowSignature(bundleIdentifier: bundle, owningPid: pid, windowTitle: title,
+                    role: kAXWindowRole as String, subrole: kAXStandardWindowSubrole as String,
+                    capturedFrame: CGRectCodable(frame), cgWindowID: nil))
+        }
+        let snapshot = Snapshot(name: "Scoped recovery",
+            sourceDisplayState: DisplayState(displays: [display], primaryDisplayID: display.id), windows: windows)
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        try store.save(snapshot)
+        let applier = ScopedDiscoveryWindowApplier()
+        let engine = RestoreEngine(snapshotStore: store, windowDiscoveryEngine: discovery,
+            trustChecker: AccessibilityTrustChecker { true }, windowApplier: applier,
+            displayResolver: DisplayResolver(screenProvider: {
+                [DisplayResolver.ScreenSnapshot(id: display.id, localizedName: display.localizedName,
+                    frame: display.frameRect, visibleFrame: display.visibleFrameRect,
+                    backingScaleFactor: display.backingScaleFactor, isPrimary: true,
+                    vendorID: nil, productID: nil, serialNumber: nil)]
+            }), applicationActivator: applier,
+            spaces: RestoreSpaceCoordinator(access: RestoreSpaceAccess(
+                inventory: { _ in RestoreSpaceInventory(activeByDisplay: [display.id: 1], ordinarySpaceIDs: [1, 2]) },
+                membership: { $0 == 900 && !moved ? [2] : [1] },
+                submitMove: { id, _ in XCTAssertEqual(id, 900); moved = true; return true }
+            )), runningApplicationBundleProvider: { [] })
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertTrue(moved)
+        XCTAssertEqual(queries, [[101, 102], [101], [101, 102]])
+        XCTAssertEqual(result.restoredWindows, 2)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(applier.windowIDs, [900, 901])
     }
 
     func testFiltersCandidateApplicationsBeforeReadingCGMetadata() throws {
@@ -1162,6 +1346,21 @@ final class CGWindowMetadataReaderTests: XCTestCase {
             ]
         ]
     }
+}
+
+private final class ScopedDiscoveryWindowApplier: RestoreWindowApplying, RestoreApplicationActivating {
+    private(set) var windowIDs: [CGWindowID?] = []
+
+    func apply(savedWindow: WindowRecord, targetFrame: CGRect, to window: DiscoveredWindow) async throws -> RestoreWindowApplyResult {
+        windowIDs.append(window.cgWindowID)
+        return .restored(finalObservedFrame: targetFrame)
+    }
+
+    func raise(_ window: DiscoveredWindow) -> Bool { false }
+    func focus(_ window: DiscoveredWindow) -> RestoreWindowFocusResult {
+        RestoreWindowFocusResult(didRaise: false, didSetMain: false, didSetFocused: false)
+    }
+    func activate(processIdentifier: pid_t) async -> Bool { false }
 }
 
 private final class AXAttributeFixture {

@@ -61,6 +61,12 @@ struct AXAttributeReader {
         return value as? [AXUIElement]
     }
 
+    func element(from element: AXUIElement, attribute: CFString) -> AXUIElement? {
+        guard let value = copyAttributeValue(from: element, attribute: attribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+
     func string(
         from element: AXUIElement,
         attribute: CFString

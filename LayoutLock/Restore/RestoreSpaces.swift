@@ -80,8 +80,11 @@ struct RestoreSpaceCoordinator {
             return .ineligible
         }
         if let expectedSourceSpace, source != expectedSourceSpace { return .ineligible }
+        if source == destination {
+            // An unrelated display's change must not block a window already on its intended visible Space.
+            return destinationIsUnchanged(displayID: displayID, inventory: inventory) ? .alreadyVisible : .unconfirmed
+        }
         guard destinationsAreUnchanged(inventory) else { return .unconfirmed }
-        if source == destination { return .alreadyVisible }
         guard !Task.isCancelled, await access.submitMove(windowID, destination) else { return .unconfirmed }
         // A submission is asynchronous. Do not retry using another mover on failure/timeout.
         for attempt in 0..<40 {
@@ -197,6 +200,12 @@ struct RestoreSpaceCoordinator {
 
     func destinationsAreUnchanged(_ inventory: RestoreSpaceInventory) -> Bool {
         access.inventory(Array(inventory.activeByDisplay.keys))?.activeByDisplay == inventory.activeByDisplay
+    }
+
+    private func destinationIsUnchanged(displayID: UInt32, inventory: RestoreSpaceInventory) -> Bool {
+        guard let destination = inventory.activeByDisplay[displayID],
+            let current = access.inventory([displayID]), current.ordinarySpaceIDs.contains(destination) else { return false }
+        return current.activeByDisplay[displayID] == destination
     }
 
     func canStack(window: DiscoveredWindow, displayID: UInt32?, inventory: RestoreSpaceInventory?) -> Bool {

@@ -5,6 +5,61 @@ import XCTest
 @testable import LayoutLock
 
 final class RestoreSpacesTests: XCTestCase {
+    func testVisibleWindowOnUnchangedDisplayCanRestoreWithoutActivatingAfterAnotherDisplayChanges() async {
+        let initial = RestoreSpaceInventory(activeByDisplay: [1: 10, 2: 22], ordinarySpaceIDs: [10, 22, 23])
+        var moveCount = 0
+        let spaces = RestoreSpaceCoordinator(access: RestoreSpaceAccess(
+            inventory: { ids in RestoreSpaceInventory(
+                activeByDisplay: [UInt32(1): UInt64(10), 2: 23].filter { ids.contains($0.key) },
+                ordinarySpaceIDs: [10, 22, 23]) },
+            membership: { _ in [10] },
+            submitMove: { _, _ in moveCount += 1; return true },
+            applicationWindowIDs: { _ in [7] }
+        ))
+
+        let result = await spaces.prepare(windowID: 7, displayID: 1, inventory: initial, ordinaryWindow: true)
+
+        XCTAssertEqual(result, .alreadyVisible)
+        XCTAssertEqual(moveCount, 0)
+        // Geometry on this display is safe, while focus and stacking retain the global guard.
+        XCTAssertFalse(spaces.canStack(window: window(), displayID: 1, inventory: initial))
+        XCTAssertFalse(spaces.canActivate(windowID: 7, processIdentifier: 42, inventory: initial))
+    }
+
+    func testVisibleWindowStillRequiresItsOwnDisplayAndAnOrdinaryDestination() async {
+        let initial = RestoreSpaceInventory(activeByDisplay: [1: 10, 2: 22], ordinarySpaceIDs: [10, 11, 22])
+        let current: [RestoreSpaceInventory?] = [
+            RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 22], ordinarySpaceIDs: [10, 11, 22]),
+            RestoreSpaceInventory(activeByDisplay: [1: 10, 2: 22], ordinarySpaceIDs: [11, 22]),
+            nil
+        ]
+        for inventory in current {
+            let spaces = RestoreSpaceCoordinator(access: RestoreSpaceAccess(
+                inventory: { _ in inventory }, membership: { _ in [10] },
+                submitMove: { _, _ in XCTFail("An unconfirmed desktop must never submit a move"); return false }
+            ))
+
+            let result = await spaces.prepare(windowID: 7, displayID: 1, inventory: initial, ordinaryWindow: true)
+
+            XCTAssertEqual(result, .unconfirmed)
+        }
+    }
+
+    func testCrossSpaceMoveRemainsBlockedWhenAnotherDisplayChanges() async {
+        let initial = RestoreSpaceInventory(activeByDisplay: [1: 10, 2: 22], ordinarySpaceIDs: [10, 22, 23, 33])
+        let spaces = RestoreSpaceCoordinator(access: RestoreSpaceAccess(
+            inventory: { ids in RestoreSpaceInventory(
+                activeByDisplay: [UInt32(1): UInt64(10), 2: 23].filter { ids.contains($0.key) },
+                ordinarySpaceIDs: [10, 22, 23, 33]) },
+            membership: { _ in [33] },
+            submitMove: { _, _ in XCTFail("A cross-Space move must retain the full desktop guard"); return false }
+        ))
+
+        let result = await spaces.prepare(windowID: 7, displayID: 1, inventory: initial, ordinaryWindow: true)
+
+        XCTAssertEqual(result, .unconfirmed)
+    }
+
     private let inventory = RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 22], ordinarySpaceIDs: [10, 11, 22])
 
     func testAlreadyVisibleDoesNotSubmitMove() async {
@@ -740,7 +795,8 @@ final class RestoreSpacesTests: XCTestCase {
         }
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertEqual(applier.appliedCount, 1)
-        XCTAssertEqual(scans, 2)
+        // Initial layout, recovered owner, then the layout-wide refresh before matching.
+        XCTAssertEqual(scans, 3)
     }
 
     func testWeakExposedMatchDoesNotSuppressUniqueHiddenWindowRecovery() async throws {
