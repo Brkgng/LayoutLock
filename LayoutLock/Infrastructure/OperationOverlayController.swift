@@ -37,6 +37,12 @@ struct RestoreCompletionIssue {
     let appName: String
     let context: String?
     let reason: String
+    var actions: [RestoreCompletionAction] = []
+}
+
+struct RestoreCompletionAction {
+    let title: String
+    let perform: @MainActor () -> Void
 }
 
 @MainActor
@@ -765,6 +771,7 @@ private final class OperationCompletionToastContentView: NSView {
         detailsWindow.makeKeyAndOrderFront(nil)
         NSApp.runModal(for: detailsWindow)
         detailsWindow.close()
+        detailsWindow.selectedAction?.perform()
     }
 
     @objc private func dismiss() {
@@ -773,6 +780,8 @@ private final class OperationCompletionToastContentView: NSView {
 }
 
 final class RestoreCompletionDetailsWindow: NSPanel, NSWindowDelegate {
+    private(set) var selectedAction: RestoreCompletionAction?
+
     init(completion: RestoreCompletionMessage) {
         let content = RestoreCompletionDetailsContentView(completion: completion)
         super.init(
@@ -787,6 +796,10 @@ final class RestoreCompletionDetailsWindow: NSPanel, NSWindowDelegate {
         contentView = content
         delegate = self
         content.onDismiss = { NSApp.stopModal() }
+        content.onAction = { [weak self] action in
+            self?.selectedAction = action
+            NSApp.stopModal()
+        }
     }
 
     func windowShouldClose(_: NSWindow) -> Bool {
@@ -805,6 +818,7 @@ private final class RestoreIssueStackView: NSStackView {
 
 private final class RestoreCompletionDetailsContentView: NSView {
     var onDismiss: (() -> Void)?
+    var onAction: ((RestoreCompletionAction) -> Void)?
 
     init(completion: RestoreCompletionMessage) {
         super.init(frame: .zero)
@@ -837,7 +851,8 @@ private final class RestoreCompletionDetailsContentView: NSView {
         rows.translatesAutoresizingMaskIntoConstraints = false
         rows.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
         for issue in completion.issues {
-            let textWidth = contentWidth - 32
+            let cardBorderWidth: CGFloat = 0.5
+            let textWidth = contentWidth - 32 - 2 * cardBorderWidth
             let appLabel = Self.label(issue.appName, width: textWidth, size: 14, weight: .semibold)
             let reasonLabel = Self.label(issue.reason, width: textWidth, size: 14)
             var labels = [appLabel, reasonLabel]
@@ -852,13 +867,24 @@ private final class RestoreCompletionDetailsContentView: NSView {
             text.alignment = .leading
             text.spacing = 6
             text.translatesAutoresizingMaskIntoConstraints = false
+            if !issue.actions.isEmpty {
+                let buttons = issue.actions.map { action in
+                    RestoreIssueActionButton(action: action, appName: issue.appName) { [weak self] in
+                        self?.onAction?(action)
+                    }
+                }
+                let actions = NSStackView(views: buttons)
+                actions.orientation = .horizontal
+                actions.spacing = 8
+                text.addArrangedSubview(actions)
+            }
 
             let card = NSBox()
             card.boxType = .custom
             card.titlePosition = .noTitle
             card.fillColor = .controlBackgroundColor
             card.borderColor = .separatorColor
-            card.borderWidth = 0.5
+            card.borderWidth = cardBorderWidth
             card.cornerRadius = 10
             card.contentViewMargins = .zero
             card.translatesAutoresizingMaskIntoConstraints = false
@@ -932,6 +958,27 @@ private final class RestoreCompletionDetailsContentView: NSView {
 
     @objc private func dismiss() {
         onDismiss?()
+    }
+}
+
+private final class RestoreIssueActionButton: NSButton {
+    private let onPerform: () -> Void
+
+    init(action: RestoreCompletionAction, appName: String, onPerform: @escaping () -> Void) {
+        self.onPerform = onPerform
+        super.init(frame: .zero)
+        title = action.title
+        bezelStyle = .rounded
+        target = self
+        self.action = #selector(performAction)
+        setAccessibilityLabel("\(action.title) for \(appName)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func performAction() {
+        onPerform()
     }
 }
 

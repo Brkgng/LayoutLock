@@ -2021,6 +2021,162 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.isError, true)
     }
 
+    func testLocateMissingFilePreservesOtherResourcesAndWindows() async throws {
+        let snapshotID = UUID()
+        let missing = WindowOpenTarget(kind: .file, url: temporaryDirectoryURL.appendingPathComponent("missing.txt"))
+        let sibling = WindowOpenTarget(kind: .webURL, url: try XCTUnwrap(URL(string: "https://example.com")))
+        let replacementURL = temporaryDirectoryURL.appendingPathComponent("found.txt")
+        try Data("File".utf8).write(to: replacementURL)
+        let window = makeWindow(bundleIdentifier: "com.example.editor", openingConfiguration:
+            WindowOpeningConfiguration(automaticallyCapturedTargets: [missing, sibling]))
+        let otherWindow = makeWindow(bundleIdentifier: "com.example.other")
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window, otherWindow]))
+        let overlay = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(store: store, overlayPresenter: overlay, resourceLocator: { target in
+            XCTAssertEqual(target, missing)
+            return replacementURL
+        })
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        let issue = try XCTUnwrap(overlay.restoreCompletions.first?.issues.first { $0.context == missing.url.path })
+        XCTAssertEqual(issue.actions.map(\.title), ["Locate File…", "Edit Saved Resources…"])
+
+        try XCTUnwrap(issue.actions.first).perform()
+
+        let updated = try store.loadSnapshot(id: snapshotID)
+        XCTAssertEqual(updated.windows[0].openingConfiguration.effectiveTargets, [missing.replacingURL(replacementURL), sibling])
+        XCTAssertEqual(updated.windows[0].openingConfiguration.automaticallyCapturedTargets, [missing, sibling])
+        XCTAssertEqual(updated.windows[0].frame, window.frame)
+        XCTAssertEqual(updated.windows[1].openingConfiguration, otherWindow.openingConfiguration)
+        XCTAssertEqual(overlay.restoreCompletions.last?.title, "Saved resources updated")
+    }
+
+    func testFolderResourcePickerAllowsPackageDirectories() throws {
+        for name in ["Project.xcodeproj", "Document.pages"] {
+            let url = temporaryDirectoryURL.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+            let target = try WindowOpenTargetValidator().localTarget(url: url, expectedKind: .folder)
+            let panel = SnapshotMenuController.resourceLocationPanel(for: target)
+            XCTAssertTrue(panel.canChooseDirectories)
+            XCTAssertFalse(panel.canChooseFiles)
+            XCTAssertTrue(panel.treatsFilePackagesAsDirectories)
+            XCTAssertFalse(panel.allowsMultipleSelection)
+        }
+
+        let file = WindowOpenTarget(kind: .file, url: temporaryDirectoryURL.appendingPathComponent("Document.pdf"))
+        let panel = SnapshotMenuController.resourceLocationPanel(for: file)
+        XCTAssertTrue(panel.canChooseFiles)
+        XCTAssertFalse(panel.canChooseDirectories)
+        XCTAssertFalse(panel.treatsFilePackagesAsDirectories)
+    }
+
+    func testLocateMissingFolderSupportsCancellationAndFolderSelection() async throws {
+        let snapshotID = UUID()
+        let missing = WindowOpenTarget(kind: .folder, url: temporaryDirectoryURL.appendingPathComponent("Missing"))
+        let found = temporaryDirectoryURL.appendingPathComponent("Found", isDirectory: true)
+        try FileManager.default.createDirectory(at: found, withIntermediateDirectories: false)
+        let window = makeWindow(bundleIdentifier: "com.example.editor", openingConfiguration:
+            WindowOpeningConfiguration(manualTargets: [missing]))
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window]))
+        let overlay = RecordingOperationOverlayPresenter()
+        var selection: URL?
+        let controller = makeRestoreController(store: store, overlayPresenter: overlay, resourceLocator: { _ in selection })
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        let issue = try XCTUnwrap(overlay.restoreCompletions.first?.issues.first { $0.context == missing.url.path })
+        let action = try XCTUnwrap(issue.actions.first { $0.title == "Locate Folder…" })
+
+        action.perform()
+        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets, [missing])
+        XCTAssertEqual(overlay.restoreCompletions.count, 1)
+        selection = found
+        action.perform()
+        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets,
+            [missing.replacingURL(found)])
+    }
+
+    func testLocateResourceRejectsWrongKindAndStaleIssues() async throws {
+        let snapshotID = UUID()
+        let missing = WindowOpenTarget(kind: .file, url: temporaryDirectoryURL.appendingPathComponent("missing.txt"))
+        let window = makeWindow(bundleIdentifier: "com.example.editor", openingConfiguration:
+            WindowOpeningConfiguration(manualTargets: [missing]))
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window]))
+        let overlay = RecordingOperationOverlayPresenter()
+        var selection = temporaryDirectoryURL!
+        let controller = makeRestoreController(store: store, overlayPresenter: overlay, resourceLocator: { _ in selection })
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        let issue = try XCTUnwrap(overlay.restoreCompletions.first?.issues.first { $0.context == missing.url.path })
+        let action = try XCTUnwrap(issue.actions.first)
+        action.perform()
+        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets, [missing])
+        XCTAssertEqual(overlay.restoreCompletions.last?.isFailure, true)
+
+        let newer = missing.replacingURL(temporaryDirectoryURL.appendingPathComponent("newer.txt"))
+        XCTAssertTrue(controller.setOpeningTargets([newer], for: window.id, in: snapshotID))
+        selection = temporaryDirectoryURL.appendingPathComponent("found.txt")
+        try Data().write(to: selection)
+        action.perform()
+        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets, [newer])
+        XCTAssertEqual(overlay.restoreCompletions.last?.summary,
+            "This saved resource has changed. Restore the layout again to review its current state.")
+    }
+
+    func testEditSavedResourcesLoadsCurrentWindowAndSavesOnlyItsResources() async throws {
+        let snapshotID = UUID()
+        let unsupported = WindowOpenTarget(kind: .webURL, url: try XCTUnwrap(URL(string: "ftp://example.com")))
+        let updatedTarget = WindowOpenTarget(kind: .webURL, url: try XCTUnwrap(URL(string: "https://example.com/new")))
+        let window = makeWindow(bundleIdentifier: "com.example.browser", openingConfiguration:
+            WindowOpeningConfiguration(manualTargets: [unsupported]))
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window]))
+        let overlay = RecordingOperationOverlayPresenter()
+        var editedWindow: WindowRecord?
+        var saveChanges = false
+        let controller = makeRestoreController(store: store, overlayPresenter: overlay, resourcesEditor: { current in
+            editedWindow = current
+            return saveChanges ? [] : nil
+        })
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        let issue = try XCTUnwrap(overlay.restoreCompletions.first?.issues.first { $0.context == unsupported.url.absoluteString })
+        XCTAssertEqual(issue.actions.map(\.title), ["Edit Saved Resources…"])
+        XCTAssertTrue(controller.setOpeningTargets([updatedTarget], for: window.id, in: snapshotID))
+        let action = try XCTUnwrap(issue.actions.first)
+        action.perform()
+        XCTAssertEqual(editedWindow?.openingConfiguration.effectiveTargets, [updatedTarget])
+        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets, [updatedTarget])
+
+        saveChanges = true
+        action.perform()
+        XCTAssertTrue(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets.isEmpty)
+        XCTAssertEqual(overlay.restoreCompletions.last?.title, "Saved resources updated")
+    }
+
+    func testRestorePermissionFailureOffersPermissionsActionWithoutOpeningItAutomatically() async throws {
+        let snapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Work"))
+        let overlay = RecordingOperationOverlayPresenter()
+        var openedPermissions = 0
+        let controller = makeRestoreController(store: store, isTrusted: false, overlayPresenter: overlay,
+            openAccessibilitySettings: { openedPermissions += 1 })
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        XCTAssertEqual(openedPermissions, 0)
+        let issue = try XCTUnwrap(overlay.restoreCompletions.first?.issues.first)
+        XCTAssertEqual(issue.actions.map(\.title), ["Open Permissions"])
+        try XCTUnwrap(issue.actions.first).perform()
+        XCTAssertEqual(openedPermissions, 1)
+    }
+
+    func testStorageFailureDoesNotOfferPermissionsAction() async throws {
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let overlay = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(store: store, overlayPresenter: overlay)
+        await controller.restoreSnapshot(id: UUID())?.value
+        XCTAssertEqual(overlay.restoreCompletions.first?.isFailure, true)
+        XCTAssertTrue(try XCTUnwrap(overlay.restoreCompletions.first).issues.isEmpty)
+    }
+
     private func makeSnapshot(
         id: UUID,
         name: String,
@@ -2168,6 +2324,9 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         screenProvider: @escaping () -> [DisplayResolver.ScreenSnapshot] = { [] },
         discoveredApplicationsProvider: @escaping () throws -> [DiscoveredApplication] = { [] },
         windowApplier: RestoreWindowApplying = RestoringWindowApplier(),
+        resourceLocator: @escaping SnapshotMenuController.ResourceLocator = { _ in nil },
+        resourcesEditor: @escaping SnapshotMenuController.ResourcesEditor = { _ in nil },
+        openAccessibilitySettings: @escaping @MainActor () -> Void = {},
         uiSleep: @escaping @MainActor (TimeInterval) async throws -> Void = { interval in
             try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
         }
@@ -2190,6 +2349,9 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             restoreEngine: restoreEngine,
             appNameResolver: appNameResolver,
             operationOverlayPresenter: overlayPresenter,
+            resourceLocator: resourceLocator,
+            resourcesEditor: resourcesEditor,
+            openAccessibilitySettings: openAccessibilitySettings,
             uiSleep: uiSleep
         )
     }
@@ -2418,6 +2580,53 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
 
 @MainActor
 final class OperationCompletionToastTests: XCTestCase {
+    func testDetailsActionsStayInsideCardsAndWaitForModalDismissal() throws {
+        var performed = 0
+        let fileActions = ["Locate File…", "Edit Saved Resources…"].map { title in
+            RestoreCompletionAction(title: title, perform: { performed += 1 })
+        }
+        let permissionAction = RestoreCompletionAction(title: "Open Permissions", perform: { performed += 1 })
+        let issues = [
+            RestoreCompletionIssue(appName: "Editor", context: String(repeating: "Long saved file path / ", count: 10),
+                reason: "Target no longer exists.", actions: fileActions),
+            RestoreCompletionIssue(appName: "Accessibility", context: nil,
+                reason: "Accessibility access is required to restore layouts.", actions: [permissionAction])
+        ]
+        let window = RestoreCompletionDetailsWindow(completion: RestoreCompletionMessage(
+            title: "Work partially restored", summary: "2 of 3 windows restored", issues: issues, hasIssues: true
+        ))
+        defer { window.close() }
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSScrollView }.first)
+        let document = try XCTUnwrap(scroll.documentView)
+        let buttons = descendants(of: document).compactMap { $0 as? NSButton }
+        XCTAssertEqual(buttons.map(\.title), ["Locate File…", "Edit Saved Resources…", "Open Permissions"])
+        for button in buttons {
+            let frame = button.convert(button.bounds, to: document)
+            XCTAssertGreaterThanOrEqual(frame.minX, 0)
+            XCTAssertLessThanOrEqual(frame.maxX, document.bounds.maxX)
+            XCTAssertGreaterThanOrEqual(frame.minY, 0)
+            XCTAssertLessThanOrEqual(frame.maxY, document.bounds.maxY)
+        }
+        try XCTUnwrap(buttons.first).performClick(nil)
+        XCTAssertEqual(window.selectedAction?.title, "Locate File…")
+        XCTAssertEqual(performed, 0)
+        window.close()
+        window.selectedAction?.perform()
+        XCTAssertEqual(performed, 1)
+
+        if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            if let png = bitmap.representation(using: .png, properties: [:]) {
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "Restore issue recovery actions"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testRestoreProgressKeepsEachPhaseReadableAboveLongLayoutNames() throws {
         let screen = try XCTUnwrap(NSScreen.main)
         let name = String(repeating: "Layout – 2026 · Long saved layout name ", count: 20)

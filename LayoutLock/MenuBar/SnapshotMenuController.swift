@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 private func runSnapshotOperationOffMain<T>(_ operation: @escaping () throws -> T) async throws -> T {
@@ -22,6 +23,8 @@ final class SnapshotMenuController: ObservableObject {
     typealias SnapshotRenamePrompter = (_ currentName: String) -> String?
     typealias SnapshotCapturer = (_ snapshotName: String) throws -> Snapshot
     typealias AppNameResolver = (_ bundleIdentifier: String) -> String
+    typealias ResourceLocator = @MainActor (WindowOpenTarget) -> URL?
+    typealias ResourcesEditor = @MainActor (WindowRecord) -> [WindowOpenTarget]?
 
     struct Status {
         enum Kind {
@@ -64,6 +67,9 @@ final class SnapshotMenuController: ObservableObject {
     private let appNameResolver: AppNameResolver
     private let operationOverlayPresenter: OperationOverlayPresenting
     private let entitlementProvider: EntitlementProviding
+    private let resourceLocator: ResourceLocator
+    private let resourcesEditor: ResourcesEditor
+    private let openAccessibilitySettings: @MainActor () -> Void
     private var snapshotSummariesDidChange: (([SnapshotSummary]) -> Error?)?
     private var hotkeyCaptureActivityDidChange: ((Bool) -> Error?)?
     private var statusClearTask: Task<Void, Never>?
@@ -84,6 +90,9 @@ final class SnapshotMenuController: ObservableObject {
         },
         operationOverlayPresenter: OperationOverlayPresenting = NoOpOperationOverlayPresenter(),
         entitlementProvider: EntitlementProviding = StaticEntitlementProvider(isProUnlocked: true),
+        resourceLocator: @escaping ResourceLocator = SnapshotMenuController.chooseResourceLocation,
+        resourcesEditor: @escaping ResourcesEditor = SavedResourcesEditorPrompt.prompt,
+        openAccessibilitySettings: @escaping @MainActor () -> Void = PermissionCoordinator.openSystemAccessibilitySettings,
         statusAutoClearDelay: TimeInterval = 5,
         uiSleep: @escaping @MainActor (TimeInterval) async throws -> Void = { interval in
             try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
@@ -100,6 +109,9 @@ final class SnapshotMenuController: ObservableObject {
         self.appNameResolver = appNameResolver
         self.operationOverlayPresenter = operationOverlayPresenter
         self.entitlementProvider = entitlementProvider
+        self.resourceLocator = resourceLocator
+        self.resourcesEditor = resourcesEditor
+        self.openAccessibilitySettings = openAccessibilitySettings
         self.statusAutoClearDelay = statusAutoClearDelay
         self.uiSleep = uiSleep
         snapshotSummaries = []
@@ -324,7 +336,7 @@ final class SnapshotMenuController: ObservableObject {
                     loadingOverlayTask.cancel()
                 }
                 try Task.checkCancellation()
-                let completion = restoreCompletionMessage(snapshotName: snapshotName, result: result)
+                let completion = restoreCompletionMessage(snapshotID: id, snapshotName: snapshotName, result: result)
                 status = Status(
                     message: "\(completion.title): \(completion.summary).",
                     kind: completion.isFailure ? .error : completion.hasIssues ? .warning : .info
@@ -340,7 +352,7 @@ final class SnapshotMenuController: ObservableObject {
                     kind: .error
                 )
                 operationOverlayPresenter.showRestoreCompletion(restoreFailureMessage(
-                    snapshotName: snapshotName, message: error.userFacingDescription
+                    snapshotName: snapshotName, message: error.userFacingDescription, error: error
                 ))
                 didShowRestoreCompletion = true
             }
@@ -896,6 +908,7 @@ final class SnapshotMenuController: ObservableObject {
     }
 
     private func restoreCompletionMessage(
+        snapshotID: UUID,
         snapshotName: String,
         result: RestoreResult
     ) -> RestoreCompletionMessage {
@@ -920,7 +933,8 @@ final class SnapshotMenuController: ObservableObject {
         return RestoreCompletionMessage(
             title: title,
             summary: summary,
-            issues: result.targetIssues.map(targetIssueDetail) + result.skippedItems.map(skippedWindowDetail)
+            issues: result.targetIssues.map { targetIssueDetail(for: $0, snapshotID: snapshotID) }
+                + result.skippedItems.map(skippedWindowDetail)
                 + result.downgradedItems.map {
                     skippedWindowDetail(for: RestoreSkip(
                         bundleIdentifier: $0.bundleIdentifier, windowTitle: $0.windowTitle, reason: $0.reason))
@@ -930,10 +944,15 @@ final class SnapshotMenuController: ObservableObject {
         )
     }
 
-    private func restoreFailureMessage(snapshotName: String, message: String) -> RestoreCompletionMessage {
-        RestoreCompletionMessage(
+    private func restoreFailureMessage(snapshotName: String, message: String, error: Error? = nil) -> RestoreCompletionMessage {
+        var issues: [RestoreCompletionIssue] = []
+        if let restoreError = error as? RestoreEngineError, case .accessibilityPermissionDenied = restoreError {
+            issues = [RestoreCompletionIssue(appName: "Accessibility", context: nil, reason: message,
+                actions: [RestoreCompletionAction(title: "Open Permissions", perform: openAccessibilitySettings)])]
+        }
+        return RestoreCompletionMessage(
             title: "Couldn't restore \"\(snapshotName)\"", summary: message,
-            issues: [], hasIssues: true, isFailure: true
+            issues: issues, hasIssues: true, isFailure: true
         )
     }
 
@@ -968,14 +987,99 @@ final class SnapshotMenuController: ObservableObject {
         return RestoreCompletionIssue(appName: appName, context: fallback.savedDisplayName, reason: reason)
     }
 
-    private func targetIssueDetail(for issue: RestoreTargetIssue) -> RestoreCompletionIssue {
+    private func targetIssueDetail(for issue: RestoreTargetIssue, snapshotID: UUID) -> RestoreCompletionIssue {
         let appName = appNameResolver(issue.bundleIdentifier)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = appName.isEmpty ? issue.bundleIdentifier : appName
         let targetDescription = issue.target.kind == .webURL
             ? issue.target.url.absoluteString
             : (issue.target.url.path as NSString).abbreviatingWithTildeInPath
-        return RestoreCompletionIssue(appName: displayName, context: targetDescription, reason: issue.reason.userFacingDescription)
+        var actions: [RestoreCompletionAction] = []
+        if issue.target.kind != .webURL,
+           issue.reason == .missingTarget || issue.reason == .targetKindMismatch {
+            actions.append(RestoreCompletionAction(title: issue.target.kind == .folder ? "Locate Folder…" : "Locate File…") { [weak self] in
+                self?.locateSavedResource(issue, snapshotID: snapshotID)
+            })
+        }
+        if issue.reason != .applicationUnavailable {
+            actions.append(RestoreCompletionAction(title: "Edit Saved Resources…") { [weak self] in
+                self?.editSavedResources(windowID: issue.windowID, snapshotID: snapshotID)
+            })
+        }
+        return RestoreCompletionIssue(appName: displayName, context: targetDescription,
+            reason: issue.reason.userFacingDescription, actions: actions)
+    }
+
+    private static func chooseResourceLocation(_ target: WindowOpenTarget) -> URL? {
+        let panel = resourceLocationPanel(for: target)
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    static func resourceLocationPanel(for target: WindowOpenTarget) -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.title = target.kind == .folder ? "Locate Folder" : "Locate File"
+        panel.message = "Choose the new location of \(target.url.lastPathComponent)."
+        panel.prompt = "Locate"
+        panel.canChooseFiles = target.kind == .file
+        panel.canChooseDirectories = target.kind == .folder
+        panel.treatsFilePackagesAsDirectories = target.kind == .folder
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.directoryURL = target.url.deletingLastPathComponent()
+        return panel
+    }
+
+    private func recoveryWindow(windowID: UUID, snapshotID: UUID) -> WindowRecord? {
+        guard let snapshot = loadSnapshot(id: snapshotID) else {
+            reportRecoveryFailure(status?.message ?? "The layout could not be loaded.")
+            return nil
+        }
+        guard let window = snapshot.windows.first(where: { $0.id == windowID }) else {
+            reportRecoveryFailure("This saved window is no longer in the layout.")
+            return nil
+        }
+        return window
+    }
+
+    private func locateSavedResource(_ issue: RestoreTargetIssue, snapshotID: UUID) {
+        guard let url = resourceLocator(issue.target) else { return }
+        do {
+            let replacement = try WindowOpenTargetValidator().localTarget(url: url, expectedKind: issue.target.kind)
+            guard let window = recoveryWindow(windowID: issue.windowID, snapshotID: snapshotID) else { return }
+            var targets = window.openingConfiguration.effectiveTargets
+            guard let index = targets.firstIndex(where: { $0 == issue.target }) else {
+                reportRecoveryFailure("This saved resource has changed. Restore the layout again to review its current state.")
+                return
+            }
+            targets[index] = targets[index].replacingURL(replacement.url)
+            saveRecoveredResources(targets, windowID: window.id, snapshotID: snapshotID)
+        } catch {
+            reportRecoveryFailure(error.userFacingDescription)
+        }
+    }
+
+    private func editSavedResources(windowID: UUID, snapshotID: UUID) {
+        guard let window = recoveryWindow(windowID: windowID, snapshotID: snapshotID),
+              let targets = resourcesEditor(window) else { return }
+        saveRecoveredResources(targets, windowID: windowID, snapshotID: snapshotID)
+    }
+
+    private func saveRecoveredResources(_ targets: [WindowOpenTarget], windowID: UUID, snapshotID: UUID) {
+        if setOpeningTargets(targets, for: windowID, in: snapshotID) {
+            operationOverlayPresenter.showRestoreCompletion(RestoreCompletionMessage(
+                title: "Saved resources updated", summary: "Restore the layout again to apply your changes.",
+                issues: [], hasIssues: false
+            ))
+        } else if status?.isError == true {
+            reportRecoveryFailure(status?.message ?? "The saved resources could not be updated.")
+        }
+    }
+
+    private func reportRecoveryFailure(_ message: String) {
+        status = Status(message: message, kind: .error)
+        operationOverlayPresenter.showRestoreCompletion(RestoreCompletionMessage(
+            title: "Couldn't update saved resources", summary: message, issues: [], hasIssues: true, isFailure: true
+        ))
     }
 
     private func skippedWindowDetail(for skippedItem: RestoreSkip) -> RestoreCompletionIssue {

@@ -902,6 +902,49 @@ private struct DashboardSnapshotNamePromptView: View {
     }
 }
 
+@MainActor
+enum SavedResourcesEditorPrompt {
+    static func prompt(window: WindowRecord) -> [WindowOpenTarget]? {
+        let panel = SavedResourcesEditorWindow(savedWindow: window)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        let response = NSApp.runModal(for: panel)
+        panel.close()
+        return response == .OK ? panel.savedTargets : nil
+    }
+}
+
+private final class SavedResourcesEditorWindow: NSPanel, NSWindowDelegate {
+    var savedTargets: [WindowOpenTarget]?
+
+    init(savedWindow: WindowRecord) {
+        super.init(contentRect: CGRect(x: 0, y: 0, width: 680, height: 640),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        title = "Edit Saved Resources"
+        isReleasedWhenClosed = false
+        delegate = self
+        contentViewController = NSHostingController(rootView: DashboardOpeningTargetsEditorView(
+            window: savedWindow,
+            appIdentity: DashboardAppIdentityResolver.shared.identity(for: savedWindow.bundleIdentifier),
+            cancel: { NSApp.stopModal(withCode: .cancel) },
+            save: { [weak self] targets in
+                self?.savedTargets = targets
+                NSApp.stopModal(withCode: .OK)
+            }
+        ))
+    }
+
+    func windowShouldClose(_: NSWindow) -> Bool {
+        NSApp.stopModal(withCode: .cancel)
+        return false
+    }
+
+    override func cancelOperation(_: Any?) {
+        NSApp.stopModal(withCode: .cancel)
+    }
+}
+
 private struct DashboardOpeningTargetsEditorView: View {
     let window: WindowRecord
     let appIdentity: DashboardAppIdentity
@@ -1425,6 +1468,7 @@ private struct DashboardOpeningTargetsEditorView: View {
         }
 
         let panel = NSOpenPanel()
+        panel.worksWhenModal = true
         panel.canChooseFiles = localTargetSelection.canChooseFiles
         panel.canChooseDirectories = localTargetSelection.canChooseDirectories
         panel.allowsMultipleSelection = true
@@ -1470,6 +1514,7 @@ private struct DashboardOpeningTargetsEditorView: View {
         }
 
         let panel = NSOpenPanel()
+        panel.worksWhenModal = true
         panel.canChooseFiles = target.kind == .file
         panel.canChooseDirectories = target.kind == .folder
         panel.allowsMultipleSelection = false
