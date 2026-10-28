@@ -514,6 +514,51 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         }
     }
 
+    func testMinimizedMailSubroleFallbackRequiresUniqueStandardWindow() {
+        let saved = makeWindowRecord(bundleIdentifier: "com.apple.mail", pidAtCapture: 100,
+            windowTitle: "All Inboxes – 2,732 messages", subrole: "AXDialog", isMinimized: true)
+        let standard = makeCandidate(id: 1, bundleIdentifier: saved.bundleIdentifier, pid: 200,
+            title: "All Inboxes – 2,735 messages", frame: CGRect(x: 900, y: 700, width: 600, height: 500))
+        let sibling = makeCandidate(id: 2, bundleIdentifier: saved.bundleIdentifier, pid: 200,
+            title: "New Message", frame: standard.frame)
+        let dialog = makeCandidate(id: 3, bundleIdentifier: saved.bundleIdentifier, pid: 200,
+            title: "Account Settings", subrole: "AXDialog", frame: standard.frame)
+        let planner = RestoreWindowMatchPlanner()
+
+        let plan = planner.plans(for: [saved], candidates: [standard]).first
+        XCTAssertEqual(plan?.candidate?.id, 1)
+        XCTAssertEqual(plan?.matchStrategy, .singleton)
+        XCTAssertNil(planner.plans(for: [saved], candidates: [standard, sibling]).first?.candidate)
+        XCTAssertNil(planner.plans(for: [saved], candidates: [dialog]).first?.candidate)
+
+        let secondSaved = makeWindowRecord(bundleIdentifier: saved.bundleIdentifier, pidAtCapture: 100,
+            windowTitle: "Saved Draft", subrole: "AXDialog", isMinimized: true)
+        XCTAssertTrue(planner.plans(for: [saved, secondSaved], candidates: [standard])
+            .allSatisfy { $0.candidate == nil })
+    }
+
+    func testMailSubroleFallbackDoesNotApplyToVisibleWindowsOrOtherApps() {
+        for (bundle, minimized) in [("com.apple.mail", false), ("com.example.editor", true)] {
+            let saved = makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 100,
+                windowTitle: "Saved Dialog", subrole: "AXDialog", isMinimized: minimized)
+            let candidate = makeCandidate(id: 1, bundleIdentifier: bundle, pid: 200,
+                title: "Main Window", frame: CGRect(x: 900, y: 700, width: 600, height: 500))
+
+            XCTAssertNil(RestoreWindowMatchPlanner().plans(for: [saved], candidates: [candidate]).first?.candidate)
+        }
+    }
+
+    func testMinimizedMailSubroleFallbackPreservesDocumentRequirements() {
+        let target = WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Saved/message.eml"))
+        let saved = makeWindowRecord(bundleIdentifier: "com.apple.mail", pidAtCapture: 100,
+            windowTitle: "Saved Message", subrole: "AXDialog", isMinimized: true,
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target]))
+        let candidate = makeCandidate(id: 1, bundleIdentifier: saved.bundleIdentifier, pid: 200,
+            title: "All Inboxes", frame: CGRect(x: 900, y: 700, width: 600, height: 500))
+
+        XCTAssertNil(RestoreWindowMatchPlanner().plans(for: [saved], candidates: [candidate]).first?.candidate)
+    }
+
     func testPlansDoNotApplySingletonFallbackWithMultipleSavedWindows() {
         let planner = RestoreWindowMatchPlanner()
         let bundleIdentifier = "com.example.browser"
@@ -1444,6 +1489,38 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertTrue(result.skippedItems.isEmpty)
         XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
+    }
+
+    func testColdLaunchedMinimizedMailMatchesChangedSubroleAndMessageCounts() async throws {
+        let bundle = "com.apple.mail"
+        let saved = makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 100,
+            windowTitle: "All Inboxes – All Mail · 2,732 messages, 1,590 unread",
+            subrole: "AXDialog", frame: CGRect(x: 49, y: 197, width: 1512, height: 810),
+            zOrderHint: 1, isMinimized: true)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let snapshot = makeSnapshot(windows: [saved])
+        try store.save(snapshot)
+        let launcher = RecordingApplicationLauncher(results: [bundle: true])
+        let discovery = DiscoverySequence([[], [makeApplication(bundleIdentifier: bundle, pid: 200, windows: [
+            makeDiscoveredWindow(title: "All Inboxes – All Mail · 2,735 messages, 1,587 unread",
+                frame: CGRect(x: 140, y: 134, width: 1512, height: 810))
+        ])]])
+        let applier = RecordingEngineWindowApplier()
+        let clock = TestClock()
+
+        let result = try await makeEngine(store: store, launcher: launcher, discovery: discovery,
+            windowApplier: applier, launchTimeout: 1, launchClock: clock.now,
+            launchPollSleeper: clock.sleep).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(launcher.requestedBundleIdentifiers, [bundle])
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
+        XCTAssertEqual(result.windowDiagnostics.first?.readinessTimedOut, false)
+        XCTAssertEqual(applier.appliedSavedWindowIDs, [saved.id])
+        XCTAssertEqual(applier.raiseCount, 0)
+        XCTAssertEqual(applier.focusCount, 0)
+        XCTAssertEqual(discovery.callCount, 2)
     }
 
     func testColdLaunchedTitlelessCGSingletonRestoresItsPosition() async throws {
@@ -5988,6 +6065,7 @@ final class RestoreEngineTests: XCTestCase {
         subrole: String? = "AXStandardWindow",
         frame: CGRect = CGRect(x: 10, y: 20, width: 300, height: 200),
         zOrderHint: Int? = nil,
+        isMinimized: Bool = false,
         openingConfiguration: WindowOpeningConfiguration = WindowOpeningConfiguration(),
         captureSource: WindowCaptureSource? = nil
     ) -> WindowRecord {
@@ -6006,7 +6084,7 @@ final class RestoreEngineTests: XCTestCase {
                 heightRatio: 0.5
             ),
             zOrderHint: zOrderHint,
-            isMinimized: false,
+            isMinimized: isMinimized,
             isFullscreen: false,
             isVisible: true,
             captureSignature: WindowSignature(

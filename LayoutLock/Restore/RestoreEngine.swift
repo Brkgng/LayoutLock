@@ -2341,7 +2341,10 @@ struct RestoreWindowMatchPlanner {
             savedWindow.openingConfiguration.effectiveTargets.isEmpty {
             return preferredProcessIdentifier == candidate.pid
         }
-        guard savedWindow.subrole == candidate.subrole else { return false }
+        // Mail can expose its minimized main window as AXDialog, then AXStandardWindow after relaunch.
+        let minimizedMailWindow = savedWindow.bundleIdentifier == "com.apple.mail" &&
+            savedWindow.isMinimized && savedWindow.subrole == kAXDialogSubrole as String
+        guard savedWindow.subrole == candidate.subrole || minimizedMailWindow else { return false }
 
         if openedBrowserWindowIDs.contains(savedWindow.id) {
             return genericColdOpenedBrowserWindowIDs.contains(savedWindow.id)
@@ -2611,6 +2614,7 @@ struct RestoreWindowFocusResult {
 struct AXRestoreWindowApplier: RestoreWindowApplying {
     private let geometryAccessor: RestoreWindowGeometryAccessing
     private let attributeReader: AXAttributeReader
+    private let setMinimized: (Bool, AXUIElement) -> Bool
     private let attemptLimit: Int
     private let settleNanoseconds: UInt64
     private let sleeper: (UInt64) async throws -> Void
@@ -2618,12 +2622,16 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
     init(
         geometryAccessor: RestoreWindowGeometryAccessing = AXAttributeReader(),
         attributeReader: AXAttributeReader = AXAttributeReader(),
+        setMinimized: ((Bool, AXUIElement) -> Bool)? = nil,
         attemptLimit: Int = restoreWindowApplyAttemptLimit,
         settleNanoseconds: UInt64 = restoreWindowSettleNanoseconds,
         sleeper: @escaping (UInt64) async throws -> Void = Task.sleep(nanoseconds:)
     ) {
         self.geometryAccessor = geometryAccessor
         self.attributeReader = attributeReader
+        self.setMinimized = setMinimized ?? {
+            attributeReader.setBool($0, on: $1, attribute: kAXMinimizedAttribute as CFString)
+        }
         self.attemptLimit = attemptLimit
         self.settleNanoseconds = settleNanoseconds
         self.sleeper = sleeper
@@ -2636,17 +2644,31 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
     ) async throws -> RestoreWindowApplyResult {
         try Task.checkCancellation()
 
-        if discoveredWindow.isMinimized,
-           !attributeReader.setBool(
-            false,
-            on: discoveredWindow.axElement,
-            attribute: kAXMinimizedAttribute as CFString
-           ) {
+        if savedWindow.isMinimized, discoveredWindow.isMinimized,
+           attributeReader.bool(from: discoveredWindow.axElement, attribute: kAXMinimizedAttribute as CFString) == true,
+           let frame = observedFrame(of: discoveredWindow.axElement),
+           frame.approximatelyMatchesRestoreFrame(targetFrame) {
+            return .restored(downgrade: fullscreenDowngrade(for: savedWindow), finalObservedFrame: frame)
+        }
+
+        if discoveredWindow.isMinimized, !setMinimized(false, discoveredWindow.axElement) {
             return .failed(reason: RestoreSkipReason.restoreFailed)
         }
 
-        return try await applyFrame(savedWindow: savedWindow, targetFrame: targetFrame,
-            to: discoveredWindow, attempts: attemptLimit)
+        let result: RestoreWindowApplyResult
+        do {
+            result = try await applyFrame(savedWindow: savedWindow, targetFrame: targetFrame,
+                to: discoveredWindow, attempts: attemptLimit)
+        } catch {
+            if savedWindow.isMinimized { _ = setMinimized(true, discoveredWindow.axElement) }
+            throw error
+        }
+
+        if savedWindow.isMinimized, !setMinimized(true, discoveredWindow.axElement) {
+            return .failed(reason: RestoreSkipReason.restoreFailed, attemptCount: result.attemptCount,
+                finalObservedFrame: result.finalObservedFrame)
+        }
+        return result
     }
 
     func restoreFrame(savedWindow: WindowRecord, targetFrame: CGRect, to discoveredWindow: DiscoveredWindow) async throws -> RestoreWindowApplyResult {

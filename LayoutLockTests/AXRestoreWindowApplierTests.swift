@@ -245,6 +245,194 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         XCTAssertEqual(result.finalObservedFrame, targetFrame)
     }
 
+    func testAlreadyMinimizedWindowAtTargetSkipsGeometryAndStateChanges() async throws {
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: targetFrame)
+        let reader = AXAttributeReader(attributeValueProvider: { _, attribute in
+            attribute as String == kAXMinimizedAttribute ? kCFBooleanTrue : nil
+        })
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, attributeReader: reader, setMinimized: { _, _ in
+            XCTFail("An already minimized window must stay minimized")
+            return false
+        }, sleeper: { _ in XCTFail("No geometry changes need settling") })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+
+        XCTAssertTrue(result.didRestore)
+        XCTAssertTrue(accessor.writeOrder.isEmpty)
+        XCTAssertEqual(result.attemptCount, 0)
+        XCTAssertEqual(result.finalObservedFrame, targetFrame)
+    }
+
+    func testMinimizedWindowWithStaleMatchingDiscoveryStillRestoresGeometry() async throws {
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400))
+        let reader = AXAttributeReader(attributeValueProvider: { _, attribute in
+            attribute as String == kAXMinimizedAttribute ? kCFBooleanTrue : nil
+        })
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, attributeReader: reader, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return true
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(frame: targetFrame, isMinimized: true))
+
+        XCTAssertTrue(result.didRestore)
+        XCTAssertEqual(stateWrites, [false, true])
+        XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
+        XCTAssertEqual(result.attemptCount, 1)
+        XCTAssertEqual(result.finalObservedFrame, targetFrame)
+    }
+
+    func testStaleMinimizedDiscoveryDoesNotSkipRestoringMinimizedState() async throws {
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: targetFrame)
+        let reader = AXAttributeReader(attributeValueProvider: { _, attribute in
+            attribute as String == kAXMinimizedAttribute ? kCFBooleanFalse : nil
+        })
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, attributeReader: reader, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return true
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(frame: targetFrame, isMinimized: true))
+
+        XCTAssertTrue(result.didRestore)
+        XCTAssertEqual(stateWrites, [false, true])
+    }
+
+    func testSavedMinimizedStateIsAppliedAfterGeometryForVisibleAndMinimizedWindows() async throws {
+        for initiallyMinimized in [false, true] {
+            let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+            let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400))
+            var stateWrites: [Bool] = []
+            let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+                stateWrites.append(value)
+                if value {
+                    XCTAssertEqual(accessor.frame, targetFrame)
+                    XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
+                } else {
+                    XCTAssertTrue(accessor.writeOrder.isEmpty)
+                }
+                return true
+            }, sleeper: { _ in })
+
+            let result = try await applier.apply(
+                savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+                targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: initiallyMinimized))
+
+            XCTAssertTrue(result.didRestore)
+            XCTAssertEqual(stateWrites, initiallyMinimized ? [false, true] : [true])
+            XCTAssertEqual(result.attemptCount, 1)
+            XCTAssertEqual(result.finalObservedFrame, targetFrame)
+        }
+    }
+
+    func testSavedVisibleWindowIsUnminimizedBeforeGeometry() async throws {
+        let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: targetFrame)
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+            XCTAssertTrue(accessor.writeOrder.isEmpty)
+            stateWrites.append(value)
+            return true
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(savedWindow: makeWindowRecord(frame: targetFrame),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+
+        XCTAssertTrue(result.didRestore)
+        XCTAssertEqual(stateWrites, [false])
+        XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
+    }
+
+    func testFailureToMinimizeIsReportedWithGeometryDiagnostics() async throws {
+        let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: targetFrame)
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return false
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow())
+
+        XCTAssertFalse(result.didRestore)
+        XCTAssertEqual(stateWrites, [true])
+        XCTAssertEqual(result.failureReason, RestoreSkipReason.restoreFailed)
+        XCTAssertEqual(result.attemptCount, 1)
+        XCTAssertEqual(result.finalObservedFrame, targetFrame)
+    }
+
+    func testFailureToUnminimizeDoesNotAttemptGeometry() async throws {
+        let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400))
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return false
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+
+        XCTAssertFalse(result.didRestore)
+        XCTAssertEqual(stateWrites, [false])
+        XCTAssertTrue(accessor.writeOrder.isEmpty)
+        XCTAssertEqual(result.failureReason, RestoreSkipReason.restoreFailed)
+    }
+
+    func testSavedMinimizedStateIsRestoredEvenWhenGeometryFails() async throws {
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400),
+            commitsWritesImmediately: false)
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return true
+        }, sleeper: { _ in })
+
+        let result = try await applier.apply(
+            savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+
+        XCTAssertFalse(result.didRestore)
+        XCTAssertEqual(result.failureReason, RestoreSkipReason.windowGeometryDidNotSettle)
+        XCTAssertEqual(stateWrites, [false, true])
+    }
+
+    func testCancellationRestoresSavedMinimizedStateAndPropagates() async {
+        let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400))
+        var stateWrites: [Bool] = []
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, setMinimized: { value, _ in
+            stateWrites.append(value)
+            return true
+        }, sleeper: { _ in throw CancellationError() })
+
+        do {
+            _ = try await applier.apply(
+                savedWindow: makeWindowRecord(frame: targetFrame, isMinimized: true),
+                targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+            XCTFail("Expected cancellation to propagate")
+        } catch is CancellationError {
+            XCTAssertEqual(stateWrites, [false, true])
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testFrameRestorationDoesNotRetryMismatchDespiteConfiguredAttemptLimit() async throws {
         let originalFrame = CGRect(x: 100, y: 100, width: 500, height: 400)
         let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
@@ -264,7 +452,7 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         XCTAssertEqual(result.finalObservedFrame, originalFrame)
     }
 
-    private func makeWindowRecord(frame: CGRect) -> WindowRecord {
+    private func makeWindowRecord(frame: CGRect, isMinimized: Bool = false) -> WindowRecord {
         WindowRecord(
             bundleIdentifier: "org.mozilla.firefoxdeveloperedition",
             pidAtCapture: 42,
@@ -280,7 +468,7 @@ final class AXRestoreWindowApplierTests: XCTestCase {
                 heightRatio: 0.5
             ),
             zOrderHint: nil,
-            isMinimized: false,
+            isMinimized: isMinimized,
             isFullscreen: false,
             isVisible: true,
             captureSignature: WindowSignature(
