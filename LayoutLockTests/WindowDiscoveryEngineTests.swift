@@ -5,6 +5,30 @@ import XCTest
 @testable import LayoutLock
 
 final class WindowDiscoveryEngineTests: XCTestCase {
+    func testDiscoveryRetainsModalStateForMinimizedDialogWindows() throws {
+        for modal: Bool? in [false, true, nil] {
+            let app = AXUIElementCreateApplication(101)
+            let window = AXUIElementCreateApplication(201)
+            let fixture = AXAttributeFixture()
+            let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+            fixture.set([window] as CFArray, for: app, attribute: kAXWindowsAttribute)
+            fixture.setWindow(window, title: "Window", role: "AXWindow", subrole: "AXDialog", frame: frame)
+            fixture.set(NSNumber(value: true), for: window, attribute: kAXMinimizedAttribute)
+            if let modal { fixture.set(NSNumber(value: modal), for: window, attribute: kAXModalAttribute) }
+            let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+                metadata: [101: [cgMetadata(id: 900, title: "Window", frame: frame)]],
+                windowIDProvider: { _ in 900 })
+
+            let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+            let discovered = try XCTUnwrap(result.applications.first?.windows.first)
+            XCTAssertEqual(discovered.isModal, modal)
+            XCTAssertTrue(discovered.isMinimized)
+            XCTAssertEqual(discovered.subrole, "AXDialog")
+            XCTAssertEqual(discovered.cgWindowID, 900)
+        }
+    }
+
     func testMainAndFocusedFallbackDeduplicatesOwnedWindowByCGIdentity() throws {
         let app = AXUIElementCreateApplication(101)
         let main = AXUIElementCreateApplication(201)
@@ -235,6 +259,49 @@ final class WindowDiscoveryEngineTests: XCTestCase {
 
         XCTAssertNil(window.cgWindowID)
         XCTAssertTrue(result.unexposedApplications.isEmpty)
+    }
+
+    func testRestoreDoesNotBindUnknownAXIdentityWithHiddenCGSibling() async throws {
+        let bundle = "com.example.editor"
+        let app = AXUIElementCreateApplication(101)
+        let visible = AXUIElementCreateApplication(201)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        let hiddenFrame = frame.offsetBy(dx: 100, dy: 100)
+        fixture.set([visible] as CFArray, for: app, attribute: kAXWindowsAttribute)
+        fixture.setWindow(visible, title: "Visible", role: "AXWindow", subrole: "AXStandardWindow", frame: frame)
+        let discovery = try makeEngine(appElement: app, attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Visible", frame: frame),
+                cgMetadata(id: 901, title: "Hidden", frame: hiddenFrame)]],
+            windowIDProvider: { _ in nil }).discoverRunningWindowsWithDiagnostics()
+        XCTAssertEqual(discovery.applications.first?.windows.count, 1)
+        XCTAssertNil(discovery.applications.first?.windows.first?.cgWindowID)
+        XCTAssertTrue(discovery.unexposedApplications.isEmpty)
+
+        let saved = WindowRecord(bundleIdentifier: bundle, pidAtCapture: 101, windowTitle: nil,
+            role: "AXWindow", subrole: nil, frame: CGRectCodable(hiddenFrame), displayID: nil,
+            normalizedFrame: NormalizedRect(xRatio: 0, yRatio: 0, widthRatio: 1, heightRatio: 1),
+            zOrderHint: nil, isMinimized: false, isFullscreen: false, isVisible: false,
+            captureSignature: WindowSignature(bundleIdentifier: bundle, owningPid: 101, windowTitle: nil,
+                role: "AXWindow", subrole: nil, capturedFrame: CGRectCodable(hiddenFrame),
+                cgWindowID: 901, source: .coreGraphics))
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        let snapshot = Snapshot(name: "Hidden saved window",
+            sourceDisplayState: DisplayState(displays: [], primaryDisplayID: nil), windows: [saved])
+        try store.save(snapshot)
+        let applier = ScopedDiscoveryWindowApplier()
+        let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+            windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+            applicationActivator: applier, discoveryResultProvider: { discovery },
+            runningApplicationBundleProvider: { [bundle] }, launchTimeout: 0)
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(result.skippedItems.map(\.reason), [RestoreSkipReason.windowNotFound])
+        XCTAssertEqual(result.windowDiagnostics.first?.candidateCount, 1)
+        XCTAssertTrue(applier.windowIDs.isEmpty, "The unrelated exposed window must not receive geometry.")
     }
 
     func testUnityUntitledAndSavedSceneWindowsAppendValidatedProjectRoot() throws {

@@ -43,6 +43,7 @@ struct DiscoveredWindow {
     let cgLayer: Int?
     let zOrderHint: Int?
     let isOnScreen: Bool?
+    let isModal: Bool?
 
     init(
         axElement: AXUIElement,
@@ -63,7 +64,8 @@ struct DiscoveredWindow {
         ownerName: String?,
         cgLayer: Int?,
         zOrderHint: Int?,
-        isOnScreen: Bool?
+        isOnScreen: Bool?,
+        isModal: Bool? = nil
     ) {
         var resolvedDocumentURLs = documentURLs
         if let documentURL, !resolvedDocumentURLs.contains(documentURL) {
@@ -89,6 +91,7 @@ struct DiscoveredWindow {
         self.cgLayer = cgLayer
         self.zOrderHint = zOrderHint
         self.isOnScreen = isOnScreen
+        self.isModal = isModal
     }
 }
 
@@ -502,7 +505,8 @@ struct WindowDiscoveryEngine {
                 from: window,
                 attribute: kAXMainAttribute as CFString
             ) ?? false,
-            isHidden: isHidden
+            isHidden: isHidden,
+            isModal: attributeReader.bool(from: window, attribute: kAXModalAttribute as CFString)
         )
     }
 
@@ -581,7 +585,8 @@ struct WindowDiscoveryEngine {
             ownerName: cgWindowMetadata?.ownerName,
             cgLayer: cgWindowMetadata?.layer,
             zOrderHint: cgWindowMetadata?.zOrderHint,
-            isOnScreen: cgWindowMetadata?.isOnScreen
+            isOnScreen: cgWindowMetadata?.isOnScreen,
+            isModal: axWindow.isModal
         )
     }
 
@@ -630,6 +635,7 @@ private struct AXWindowSnapshot {
     let isFullscreen: Bool
     let isMain: Bool
     let isHidden: Bool
+    let isModal: Bool?
 }
 
 struct WindowDocumentURLResolver {

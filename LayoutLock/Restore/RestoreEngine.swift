@@ -657,7 +657,9 @@ struct RestoreEngine {
                     windowID: liveWindow.cgWindowID,
                     displayID: restoreDisplayPlan.resolvedDisplayID,
                     inventory: spaceInventory,
-                    ordinaryWindow: liveWindow.role == "AXWindow" && liveWindow.subrole == "AXStandardWindow" && !liveWindow.isFullscreen
+                    ordinaryWindow: !liveWindow.isFullscreen &&
+                        ((liveWindow.role == "AXWindow" && liveWindow.subrole == "AXStandardWindow") ||
+                         candidate.matchesMinimizedAppWindow(plan.savedWindow))
                 )
                 var canApplyGeometry = spaceOutcome.permitsGeometry
                 if spaceOutcome == .moved, let windowID = liveWindow.cgWindowID {
@@ -844,13 +846,14 @@ struct RestoreEngine {
             let windows = windowsByBundle[bundle, default: []]
             let applications = discoveryResult.applications.filter { $0.bundleIdentifier == bundle }.sorted { $0.pid < $1.pid }
             // Confirm an already-running owner for the position-only CG singleton fallback.
-            // Unexposed ordinary windows still make the apparent singleton ambiguous.
+            // Unknown AX identity suppresses hidden-window diagnostics and cannot prove a singleton.
             if windows.count == 1, let window = windows.first,
                 window.captureSignature.source == .coreGraphics, window.subrole == nil,
                 window.openingConfiguration.effectiveTargets.isEmpty,
                 inspectionBlockedWindows[window.id] == nil,
                 applications.count == 1, let application = applications.first, application.pid > 0,
                 application.windows.count == 1,
+                let liveWindowID = application.windows.first?.cgWindowID, liveWindowID != 0,
                 !discoveryResult.unexposedApplications.contains(where: {
                     $0.bundleIdentifier == bundle && ($0.pid != application.pid ||
                         $0.hasUnexposedOrdinaryWindow(membership: spaces.access.membership))
@@ -1382,7 +1385,10 @@ struct RestoreEngine {
                             title: window.title,
                             role: window.role,
                             subrole: window.subrole,
-                            frame: window.frame
+                            frame: window.frame,
+                            cgWindowID: window.cgWindowID,
+                            isMinimized: window.isMinimized,
+                            isModal: window.isModal
                         ),
                         window
                     )
@@ -2163,6 +2169,19 @@ struct RestoreWindowCandidate {
     let role: String
     let subrole: String?
     let frame: CGRect
+    var cgWindowID: CGWindowID? = nil
+    var isMinimized: Bool = false
+    var isModal: Bool? = nil
+
+    func matchesMinimizedAppWindow(_ savedWindow: WindowRecord) -> Bool {
+        // Some app windows report AXDialog while minimized. Require the same saved identity,
+        // confirmed through fresh AX/CG discovery, rather than treating any dialog as an app window.
+        role == "AXWindow" && subrole == "AXDialog" && isMinimized && isModal == false &&
+            savedWindow.role == "AXWindow" &&
+            (savedWindow.subrole == "AXStandardWindow" || savedWindow.captureSignature.source == .coreGraphics) &&
+            pid > 0 && pid == savedWindow.pidAtCapture && pid == savedWindow.captureSignature.owningPid &&
+            cgWindowID != nil && cgWindowID != 0 && cgWindowID == savedWindow.captureSignature.cgWindowID
+    }
 
     func referencesLocalTarget(_ target: WindowOpenTarget) -> Bool {
         guard target.kind != .webURL, target.url.isFileURL else { return false }
@@ -2355,9 +2374,10 @@ struct RestoreWindowMatchPlanner {
         guard !savedWindow.openingConfiguration.effectiveTargets.contains(where: { $0.kind != .webURL }) else {
             return false
         }
+        let minimizedAppWindow = candidate.matchesMinimizedAppWindow(savedWindow)
         guard savedWindow.role == kAXWindowRole as String,
               candidate.role == kAXWindowRole as String,
-              candidate.subrole == kAXStandardWindowSubrole as String else {
+              candidate.subrole == kAXStandardWindowSubrole as String || minimizedAppWindow else {
             return false
         }
         if savedWindow.captureSignature.source == .coreGraphics, savedWindow.subrole == nil,
@@ -2367,7 +2387,7 @@ struct RestoreWindowMatchPlanner {
         // Mail can expose its minimized main window as AXDialog, then AXStandardWindow after relaunch.
         let minimizedMailWindow = savedWindow.bundleIdentifier == "com.apple.mail" &&
             savedWindow.isMinimized && savedWindow.subrole == kAXDialogSubrole as String
-        guard savedWindow.subrole == candidate.subrole || minimizedMailWindow else { return false }
+        guard savedWindow.subrole == candidate.subrole || minimizedMailWindow || minimizedAppWindow else { return false }
 
         if openedBrowserWindowIDs.contains(savedWindow.id) {
             return genericColdOpenedBrowserWindowIDs.contains(savedWindow.id)

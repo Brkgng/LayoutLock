@@ -1554,6 +1554,131 @@ final class RestoreEngineTests: XCTestCase {
         }
     }
 
+    func testRunningCGWindowRestoresWhenMinimizedWindowReportsNonmodalDialog() async throws {
+        for bundle in ["net.whatsapp.WhatsApp", "com.example.editor"] {
+            for savedMinimized in [false, true] {
+                let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil,
+                    isMinimized: savedMinimized, captureSource: .coreGraphics, cgWindowID: 901)
+                let snapshot = makeSnapshot(windows: [saved])
+                let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+                try store.save(snapshot)
+                let applier = RecordingEngineWindowApplier()
+                let launcher = RecordingApplicationLauncher(results: [:])
+                let live = makeApplication(bundleIdentifier: bundle, pid: saved.pidAtCapture, windows: [
+                    makeDiscoveredWindow(title: nil, subrole: "AXDialog", frame: saved.frame.cgRect,
+                        cgWindowID: 901, isMinimized: true, isModal: false)
+                ])
+
+                let result = try await makeEngine(store: store, launcher: launcher,
+                    discovery: DiscoverySequence([[live]]), windowApplier: applier).restoreSnapshot(id: snapshot.id)
+
+                XCTAssertEqual(result.restoredWindows, 1)
+                XCTAssertTrue(result.skippedItems.isEmpty)
+                XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
+                XCTAssertEqual(applier.appliedCGWindowIDs, [901])
+                XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+            }
+        }
+    }
+
+    func testRunningCGWindowRejectsUnconfirmedMinimizedDialogs() async throws {
+        let bundle = "com.example.editor"
+        let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil,
+            captureSource: .coreGraphics, cgWindowID: 901)
+        let cases: [(pid: pid_t, id: CGWindowID?, minimized: Bool, modal: Bool?)] = [
+            (42, 901, true, true), (42, 901, true, nil), (42, 901, false, false),
+            (42, nil, true, false), (42, 902, true, false), (200, 901, true, false)
+        ]
+        for item in cases {
+            let snapshot = makeSnapshot(windows: [saved])
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let applier = RecordingEngineWindowApplier()
+            let live = makeApplication(bundleIdentifier: bundle, pid: item.pid, windows: [
+                makeDiscoveredWindow(title: nil, subrole: "AXDialog", frame: saved.frame.cgRect,
+                    cgWindowID: item.id, isMinimized: item.minimized, isModal: item.modal)
+            ])
+
+            let result = try await makeEngine(store: store, launcher: RecordingApplicationLauncher(results: [:]),
+                discovery: DiscoverySequence([[live]]), windowApplier: applier).restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(result.restoredWindows, 0, "\(item)")
+            XCTAssertEqual(result.skippedItems.count, 1)
+            XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+        }
+    }
+
+    func testRunningCGMinimizedDialogDoesNotBypassAmbiguityChecks() async throws {
+        let bundle = "com.example.editor"
+        let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil,
+            captureSource: .coreGraphics, cgWindowID: 901)
+        let dialog = makeDiscoveredWindow(title: nil, subrole: "AXDialog", frame: saved.frame.cgRect,
+            cgWindowID: 901, isMinimized: true, isModal: false)
+        let cases: [(saved: [WindowRecord], applications: [DiscoveredApplication])] = [
+            ([saved], [makeApplication(bundleIdentifier: bundle, pid: 42, windows: [dialog,
+                makeDiscoveredWindow(title: nil, frame: saved.frame.cgRect, cgWindowID: 902)])]),
+            ([saved], [makeApplication(bundleIdentifier: bundle, pid: 42, windows: [dialog]),
+                makeApplication(bundleIdentifier: bundle, pid: 200, windows: [dialog])]),
+            ([saved, makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil,
+                captureSource: .coreGraphics)], [makeApplication(bundleIdentifier: bundle, pid: 42, windows: [dialog])])
+        ]
+        for item in cases {
+            let snapshot = makeSnapshot(windows: item.saved)
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let applier = RecordingEngineWindowApplier()
+
+            let result = try await makeEngine(store: store, launcher: RecordingApplicationLauncher(results: [:]),
+                discovery: DiscoverySequence([item.applications]), windowApplier: applier).restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(result.restoredWindows, 0)
+            XCTAssertEqual(result.skippedItems.count, item.saved.count)
+            XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+        }
+    }
+
+    func testVerifiedMinimizedDialogMovesUsingFreshWindowIdentity() async throws {
+        let bundle = "com.example.editor"
+        let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil,
+            captureSource: .coreGraphics, cgWindowID: 901)
+        let display = makeDisplayRecord(id: 1)
+        let snapshot = Snapshot(name: "Minimized app window",
+            sourceDisplayState: DisplayState(displays: [display], primaryDisplayID: 1), windows: [saved])
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let live = makeApplication(bundleIdentifier: bundle, pid: saved.pidAtCapture, windows: [
+            makeDiscoveredWindow(title: nil, subrole: "AXDialog", frame: saved.frame.cgRect,
+                cgWindowID: 901, isMinimized: true, isModal: false)
+        ])
+        let inventory = RestoreSpaceInventory(activeByDisplay: [1: 11], ordinarySpaceIDs: [3, 11])
+        var membership: Set<UInt64> = [3]
+        var movedIDs: [CGWindowID] = []
+        let spaces = RestoreSpaceCoordinator(access: RestoreSpaceAccess(
+            inventory: { _ in inventory }, membership: { _ in membership },
+            submitMove: { id, space in
+                movedIDs.append(id)
+                membership = [space]
+                return true
+            }), sleeper: {})
+        let applier = RecordingEngineWindowApplier()
+        let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+            windowApplier: applier, displayResolver: DisplayResolver(screenProvider: {
+                [DisplayResolver.ScreenSnapshot(id: 1, localizedName: display.localizedName,
+                    frame: display.frameRect, visibleFrame: display.visibleFrameRect, backingScaleFactor: 1,
+                    isPrimary: true, vendorID: nil, productID: nil, serialNumber: nil)]
+            }), applicationLauncher: RecordingApplicationLauncher(results: [:]),
+            browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+            applicationActivator: RecordingApplicationActivator { _ in }, spaces: spaces,
+            discoveredApplicationsProvider: { [live] }, runningApplicationBundleProvider: { [bundle] })
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(movedIDs, [901])
+        XCTAssertEqual(applier.appliedCGWindowIDs, [901])
+    }
+
     func testRunningTitlelessCGSingletonRejectsAmbiguousAndNonstandardWindows() async throws {
         let bundle = "com.example.editor"
         let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil,
@@ -1614,16 +1739,18 @@ final class RestoreEngineTests: XCTestCase {
 
     func testRunningTitlelessCGSingletonDoesNotIgnoreUnexposedWindows() async throws {
         let bundle = "com.example.editor"
-        let cases: [(pid_t, Bool)] = [(200, true), (201, true), (201, false)]
-        for (hiddenPID, hasWindow) in cases {
-            let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil,
-                subrole: nil, captureSource: .coreGraphics)
+        let cases: [(pid_t, Bool, Bool)] = [(200, true, false), (201, true, false), (201, false, false),
+            (200, true, true), (201, true, true), (201, false, true)]
+        for (hiddenPID, hasWindow, dialog) in cases {
+            let saved = makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 200, windowTitle: nil,
+                subrole: nil, captureSource: .coreGraphics, cgWindowID: 901)
             let snapshot = makeSnapshot(windows: [saved])
             let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
             try store.save(snapshot)
             let applier = RecordingEngineWindowApplier()
             let live = makeApplication(bundleIdentifier: bundle, windows: [
-                makeDiscoveredWindow(title: nil, frame: saved.frame.cgRect, cgWindowID: 901)
+                makeDiscoveredWindow(title: nil, subrole: dialog ? "AXDialog" : "AXStandardWindow",
+                    frame: saved.frame.cgRect, cgWindowID: 901, isMinimized: dialog, isModal: false)
             ])
             let unexposed = UnexposedApplicationWindows(bundleIdentifier: bundle, pid: hiddenPID, windows: hasWindow ? [
                 CGWindowMetadata(windowID: 902, processIdentifier: hiddenPID, ownerName: nil, layer: 0,
@@ -6190,7 +6317,8 @@ final class RestoreEngineTests: XCTestCase {
         zOrderHint: Int? = nil,
         isMinimized: Bool = false,
         openingConfiguration: WindowOpeningConfiguration = WindowOpeningConfiguration(),
-        captureSource: WindowCaptureSource? = nil
+        captureSource: WindowCaptureSource? = nil,
+        cgWindowID: CGWindowID? = nil
     ) -> WindowRecord {
         WindowRecord(
             bundleIdentifier: bundleIdentifier,
@@ -6217,7 +6345,7 @@ final class RestoreEngineTests: XCTestCase {
                 role: role,
                 subrole: subrole,
                 capturedFrame: CGRectCodable(frame),
-                cgWindowID: nil,
+                cgWindowID: cgWindowID,
                 source: captureSource
             ),
             openingConfiguration: openingConfiguration
@@ -6248,7 +6376,8 @@ final class RestoreEngineTests: XCTestCase {
         cgWindowID: CGWindowID? = nil,
         axElement: AXUIElement = AXUIElementCreateSystemWide(),
         isMinimized: Bool = false,
-        isFullscreen: Bool = false
+        isFullscreen: Bool = false,
+        isModal: Bool? = nil
     ) -> DiscoveredWindow {
         DiscoveredWindow(
             axElement: axElement,
@@ -6267,7 +6396,8 @@ final class RestoreEngineTests: XCTestCase {
             ownerName: nil,
             cgLayer: 0,
             zOrderHint: nil,
-            isOnScreen: true
+            isOnScreen: true,
+            isModal: isModal
         )
     }
 }
