@@ -43,6 +43,7 @@ LayoutLock is a macOS menu bar app for saving and restoring window layouts.
 - Use `AppLogger` for production logging, not `print()`
 - Keep shared helper extensions in `LayoutLock/Shared/ValueExtensions.swift`
 - Prefer small, focused changes that follow existing patterns
+- Prefer shared restore fixes that work across applications; use app-specific handling only when evidence requires it
 - Add or update XCTest coverage for behavior changes
 - Do not introduce backward compatibility unless persisted data, shipped behavior, or user requirements require it
 
@@ -61,7 +62,7 @@ This checks:
 For behavior changes, run the smallest relevant existing XCTest first. For example:
 
 ```sh
-python3 /Users/brkgng/Documents/Codex/tools/apple-build.py -- xcodebuild test \
+xcodebuild test \
   -project LayoutLock.xcodeproj -scheme LayoutLock -destination 'platform=macOS' \
   -only-testing:LayoutLockTests/ExternalCommandIntegrationTests/testParsesRestoreAndCaptureCommands
 ```
