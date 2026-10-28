@@ -833,6 +833,21 @@ struct RestoreEngine {
         let windowsByBundle = Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier)
         for bundle in orderedSavedBundleIdentifiers(in: snapshot) {
             let windows = windowsByBundle[bundle, default: []]
+            let applications = discoveryResult.applications.filter { $0.bundleIdentifier == bundle }.sorted { $0.pid < $1.pid }
+            // Confirm an already-running owner for the position-only CG singleton fallback.
+            // Unexposed ordinary windows still make the apparent singleton ambiguous.
+            if windows.count == 1, let window = windows.first,
+                window.captureSignature.source == .coreGraphics, window.subrole == nil,
+                window.openingConfiguration.effectiveTargets.isEmpty,
+                inspectionBlockedWindows[window.id] == nil,
+                applications.count == 1, let application = applications.first, application.pid > 0,
+                application.windows.count == 1,
+                !discoveryResult.unexposedApplications.contains(where: {
+                    $0.bundleIdentifier == bundle && ($0.pid != application.pid ||
+                        $0.hasUnexposedOrdinaryWindow(membership: spaces.access.membership))
+                }) {
+                result.processIdentifiers[window.id] = application.pid
+            }
             let capturePIDs = windows.map(\.pidAtCapture).reduce(into: [pid_t]()) { pids, pid in
                 if !pids.contains(pid) { pids.append(pid) }
             }
@@ -842,7 +857,6 @@ struct RestoreEngine {
                   !windows.contains(where: { $0.openingConfiguration.effectiveTargets.contains(where: { $0.kind == .webURL }) }) else { continue }
             result.handledBundles.insert(bundle)
             let groups = capturePIDs.map { pid in windows.filter { $0.pidAtCapture == pid } }
-            let applications = discoveryResult.applications.filter { $0.bundleIdentifier == bundle }.sorted { $0.pid < $1.pid }
             let preferredPIDs = matchPlanner.plans(for: windows,
                 candidates: Self.liveWindowsByCandidateID(from: applications).map(\.candidate),
                 runningBundleIdentifiers: [bundle], requiresRuntimeRole: true)

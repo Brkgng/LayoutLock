@@ -1523,6 +1523,129 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(discovery.callCount, 2)
     }
 
+    func testRunningTitlelessCGSingletonRestoresItsPositionWithoutLaunching() async throws {
+        for bundle in ["com.apple.Safari", "net.whatsapp.WhatsApp", "com.example.editor"] {
+            for pid: pid_t in [42, 900] {
+                let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil,
+                    subrole: nil, captureSource: .coreGraphics)
+                let snapshot = makeSnapshot(windows: [saved])
+                let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+                try store.save(snapshot)
+                let launcher = RecordingApplicationLauncher(results: [:])
+                let opener = RecordingTargetOpener()
+                let applier = RecordingEngineWindowApplier()
+                let live = makeApplication(bundleIdentifier: bundle, pid: pid, windows: [
+                    makeDiscoveredWindow(title: "Current window", frame: CGRect(x: 900, y: 700, width: 800, height: 600),
+                        cgWindowID: 901)
+                ])
+
+                let result = try await makeEngine(store: store, launcher: launcher,
+                    discovery: DiscoverySequence([[live]]), windowApplier: applier, targetOpener: opener)
+                    .restoreSnapshot(id: snapshot.id)
+
+                XCTAssertEqual(result.restoredWindows, 1, "\(bundle), PID \(pid)")
+                XCTAssertTrue(result.skippedItems.isEmpty)
+                XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
+                XCTAssertEqual(applier.appliedCGWindowIDs, [901])
+                XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+                XCTAssertTrue(launcher.requestedInstanceBundleIdentifiers.isEmpty)
+                XCTAssertTrue(opener.requests.isEmpty)
+            }
+        }
+    }
+
+    func testRunningTitlelessCGSingletonRejectsAmbiguousAndNonstandardWindows() async throws {
+        let bundle = "com.example.editor"
+        let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil,
+            subrole: nil, captureSource: .coreGraphics)
+        let standard = makeDiscoveredWindow(title: nil, frame: saved.frame.cgRect, cgWindowID: 901)
+        let cases: [[DiscoveredApplication]] = [
+            [makeApplication(bundleIdentifier: bundle, windows: [standard,
+                makeDiscoveredWindow(title: nil, frame: saved.frame.cgRect, cgWindowID: 902)])],
+            [makeApplication(bundleIdentifier: bundle, windows: [standard]),
+             makeApplication(bundleIdentifier: bundle, pid: 201, windows: [standard])],
+            [makeApplication(bundleIdentifier: bundle, windows: [standard]),
+             makeApplication(bundleIdentifier: bundle, pid: 201, windows: [])],
+            [makeApplication(bundleIdentifier: bundle, windows: [
+                makeDiscoveredWindow(title: nil, subrole: "AXDialog", frame: saved.frame.cgRect)])],
+            [makeApplication(bundleIdentifier: bundle, windows: [
+                makeDiscoveredWindow(title: nil, subrole: nil, frame: saved.frame.cgRect)])],
+            [makeApplication(bundleIdentifier: bundle, windows: [
+                makeDiscoveredWindow(title: nil, role: "AXSheet", frame: saved.frame.cgRect)])],
+            [makeApplication(bundleIdentifier: "com.example.other", windows: [standard])]
+        ]
+        for (index, applications) in cases.enumerated() {
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            let snapshot = makeSnapshot(windows: [saved])
+            try store.save(snapshot)
+            let applier = RecordingEngineWindowApplier()
+            let launcher = RecordingApplicationLauncher(results: [:])
+
+            let result = try await makeEngine(store: store, launcher: launcher,
+                discovery: DiscoverySequence([applications]), windowApplier: applier, launchTimeout: 0)
+                .restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(result.restoredWindows, 0, "case \(index)")
+            XCTAssertEqual(result.skippedItems.count, 1)
+            XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+        }
+    }
+
+    func testRunningTitlelessCGFallbackDoesNotChooseBetweenSavedWindows() async throws {
+        let bundle = "com.example.editor"
+        let saved = (0..<2).map { _ in
+            makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil, captureSource: .coreGraphics)
+        }
+        let snapshot = makeSnapshot(windows: saved)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let live = makeApplication(bundleIdentifier: bundle, windows: [
+            makeDiscoveredWindow(title: nil, frame: saved[0].frame.cgRect, cgWindowID: 901)
+        ])
+        let applier = RecordingEngineWindowApplier()
+
+        let result = try await makeEngine(store: store, launcher: RecordingApplicationLauncher(results: [:]),
+            discovery: DiscoverySequence([[live]]), windowApplier: applier).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(result.skippedItems.count, 2)
+        XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+    }
+
+    func testRunningTitlelessCGSingletonDoesNotIgnoreUnexposedWindows() async throws {
+        let bundle = "com.example.editor"
+        let cases: [(pid_t, Bool)] = [(200, true), (201, true), (201, false)]
+        for (hiddenPID, hasWindow) in cases {
+            let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil,
+                subrole: nil, captureSource: .coreGraphics)
+            let snapshot = makeSnapshot(windows: [saved])
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let applier = RecordingEngineWindowApplier()
+            let live = makeApplication(bundleIdentifier: bundle, windows: [
+                makeDiscoveredWindow(title: nil, frame: saved.frame.cgRect, cgWindowID: 901)
+            ])
+            let unexposed = UnexposedApplicationWindows(bundleIdentifier: bundle, pid: hiddenPID, windows: hasWindow ? [
+                CGWindowMetadata(windowID: 902, processIdentifier: hiddenPID, ownerName: nil, layer: 0,
+                    bounds: saved.frame.cgRect, title: nil, isOnScreen: false, zOrderHint: nil)
+            ] : [])
+            let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+                windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+                applicationLauncher: RecordingApplicationLauncher(results: [:]),
+                browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+                applicationActivator: RecordingApplicationActivator { _ in },
+                discoveryResultProvider: {
+                    WindowDiscoveryResult(applications: [live], diagnostics: [], unexposedApplications: [unexposed])
+                }, runningApplicationBundleProvider: { [bundle] })
+
+            let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(result.restoredWindows, 0)
+            XCTAssertEqual(result.skippedItems.count, 1)
+            XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+        }
+    }
+
     func testColdLaunchedTitlelessCGSingletonRestoresItsPosition() async throws {
         let bundle = "com.example.editor"
         let saved = makeWindowRecord(bundleIdentifier: bundle, windowTitle: nil, subrole: nil, captureSource: .coreGraphics)
