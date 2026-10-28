@@ -1099,6 +1099,8 @@ final class SnapshotMenuController: ObservableObject {
 
     private func friendlySkipReason(_ reason: String) -> String {
         switch reason {
+        case RestoreSkipReason.appNotFound:
+            return "Application could not be found."
         case RestoreSkipReason.appNotRunning:
             return "Application is not running."
         case RestoreSkipReason.windowNotFound:

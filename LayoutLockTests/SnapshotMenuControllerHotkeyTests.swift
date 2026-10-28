@@ -1278,6 +1278,29 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.message, "Couldn't restore \"Coding\": 0 of 3 windows restored · 3 skipped.")
     }
 
+    func testRestoreSnapshotCompletionExplainsWhenSavedAppCannotBeFound() async throws {
+        let snapshotID = UUID()
+        let bundleIdentifier = "com.example.uninstalled"
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Coding", windows: [
+            makeWindow(bundleIdentifier: bundleIdentifier, windowTitle: "My project")
+        ]))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = makeRestoreController(
+            store: store,
+            overlayPresenter: overlayPresenter,
+            appNameResolver: { _ in "Unity" },
+            applicationLauncher: NoOpRestoreApplicationLauncher(unavailableBundleIdentifiers: [bundleIdentifier])
+        )
+
+        await controller.restoreSnapshot(id: snapshotID)?.value
+
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["0 of 1 windows restored · 1 skipped"])
+        XCTAssertEqual(overlayPresenter.restoreCompletionDetails, ["Unity (My project): Application could not be found."])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
+    }
+
     func testRestoreSnapshotReportsPartialSuccessWithoutCallingItFailure() async throws {
         let snapshotID = UUID()
         let display = makeDisplayRecord(id: 1)
@@ -2345,6 +2368,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         isTrusted: Bool = true,
         overlayPresenter: OperationOverlayPresenting = NoOpOperationOverlayPresenter(),
         appNameResolver: @escaping SnapshotMenuController.AppNameResolver = { $0 },
+        applicationLauncher: RestoreApplicationLaunching = NoOpRestoreApplicationLauncher(),
         screenProvider: @escaping () -> [DisplayResolver.ScreenSnapshot] = { [] },
         discoveredApplicationsProvider: @escaping () throws -> [DiscoveredApplication] = { [] },
         windowApplier: RestoreWindowApplying = RestoringWindowApplier(),
@@ -2362,7 +2386,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             trustChecker: trustChecker,
             windowApplier: windowApplier,
             displayResolver: DisplayResolver(screenProvider: screenProvider),
-            applicationLauncher: NoOpRestoreApplicationLauncher(),
+            applicationLauncher: applicationLauncher,
             applicationActivator: NoOpRestoreApplicationActivator(),
             discoveredApplicationsProvider: discoveredApplicationsProvider,
             runningApplicationBundleProvider: { [] }
@@ -2572,6 +2596,12 @@ private final class SuspendingOperationOverlayPresenter: OperationOverlayPresent
 }
 
 private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
+    var unavailableBundleIdentifiers: Set<String> = []
+
+    func isAvailable(bundleIdentifier: String) -> Bool {
+        !unavailableBundleIdentifiers.contains(bundleIdentifier)
+    }
+
     func requestLaunch(bundleIdentifier _: String) async -> pid_t? {
         nil
     }

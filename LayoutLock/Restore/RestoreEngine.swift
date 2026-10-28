@@ -530,6 +530,17 @@ struct RestoreEngine {
                 }
                 return matchedPlansByID[savedWindow.id]
             }.map { plan -> RestoreWindowPlan in
+                // Explain failed resolution after the normal open/launch flow has finished.
+                if !onlyReadyApps, plan.candidate == nil,
+                   [RestoreSkipReason.appNotRunning, RestoreSkipReason.appInstanceUnconfirmed].contains(plan.skip?.reason ?? ""),
+                   !readinessBundleIdentifiers.contains(plan.savedWindow.bundleIdentifier),
+                   !runningBundleIdentifiers(from: discoveredApplications).contains(plan.savedWindow.bundleIdentifier),
+                   !discoveryResult.unexposedApplications.contains(where: { $0.bundleIdentifier == plan.savedWindow.bundleIdentifier }),
+                   !applicationLauncher.isAvailable(bundleIdentifier: plan.savedWindow.bundleIdentifier) {
+                    return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                        skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
+                            reason: RestoreSkipReason.appNotFound))
+                }
                 if plan.candidate == nil, unconfirmedLocalWindowIDs.contains(plan.savedWindow.id) {
                     return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
                         skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier,
@@ -1548,6 +1559,7 @@ protocol RestoreApplicationActivating {
 }
 
 protocol RestoreApplicationLaunching {
+    func isAvailable(bundleIdentifier: String) -> Bool
     @discardableResult
     func requestLaunch(bundleIdentifier: String) async -> pid_t?
     func launchInstance(bundleIdentifier: String) async -> pid_t?
@@ -1884,6 +1896,10 @@ struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
 
     init(workspace: NSWorkspace = .shared) {
         self.workspace = workspace
+    }
+
+    func isAvailable(bundleIdentifier: String) -> Bool {
+        workspace.existingApplicationURL(withBundleIdentifier: bundleIdentifier) != nil
     }
 
     func requestLaunch(bundleIdentifier: String) async -> pid_t? {
@@ -2828,6 +2844,7 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
 }
 
 enum RestoreSkipReason {
+    static let appNotFound = "app not found"
     static let appNotRunning = "app not running"
     static let windowNotFound = "window not found"
     static let openedBrowserWindowNotIdentified = "opened browser window could not be identified"

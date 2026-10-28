@@ -1126,6 +1126,24 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.windowCount), [1, 1])
     }
 
+    func testInactiveAppsDistinguishMissingAppsAndReflectAvailabilityChanges() throws {
+        let bundle = "com.example.editor"
+        let snapshot = makeSnapshot(windows: [makeWindow(bundleIdentifier: bundle)])
+        let missing = try XCTUnwrap(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [], unavailableBundleIdentifiers: [bundle],
+            identityResolver: identity).first)
+        XCTAssertFalse(missing.isAvailable)
+        XCTAssertEqual(missing.statusText, "App Not Found")
+
+        let installed = try XCTUnwrap(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [], identityResolver: identity).first)
+        XCTAssertTrue(installed.isAvailable)
+        XCTAssertEqual(installed.statusText, "Not Running")
+        XCTAssertTrue(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [bundle], unavailableBundleIdentifiers: [bundle],
+            identityResolver: identity).isEmpty)
+    }
+
     func testIdentityFallbackCanUseBundleIdentifierAsName() {
         let snapshot = makeSnapshot(windows: [
             makeWindow(bundleIdentifier: "com.example.unresolved")

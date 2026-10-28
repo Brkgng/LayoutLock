@@ -57,6 +57,11 @@ struct DashboardAppSummary: Identifiable {
 
 struct DashboardInactiveAppSummary: Identifiable {
     let appSummary: DashboardAppSummary
+    let isAvailable: Bool
+
+    var statusText: String {
+        isAvailable ? "Not Running" : "App Not Found"
+    }
 
     var id: String {
         appSummary.id
@@ -207,11 +212,13 @@ enum DashboardSnapshotPresentation {
     static func inactiveAppSummaries(
         for snapshot: Snapshot,
         runningBundleIdentifiers: Set<String>,
+        unavailableBundleIdentifiers: Set<String> = [],
         identityResolver: (String) -> DashboardAppIdentity
     ) -> [DashboardInactiveAppSummary] {
         appSummaries(for: snapshot, identityResolver: identityResolver)
             .filter { !runningBundleIdentifiers.contains($0.bundleIdentifier) }
-            .map { DashboardInactiveAppSummary(appSummary: $0) }
+            .map { DashboardInactiveAppSummary(appSummary: $0,
+                isAvailable: !unavailableBundleIdentifiers.contains($0.bundleIdentifier)) }
     }
 
     static func windowPreviewGroups(

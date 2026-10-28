@@ -1374,6 +1374,8 @@ final class RestoreSpacesTests: XCTestCase {
 }
 
 private struct SpaceTestLauncher: RestoreApplicationLaunching {
+    func isAvailable(bundleIdentifier: String) -> Bool { true }
+
     func requestLaunch(bundleIdentifier: String) async -> pid_t? {
         XCTFail("Unexpected launch")
         return nil

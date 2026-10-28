@@ -1332,6 +1332,107 @@ final class RestoreEngineTests: XCTestCase {
         }
     }
 
+    func testUnresolvableAppsReportNotFoundWithoutWaitingOrChangingSnapshot() async throws {
+        let bundle = "com.example.uninstalled"
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "saved-document.txt"))
+        for hasTargets in [false, true] {
+            for hasMultipleInstances in [false, true] {
+                let windows = (hasMultipleInstances ? [100, 101] : [100]).map { pid in
+                    makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: Int32(pid),
+                        openingConfiguration: WindowOpeningConfiguration(manualTargets: hasTargets ? [target] : []))
+                }
+                let snapshot = makeSnapshot(windows: windows)
+                let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+                try store.save(snapshot)
+                let launcher = RecordingApplicationLauncher(results: [bundle: false],
+                    unavailableBundleIdentifiers: [bundle])
+                let opener = RecordingTargetOpener(results: Array(repeating: .failed(.applicationUnavailable), count: windows.count))
+                let discovery = DiscoverySequence([[]])
+
+                let result = try await makeEngine(store: store, launcher: launcher, discovery: discovery,
+                    targetOpener: opener, launchPollSleeper: { _ in XCTFail("Missing apps must not wait") })
+                    .restoreSnapshot(id: snapshot.id)
+
+                XCTAssertEqual(result.skippedItems.map(\.reason), Array(repeating: RestoreSkipReason.appNotFound, count: windows.count))
+                XCTAssertEqual(result.restoredWindows, 0)
+                XCTAssertEqual(result.requestedTargetCount, 0)
+                XCTAssertEqual(result.targetIssues.count, hasTargets ? windows.count : 0)
+                XCTAssertTrue(result.targetIssues.allSatisfy { $0.reason == .applicationUnavailable })
+                XCTAssertTrue(result.windowDiagnostics.allSatisfy { !$0.readinessTimedOut })
+                XCTAssertEqual(launcher.requestedBundleIdentifiers, hasMultipleInstances ? [] : [bundle])
+                XCTAssertEqual(launcher.requestedInstanceBundleIdentifiers, hasMultipleInstances && !hasTargets ? [bundle, bundle] : [])
+                XCTAssertEqual(opener.requests.count, hasTargets ? windows.count : 0)
+                XCTAssertEqual(discovery.callCount, 1)
+                XCTAssertEqual(try store.loadSnapshot(id: snapshot.id).windows.map(\.id), windows.map(\.id))
+            }
+        }
+    }
+
+    func testMissingAppDoesNotPreventInstalledAppFromLaunchingAndRestoring() async throws {
+        let missingBundle = "com.example.uninstalled"
+        let installedBundle = "com.example.editor"
+        let savedWindow = makeWindowRecord(bundleIdentifier: installedBundle, windowTitle: "Notes")
+        let snapshot = makeSnapshot(windows: [makeWindowRecord(bundleIdentifier: missingBundle), savedWindow])
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let launcher = RecordingApplicationLauncher(results: [installedBundle: true],
+            unavailableBundleIdentifiers: [missingBundle])
+        let discovery = DiscoverySequence([[], [makeApplication(bundleIdentifier: installedBundle,
+            windows: [makeDiscoveredWindow(title: "Notes", frame: savedWindow.frame.cgRect)])]])
+
+        let result = try await makeEngine(store: store, launcher: launcher, discovery: discovery,
+            launchPollSleeper: { _ in XCTFail("The installed app is already ready") }).restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(launcher.requestedBundleIdentifiers, [missingBundle, installedBundle])
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertEqual(result.skippedItems.map(\.bundleIdentifier), [missingBundle])
+        XCTAssertEqual(result.skippedItems.first?.reason, RestoreSkipReason.appNotFound)
+        XCTAssertFalse(try XCTUnwrap(result.windowDiagnostics.first { $0.windowID == snapshot.windows[0].id }).readinessTimedOut)
+    }
+
+    func testRunningAppRestoresEvenWhenInstallationCannotBeFound() async throws {
+        let bundle = "com.example.running"
+        let window = makeWindowRecord(bundleIdentifier: bundle, windowTitle: "Notes")
+        let snapshot = makeSnapshot(windows: [window])
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let launcher = RecordingApplicationLauncher(results: [:], unavailableBundleIdentifiers: [bundle])
+        let discovery = DiscoverySequence([[makeApplication(bundleIdentifier: bundle,
+            windows: [makeDiscoveredWindow(title: "Notes", frame: window.frame.cgRect)])]])
+
+        let result = try await makeEngine(store: store, launcher: launcher, discovery: discovery)
+            .restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+    }
+
+    func testTargetOpenerCanRestoreAppWhenBundleLookupCannotFindIt() async throws {
+        let bundle = "com.example.editor"
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "fallback-document.txt"))
+        let window = makeWindowRecord(bundleIdentifier: bundle,
+            openingConfiguration: WindowOpeningConfiguration(manualTargets: [target]))
+        let snapshot = makeSnapshot(windows: [window])
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let launcher = RecordingApplicationLauncher(results: [:], unavailableBundleIdentifiers: [bundle])
+        let opener = RecordingTargetOpener(results: [.openedApplicationInstance(200)])
+        let discovery = DiscoverySequence([[], [makeApplication(bundleIdentifier: bundle,
+            windows: [makeDiscoveredWindow(documentURL: target.url, title: window.windowTitle,
+                frame: window.frame.cgRect, cgWindowID: 901)])]])
+
+        let result = try await makeEngine(store: store, launcher: launcher, discovery: discovery,
+            targetOpener: opener, launchPollSleeper: { _ in XCTFail("The resolved app is already ready") })
+            .restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertTrue(result.targetIssues.isEmpty)
+        XCTAssertEqual(opener.requests.count, 1)
+        XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+    }
+
     func testMissingInstalledAppRequestsLaunchBeforePlanning() async throws {
         let bundleIdentifier = "com.example.editor"
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
@@ -6414,15 +6515,22 @@ private struct StubRestoreBrowserTabCapturer: BrowserTabCapturing {
 
 private final class RecordingApplicationLauncher: RestoreApplicationLaunching {
     private let results: [String: Bool]
+    private let unavailableBundleIdentifiers: Set<String>
     private let launchPID: pid_t?
     private(set) var requestedBundleIdentifiers: [String] = []
     private(set) var requestedInstanceBundleIdentifiers: [String] = []
     private var instanceResults: [pid_t?]
 
-    init(results: [String: Bool], instanceResults: [pid_t?] = [], launchPID: pid_t? = 200) {
+    init(results: [String: Bool], instanceResults: [pid_t?] = [], launchPID: pid_t? = 200,
+        unavailableBundleIdentifiers: Set<String> = []) {
         self.results = results
+        self.unavailableBundleIdentifiers = unavailableBundleIdentifiers
         self.instanceResults = instanceResults
         self.launchPID = launchPID
+    }
+
+    func isAvailable(bundleIdentifier: String) -> Bool {
+        !unavailableBundleIdentifiers.contains(bundleIdentifier)
     }
 
     func launchInstance(bundleIdentifier: String) async -> pid_t? {

@@ -1,4 +1,15 @@
+import AppKit
 import Foundation
+
+extension NSWorkspace {
+    func existingApplicationURL(withBundleIdentifier bundleIdentifier: String) -> URL? {
+        guard let url = urlForApplication(withBundleIdentifier: bundleIdentifier),
+              FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return url
+    }
+}
 
 extension Optional where Wrapped == String {
     var nonEmptyValue: String? {
