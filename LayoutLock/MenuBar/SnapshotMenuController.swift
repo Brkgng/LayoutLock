@@ -44,7 +44,11 @@ final class SnapshotMenuController: ObservableObject {
             scheduleStatusClear()
         }
     }
-    @Published private(set) var isOperating = false
+    @Published private(set) var isOperating = false {
+        didSet {
+            scheduleStatusClear()
+        }
+    }
     @Published private(set) var lastCapturedSnapshotID: UUID?
     @Published private(set) var restoreCompletionID: UUID?
 
@@ -63,6 +67,7 @@ final class SnapshotMenuController: ObservableObject {
     private var hotkeyCaptureActivityDidChange: ((Bool) -> Error?)?
     private var statusClearTask: Task<Void, Never>?
     private let statusAutoClearDelay: TimeInterval
+    private let uiSleep: @MainActor (TimeInterval) async throws -> Void
 
     init(
         snapshotStore: SnapshotStore? = nil,
@@ -78,7 +83,10 @@ final class SnapshotMenuController: ObservableObject {
         },
         operationOverlayPresenter: OperationOverlayPresenting = NoOpOperationOverlayPresenter(),
         entitlementProvider: EntitlementProviding = StaticEntitlementProvider(isProUnlocked: true),
-        statusAutoClearDelay: TimeInterval = 5
+        statusAutoClearDelay: TimeInterval = 5,
+        uiSleep: @escaping @MainActor (TimeInterval) async throws -> Void = { interval in
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
     ) {
         self.snapshotStore = snapshotStore
         self.snapshotCaptureService = snapshotCaptureService
@@ -92,6 +100,7 @@ final class SnapshotMenuController: ObservableObject {
         self.operationOverlayPresenter = operationOverlayPresenter
         self.entitlementProvider = entitlementProvider
         self.statusAutoClearDelay = statusAutoClearDelay
+        self.uiSleep = uiSleep
         snapshotSummaries = []
         refreshSummaries()
     }
@@ -99,11 +108,16 @@ final class SnapshotMenuController: ObservableObject {
     private func scheduleStatusClear() {
         statusClearTask?.cancel()
 
-        guard status != nil else { return }
+        guard status != nil, !isOperating else { return }
 
         let delay = statusAutoClearDelay
+        let uiSleep = uiSleep
         statusClearTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            do {
+                try await uiSleep(delay)
+            } catch {
+                return
+            }
             guard !Task.isCancelled else { return }
             self?.status = nil
         }
@@ -270,8 +284,19 @@ final class SnapshotMenuController: ObservableObject {
 
         return Task { @MainActor [self] in
             await operationOverlayPresenter.showOverlay(kind: .restore)
+            let loadingOverlayTask = Task { @MainActor [self] in
+                do {
+                    try await uiSleep(15)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                operationOverlayPresenter.hideOverlay()
+                status = Status(message: "Restoring in the background", kind: .info)
+            }
             var didShowRestoreCompletion = false
             defer {
+                loadingOverlayTask.cancel()
                 isOperating = false
                 if !didShowRestoreCompletion {
                     operationOverlayPresenter.hideOverlay()
@@ -279,7 +304,13 @@ final class SnapshotMenuController: ObservableObject {
             }
 
             do {
-                let result = try await restoreEngine.restoreSnapshot(id: id)
+                try Task.checkCancellation()
+                let result = try await withTaskCancellationHandler {
+                    try await restoreEngine.restoreSnapshot(id: id)
+                } onCancel: {
+                    loadingOverlayTask.cancel()
+                }
+                try Task.checkCancellation()
                 status = Status(
                     message: restoreStatusMessage(snapshotName: snapshotName, result: result),
                     kind: .info
@@ -288,6 +319,8 @@ final class SnapshotMenuController: ObservableObject {
                 operationOverlayPresenter.showRestoreCompletion(completion)
                 didShowRestoreCompletion = true
                 restoreCompletionID = UUID()
+            } catch is CancellationError {
+                status = Status(message: "Restore cancelled.", kind: .info)
             } catch {
                 status = Status(
                     message: error.userFacingDescription,
@@ -923,8 +956,12 @@ final class SnapshotMenuController: ObservableObject {
             return "Matching window was not found."
         case RestoreSkipReason.openedBrowserWindowNotIdentified:
             return "Opened browser window could not be matched."
+        case RestoreSkipReason.appInstanceUnconfirmed:
+            return "A separate app instance could not be confirmed."
         case RestoreSkipReason.desktopUnconfirmed:
             return "Window could not be brought to the current desktop."
+        case RestoreSkipReason.inspectionNotReturned:
+            return "Inspected window could not be returned to its original desktop and position."
         case RestoreDowngradeReason.windowIdentityUnconfirmed:
             return "Position restored; desktop placement could not be confirmed."
         case RestoreSkipReason.windowGeometryDidNotSettle:

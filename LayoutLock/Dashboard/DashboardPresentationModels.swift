@@ -685,9 +685,10 @@ struct DashboardOpeningTargetCapabilities: Equatable {
         } else if fileBundleIdentifiers.contains(bundleIdentifier) {
             supportedKinds = [.file]
         } else {
-            supportedKinds = Set(
-                window.openingConfiguration.automaticallyCapturedTargets.map(\.kind)
-            )
+            let configuration = window.openingConfiguration
+            supportedKinds = Set<WindowOpenTargetKind>([.file, .folder])
+                .union(configuration.automaticallyCapturedTargets.map(\.kind))
+                .union((configuration.manualTargets ?? []).map(\.kind))
         }
 
         return DashboardOpeningTargetCapabilities(

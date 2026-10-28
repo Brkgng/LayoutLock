@@ -5,6 +5,262 @@ import XCTest
 @testable import LayoutLock
 
 final class WindowDiscoveryEngineTests: XCTestCase {
+    func testPartiallyExposedOwnerRetainsOnlyUnmatchedCGWindow() throws {
+        let appElement = AXUIElementCreateApplication(101)
+        let windowElement = AXUIElementCreateApplication(201)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([windowElement] as CFArray, for: appElement, attribute: kAXWindowsAttribute)
+        fixture.setWindow(windowElement, title: "Visible", role: kAXWindowRole as String, frame: frame)
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Visible", frame: frame, isOnScreen: true),
+                             cgMetadata(id: 901, title: "Hidden", frame: frame.offsetBy(dx: 100, dy: 100))]],
+            windowIDProvider: { _ in 900 }
+        )
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+        XCTAssertEqual(result.applications.first?.windows.map(\.cgWindowID), [900])
+        let owner = try XCTUnwrap(result.unexposedApplications.first)
+        XCTAssertEqual(result.unexposedApplications.count, 1)
+        XCTAssertEqual(owner.pid, 101)
+        XCTAssertEqual(owner.windows.map(\.windowID), [901])
+    }
+
+    func testCaptureDoesNotReintroduceAXRejectedWindowsThroughCGFallback() throws {
+        let directory = try TestTemporaryDirectory()
+        let appElement = AXUIElementCreateApplication(101)
+        let documentElement = AXUIElementCreateApplication(201)
+        let sheetElement = AXUIElementCreateApplication(202)
+        let floatingElement = AXUIElementCreateApplication(203)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([documentElement, sheetElement, floatingElement] as CFArray,
+            for: appElement, attribute: kAXWindowsAttribute)
+        fixture.setWindow(documentElement, title: "Document", role: kAXWindowRole as String,
+            subrole: kAXStandardWindowSubrole as String, frame: frame)
+        fixture.setWindow(sheetElement, title: "Sheet", role: kAXSheetRole as String,
+            frame: frame.offsetBy(dx: 20, dy: 20))
+        fixture.setWindow(floatingElement, title: "Panel", role: kAXWindowRole as String,
+            subrole: kAXFloatingWindowSubrole as String, frame: frame.offsetBy(dx: 40, dy: 40))
+        let metadata = [
+            cgMetadata(id: 900, title: "Document", frame: frame, isOnScreen: true),
+            cgMetadata(id: 901, title: "Sheet", frame: frame.offsetBy(dx: 20, dy: 20)),
+            cgMetadata(id: 902, title: "Panel", frame: frame.offsetBy(dx: 40, dy: 40)),
+            cgMetadata(id: 903, title: "Hidden document", frame: frame.offsetBy(dx: 100, dy: 100))
+        ]
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            metadata: [101: metadata],
+            windowIDProvider: { element in
+                if CFEqual(element, documentElement) { return 900 }
+                if CFEqual(element, sheetElement) { return 901 }
+                if CFEqual(element, floatingElement) { return 902 }
+                return nil
+            }
+        )
+        let discovery = try engine.discoverRunningWindowsWithDiagnostics()
+        XCTAssertEqual(discovery.applications.first?.windows.map(\.cgWindowID), [900])
+        XCTAssertEqual(discovery.unexposedApplications.first?.windows.map(\.windowID), [903])
+        XCTAssertEqual(discovery.diagnostics.map(\.reason), [
+            WindowDiscoveryDiagnosticReason.transientRole,
+            WindowDiscoveryDiagnosticReason.transientSubrole
+        ])
+
+        let display = makeDisplayRecord()
+        let service = SnapshotCaptureService(
+            displayResolver: DisplayResolver(screenProvider: {
+                [DisplayResolver.ScreenSnapshot(
+                    id: display.id,
+                    localizedName: display.localizedName,
+                    frame: display.frameRect,
+                    visibleFrame: display.visibleFrameRect,
+                    backingScaleFactor: display.backingScaleFactor,
+                    isPrimary: display.isPrimary,
+                    vendorID: nil, productID: nil, serialNumber: nil
+                )]
+            }),
+            snapshotStore: SnapshotStore(snapshotsDirectoryURL: directory.url),
+            discoveryResultProvider: { discovery },
+            restoreSpaceAccess: RestoreSpaceAccess(
+                inventory: { _ in RestoreSpaceInventory(activeByDisplay: [display.id: 1], ordinarySpaceIDs: [1, 2]) },
+                membership: { $0 == 900 ? [1] : [2] },
+                submitMove: { _, _ in XCTFail("Capture must not move windows"); return false },
+                windowMetadata: { pid, id in metadata.first { $0.processIdentifier == pid && $0.windowID == id } }
+            )
+        )
+
+        let snapshot = try service.captureSnapshot(named: "AX rejection regression")
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [900, 903])
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.source), [.accessibility, .coreGraphics])
+    }
+
+    func testRejectedAXWindowWithoutConfirmedIdentitySuppressesOnlyItsOwnersCGFallback() throws {
+        let unknownIDs: [CGWindowID?] = [nil, 0, 999, 902]
+        for unknownID in unknownIDs {
+            let appElement = AXUIElementCreateApplication(101)
+            let otherAppElement = AXUIElementCreateApplication(102)
+            let documentElement = AXUIElementCreateApplication(201)
+            let sheetElement = AXUIElementCreateApplication(202)
+            let fixture = AXAttributeFixture()
+            let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+            fixture.set([documentElement, sheetElement] as CFArray,
+                for: appElement, attribute: kAXWindowsAttribute)
+            fixture.set([] as CFArray, for: otherAppElement, attribute: kAXWindowsAttribute)
+            fixture.setWindow(documentElement, title: "Document", role: kAXWindowRole as String,
+                subrole: kAXStandardWindowSubrole as String, frame: frame)
+            fixture.setWindow(sheetElement, title: "Sheet", role: kAXSheetRole as String,
+                frame: frame.offsetBy(dx: 20, dy: 20))
+            let otherWindow = CGWindowMetadata(
+                windowID: 902, processIdentifier: 102, ownerName: "Other app", layer: 0,
+                bounds: frame, title: "Other hidden document", isOnScreen: false, zOrderHint: nil
+            )
+            let engine = WindowDiscoveryEngine(
+                trustChecker: AccessibilityTrustChecker { true },
+                attributeReader: fixture.reader,
+                currentProcessIdentifier: 500,
+                runningApplicationsProvider: {
+                    [RunningApplicationSnapshot(bundleIdentifier: "com.example.editor", processIdentifier: 101, localizedName: "Editor"),
+                     RunningApplicationSnapshot(bundleIdentifier: "com.example.other", processIdentifier: 102, localizedName: "Other app")]
+                },
+                appElementProvider: { $0 == 101 ? appElement : otherAppElement },
+                cgWindowMetadataProvider: { _ in
+                    [101: [self.cgMetadata(id: 900, title: "Document", frame: frame, isOnScreen: true),
+                           self.cgMetadata(id: 901, title: "Sheet", frame: frame.offsetBy(dx: 20, dy: 20))],
+                     102: [otherWindow]]
+                },
+                windowIDProvider: { CFEqual($0, documentElement) ? 900 : unknownID }
+            )
+
+            let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+            XCTAssertEqual(result.applications.first?.windows.map(\.cgWindowID), [900])
+            XCTAssertEqual(result.unexposedApplications.map(\.pid), [102], "Rejected AX identity: \(String(describing: unknownID))")
+            XCTAssertEqual(result.unexposedApplications.flatMap(\.windows).map(\.windowID), [902])
+            XCTAssertEqual(result.diagnostics.filter { $0.processIdentifier == 101 }.map(\.reason),
+                [WindowDiscoveryDiagnosticReason.transientRole])
+        }
+    }
+
+    func testOwnerWithUnknownAXCGIdentityDoesNotEmitPotentialDuplicateFallback() throws {
+        let appElement = AXUIElementCreateApplication(101)
+        let windowElement = AXUIElementCreateApplication(201)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([windowElement] as CFArray, for: appElement, attribute: kAXWindowsAttribute)
+        fixture.setWindow(windowElement, title: "Visible", role: kAXWindowRole as String, frame: frame)
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Visible", frame: frame),
+                             cgMetadata(id: 901, title: "Hidden", frame: frame.offsetBy(dx: 100, dy: 100))]],
+            windowIDProvider: { _ in nil }
+        )
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+        let window = try XCTUnwrap(result.applications.first?.windows.first)
+
+        XCTAssertNil(window.cgWindowID)
+        XCTAssertTrue(result.unexposedApplications.isEmpty)
+    }
+
+    func testUnityUntitledAndSavedSceneWindowsAppendValidatedProjectRoot() throws {
+        let directory = try TestTemporaryDirectory()
+        let project = try makeUnityProject(in: directory.url)
+        let scene = project.appendingPathComponent("Assets/Level.unity")
+        try Data().write(to: scene)
+        let appElement = AXUIElementCreateApplication(101)
+        let untitledElement = AXUIElementCreateApplication(201)
+        let sceneElement = AXUIElementCreateApplication(202)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([untitledElement, sceneElement] as CFArray, for: appElement, attribute: kAXWindowsAttribute)
+        fixture.setWindow(untitledElement, title: "Untitled", role: kAXWindowRole as String, frame: frame)
+        fixture.setWindow(sceneElement, title: "Level", role: kAXWindowRole as String, frame: frame)
+        fixture.set(scene.absoluteString as CFString, for: sceneElement, attribute: kAXDocumentAttribute)
+        var requestedPIDs: [pid_t] = []
+        var requestedDocuments: [URL?] = []
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            bundleIdentifier: "com.unity3d.UnityEditor5.x",
+            unityProjectURLProvider: { pid, document in
+                requestedPIDs.append(pid)
+                requestedDocuments.append(document)
+                return UnityProjectResolver().projectURL(containing: document ?? project)
+            }
+        )
+
+        let windows = try XCTUnwrap(engine.discoverRunningWindowsWithDiagnostics().applications.first?.windows)
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0].documentURL, project)
+        XCTAssertEqual(windows[0].documentURLs, [project])
+        XCTAssertEqual(windows[1].documentURL, scene)
+        XCTAssertEqual(windows[1].documentURLs, [scene, project])
+        XCTAssertEqual(requestedPIDs, [101, 101])
+        XCTAssertEqual(requestedDocuments, [nil, scene])
+    }
+
+    func testNonUnityOwnersNeverInvokeUnityProjectProvider() throws {
+        let appElement = AXUIElementCreateApplication(101)
+        let windowElement = AXUIElementCreateApplication(201)
+        let fixture = AXAttributeFixture()
+        let frame = CGRect(x: 20, y: 30, width: 400, height: 300)
+        fixture.set([windowElement] as CFArray, for: appElement, attribute: kAXWindowsAttribute)
+        fixture.setWindow(windowElement, title: "Visible", role: kAXWindowRole as String, frame: frame)
+        var providerCalls = 0
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Visible", frame: frame),
+                             cgMetadata(id: 901, title: "Hidden", frame: frame.offsetBy(dx: 100, dy: 100))]],
+            windowIDProvider: { _ in 900 },
+            unityProjectURLProvider: { _, _ in providerCalls += 1; return nil }
+        )
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+        XCTAssertEqual(result.applications.first?.windows.count, 1)
+        XCTAssertEqual(result.unexposedApplications.first?.windows.map(\.windowID), [901])
+        XCTAssertEqual(providerCalls, 0)
+        XCTAssertTrue(result.unexposedApplications.first?.documentURLs.isEmpty == true)
+    }
+
+    func testUnityOwnerWithNoAXWindowsCarriesProjectContextAlongsideCGWindows() throws {
+        let directory = try TestTemporaryDirectory()
+        let project = try makeUnityProject(in: directory.url)
+        let appElement = AXUIElementCreateApplication(101)
+        let fixture = AXAttributeFixture()
+        fixture.set([] as CFArray, for: appElement, attribute: kAXWindowsAttribute)
+        var providerCalls = 0
+        let engine = makeEngine(
+            appElement: appElement,
+            attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 901, title: "Hidden Unity")]],
+            bundleIdentifier: "com.unity3d.UnityEditor5.x",
+            unityProjectURLProvider: { pid, document in
+                XCTAssertEqual(pid, 101)
+                XCTAssertNil(document)
+                providerCalls += 1
+                return UnityProjectResolver().projectURL(containing: project)
+            }
+        )
+
+        let result = try engine.discoverRunningWindowsWithDiagnostics()
+        let owner = try XCTUnwrap(result.unexposedApplications.first)
+
+        XCTAssertTrue(result.applications.isEmpty)
+        XCTAssertEqual(owner.bundleIdentifier, "com.unity3d.UnityEditor5.x")
+        XCTAssertEqual(owner.windows.map(\.windowID), [901])
+        XCTAssertEqual(owner.documentURLs, [project])
+        XCTAssertEqual(providerCalls, 1)
+    }
+
     func testThrowsWhenAccessibilityIsDenied() {
         let engine = WindowDiscoveryEngine(
             trustChecker: AccessibilityTrustChecker { false },
@@ -637,12 +893,15 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         fixture.set("Broken" as CFString, for: windowElement, attribute: kAXTitleAttribute)
         let engine = makeEngine(
             appElement: appElement,
-            attributeReader: fixture.reader
+            attributeReader: fixture.reader,
+            metadata: [101: [cgMetadata(id: 900, title: "Broken")]],
+            windowIDProvider: { _ in 900 }
         )
 
         let result = try engine.discoverRunningWindowsWithDiagnostics()
 
         XCTAssertTrue(result.applications.isEmpty)
+        XCTAssertTrue(result.unexposedApplications.flatMap(\.windows).isEmpty)
         XCTAssertEqual(
             result.diagnostics,
             [
@@ -755,7 +1014,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = { _ in nil },
         bundleIdentifier: String = "com.example.editor",
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver =
-            ApplicationWindowDocumentURLResolver()
+            ApplicationWindowDocumentURLResolver(),
+        unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil }
     ) -> WindowDiscoveryEngine {
         WindowDiscoveryEngine(
             trustChecker: AccessibilityTrustChecker { true },
@@ -773,8 +1033,43 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             },
             appElementProvider: { _ in appElement },
             cgWindowMetadataProvider: { _ in metadata },
-            windowIDProvider: windowIDProvider
+            windowIDProvider: windowIDProvider,
+            unityProjectURLProvider: unityProjectURLProvider
         )
+    }
+
+    private func cgMetadata(
+        id: CGWindowID,
+        title: String,
+        frame: CGRect = CGRect(x: 20, y: 30, width: 400, height: 300),
+        isOnScreen: Bool = false
+    ) -> CGWindowMetadata {
+        CGWindowMetadata(
+            windowID: id,
+            processIdentifier: 101,
+            ownerName: "Editor",
+            layer: 0,
+            bounds: frame,
+            title: title,
+            isOnScreen: isOnScreen,
+            zOrderHint: nil
+        )
+    }
+
+    private func makeUnityProject(in directory: URL) throws -> URL {
+        let project = directory.appendingPathComponent("Project", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: project.appendingPathComponent("Assets", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let settings = project.appendingPathComponent("ProjectSettings", isDirectory: true)
+        try FileManager.default.createDirectory(at: settings, withIntermediateDirectories: true)
+        try "m_EditorVersion: 6000.2.1f1\n".write(
+            to: settings.appendingPathComponent("ProjectVersion.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        return project.standardizedFileURL
     }
 
     private func writeVSCodeWorkspaceMetadata(

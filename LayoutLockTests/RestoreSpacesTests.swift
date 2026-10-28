@@ -251,7 +251,7 @@ final class RestoreSpacesTests: XCTestCase {
         XCTAssertEqual(candidate?.window.windowID, 7)
     }
 
-    func testAmbiguousCGTitlesAndMultipleSavedWindowsStayUnresolved() {
+    func testDuplicateCurrentAndSavedTitlesStayUnresolved() {
         let saved = makeWindowRecord()
         let recovery = self.recovery()
         XCTAssertNil(
@@ -260,6 +260,118 @@ final class RestoreSpacesTests: XCTestCase {
         XCTAssertNil(
             recovery.candidate(
                 for: saved, savedWindows: [saved, makeWindowRecord()], applications: [unexposed([metadata(id: 7)])]))
+    }
+
+    func testUniqueTitlesRecoverMultipleSavedWindowsAcrossCurrentProcesses() {
+        let saved = ["Alpha", "Beta", "Gamma"].enumerated().map {
+            makeWindowRecord(pidAtCapture: Int32($0.offset + 1), windowTitle: $0.element,
+                             cgWindowID: UInt32(100 + $0.offset))
+        }
+        let owners = saved.enumerated().reversed().map { index, record in
+            UnexposedApplicationWindows(bundleIdentifier: record.bundleIdentifier, pid: Int32(50 + index),
+                windows: [metadata(id: UInt32(7 + index), title: record.windowTitle, pid: Int32(50 + index))])
+        }
+
+        for (index, record) in saved.enumerated() {
+            let candidate = recovery().candidate(for: record, savedWindows: saved, applications: owners)
+            XCTAssertEqual(candidate?.pid, Int32(50 + index))
+            XCTAssertEqual(candidate?.window.windowID, UInt32(7 + index))
+        }
+    }
+
+    func testUniqueTitlesRecoverMultipleWindowsWithinOneCurrentProcess() {
+        let saved = ["Alpha", "Beta"].map { makeWindowRecord(pidAtCapture: 5, windowTitle: $0) }
+        let owner = unexposed([metadata(id: 8, title: "Beta"), metadata(id: 7, title: "Alpha")])
+
+        XCTAssertEqual(recovery().candidate(for: saved[0], savedWindows: saved,
+                                            applications: [owner])?.window.windowID, 7)
+        XCTAssertEqual(recovery().candidate(for: saved[1], savedWindows: saved,
+                                            applications: [owner])?.window.windowID, 8)
+    }
+
+    func testDuplicateTitleAcrossCurrentProcessesDoesNotRecoverEitherWindow() {
+        let saved = makeWindowRecord(windowTitle: "Project")
+        let owners = [42, 43].map { pid in
+            UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: Int32(pid),
+                windows: [metadata(id: UInt32(pid), title: "Project", pid: Int32(pid))])
+        }
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: owners))
+    }
+
+    func testUniqueProcessResourceRecoversTitlelessWindowAmongMultipleSavedProjects() {
+        let targets = ["Alpha", "Beta"].map {
+            WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: "/Projects/\($0)", isDirectory: true))
+        }
+        let saved = targets.map {
+            makeWindowRecord(windowTitle: nil,
+                openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [$0]))
+        }
+        let owners = targets.enumerated().map { index, target in
+            UnexposedApplicationWindows(bundleIdentifier: saved[index].bundleIdentifier, pid: Int32(50 + index),
+                windows: [metadata(id: UInt32(7 + index), title: nil, pid: Int32(50 + index))],
+                documentURLs: [target.url])
+        }
+
+        for index in saved.indices {
+            let candidate = recovery().candidate(for: saved[index], savedWindows: saved, applications: owners)
+            XCTAssertEqual(candidate?.pid, Int32(50 + index))
+            XCTAssertEqual(candidate?.window.windowID, UInt32(7 + index))
+        }
+    }
+
+    func testKnownProjectContextExcludesAnotherProjectsTitleAndSoleWindow() {
+        let target = WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: "/Projects/Expected", isDirectory: true))
+        let saved = makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        for title in [saved.windowTitle, nil] {
+            let owner = UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: 42,
+                windows: [metadata(id: 7, title: title)],
+                documentURLs: [URL(fileURLWithPath: "/Projects/Other", isDirectory: true)])
+            XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: [owner]))
+        }
+    }
+
+    func testDuplicateProcessOrSavedResourcesDoNotDisambiguateTitlelessWindows() {
+        let target = WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: "/Projects/Shared", isDirectory: true))
+        let saved = makeWindowRecord(windowTitle: nil,
+            openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        let owners = [42, 43].map { pid in
+            UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: Int32(pid),
+                windows: [metadata(id: UInt32(pid), title: nil, pid: Int32(pid))], documentURLs: [target.url])
+        }
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: owners))
+        let duplicateSaved = makeWindowRecord(windowTitle: nil,
+            openingConfiguration: saved.openingConfiguration)
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved, duplicateSaved], applications: [owners[0]]))
+    }
+
+    func testOwnersWithoutOrdinaryCGWindowsDoNotMakeRecoveryAmbiguous() {
+        let saved = makeWindowRecord()
+        let owner = unexposed([metadata(id: 7)])
+        let emptyHelper = UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: 43, windows: [])
+        let spacelessHelper = UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: 44,
+            windows: [metadata(id: 8, pid: 44)])
+        let candidate = recovery(membership: { $0 == 7 ? [10] : [] }).candidate(
+            for: saved, savedWindows: [saved], applications: [emptyHelper, spacelessHelper, owner])
+        XCTAssertEqual(candidate?.pid, 42)
+        XCTAssertEqual(candidate?.window.windowID, 7)
+    }
+
+    func testCoreGraphicsSourcePermitsUnknownSubroleButNotCapturedAXDialog() {
+        let frame = CGRectCodable(TestFixtures.windowFrame)
+        let saved = WindowRecord(bundleIdentifier: TestFixtures.bundleIdentifier, pidAtCapture: 5,
+            windowTitle: "Window", role: "AXWindow", subrole: nil, frame: frame, displayID: 1,
+            normalizedFrame: NormalizedRect(xRatio: 0, yRatio: 0, widthRatio: 0.5, heightRatio: 0.5),
+            zOrderHint: nil, isMinimized: false, isFullscreen: false, isVisible: true,
+            captureSignature: WindowSignature(bundleIdentifier: TestFixtures.bundleIdentifier, owningPid: 5,
+                windowTitle: "Window", role: "AXWindow", subrole: nil, capturedFrame: frame,
+                cgWindowID: 100, source: .coreGraphics))
+        XCTAssertEqual(recovery().candidate(for: saved, savedWindows: [saved],
+                                            applications: [unexposed([metadata(id: 7)])])?.window.windowID, 7)
+        for subrole: String? in [nil, "AXDialog"] {
+            let axSaved = makeWindowRecord(subrole: subrole)
+            XCTAssertNil(recovery().candidate(for: axSaved, savedWindows: [axSaved],
+                                              applications: [unexposed([metadata(id: 7)])]))
+        }
     }
 
     func testRecoveryUsesCurrentCandidateRatherThanSavedIDOrPID() {
@@ -335,6 +447,231 @@ final class RestoreSpacesTests: XCTestCase {
         XCTAssertEqual(candidate?.window.windowID, 10)
     }
 
+    func testAutomaticLocalTargetsPermitUniqueOrSoleTitlelessCGInspection() {
+        let target = WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: "/Projects/Workspace", isDirectory: true))
+        let saved = makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        XCTAssertTrue(RestoreCGWindowRecovery.requiresLocalTargetInspection(for: saved))
+        let titleMatched = recovery().candidate(for: saved, savedWindows: [saved], applications: [
+            unexposed([metadata(id: 7, title: "Other"), metadata(id: 8)])
+        ])
+        XCTAssertEqual(titleMatched?.window.windowID, 8)
+        let soleTitleless = recovery().candidate(for: saved, savedWindows: [saved], applications: [unexposed([metadata(id: 9, title: nil)])])
+        XCTAssertEqual(soleTitleless?.window.windowID, 9)
+    }
+
+    func testLocalInspectionExcludesManualRetargetMixedTargetsBrowsersAndInvalidLocalURLs() {
+        let target = WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/Original.txt"))
+        let other = WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/Retargeted.txt"))
+        let web = WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com")!)
+        let cases: [(String, WindowOpeningConfiguration)] = [
+            (TestFixtures.bundleIdentifier, WindowOpeningConfiguration(automaticallyCapturedTargets: [target], manualTargets: [other])),
+            (TestFixtures.bundleIdentifier, WindowOpeningConfiguration(automaticallyCapturedTargets: [target, web])),
+            (TestFixtures.bundleIdentifier, WindowOpeningConfiguration(automaticallyCapturedTargets: [WindowOpenTarget(kind: .file, url: web.url)])),
+            (BrowserAutomationBrowser.chrome.bundleIdentifier, WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        ]
+        for (bundle, configuration) in cases {
+            let saved = makeWindowRecord(bundleIdentifier: bundle, openingConfiguration: configuration)
+            XCTAssertFalse(RestoreCGWindowRecovery.requiresLocalTargetInspection(for: saved))
+            let owner = UnexposedApplicationWindows(bundleIdentifier: bundle, pid: 42, windows: [metadata(id: 7)])
+            XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: [owner]))
+        }
+    }
+
+    func testAutomaticLocalInspectionRejectsMultipleOwnersAndSavedWindowAmbiguity() {
+        let target = WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/Document.txt"))
+        let saved = makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        let owner = unexposed([metadata(id: 7)])
+        let siblingOwner = UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: 43, windows: [metadata(id: 8, pid: 43)])
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: [owner, siblingOwner]))
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved, makeWindowRecord()], applications: [owner]))
+        XCTAssertNil(recovery().candidate(for: saved, savedWindows: [saved], applications: [unexposed([metadata(id: 7), metadata(id: 8)])]))
+    }
+
+    func testAutomaticLocalInspectionKeepsFullscreenAndStickyWindowsExcluded() {
+        let target = WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/Document.txt"))
+        let configuration = WindowOpeningConfiguration(automaticallyCapturedTargets: [target])
+        let fullscreen = makeWindowRecord(isFullscreen: true, openingConfiguration: configuration)
+        XCTAssertNil(recovery().candidate(for: fullscreen, savedWindows: [fullscreen], applications: [unexposed([metadata(id: 7)])]))
+        let saved = makeWindowRecord(openingConfiguration: configuration)
+        for membership: Set<UInt64> in [[99], [10, 11], []] {
+            XCTAssertNil(recovery(membership: { _ in membership }).candidate(
+                for: saved, savedWindows: [saved], applications: [unexposed([metadata(id: 7)])]))
+        }
+    }
+
+    func testInspectionCapturesOnlyFreshOwnerValidatedSourceAndFrame() throws {
+        let current = metadata(id: 7)
+        let spaces = coordinator(membership: { _ in [10] }, windowMetadata: { pid, id in
+            XCTAssertEqual(pid, 42)
+            XCTAssertEqual(id, 7)
+            return current
+        })
+        let token = try XCTUnwrap(spaces.inspection(for: current, pid: 42, displayID: 2, inventory: inventory))
+        XCTAssertEqual(token.pid, 42)
+        XCTAssertEqual(token.windowID, 7)
+        XCTAssertEqual(token.sourceSpaceID, 10)
+        XCTAssertEqual(token.destinationSpaceID, 22)
+        XCTAssertEqual(token.originalFrame, current.bounds)
+    }
+
+    func testInspectionRejectsChangedOwnerFrameIdentityMembershipAndDesktopContext() {
+        let original = metadata(id: 7)
+        let changedMap = RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 11], ordinarySpaceIDs: [10, 11, 22])
+        let cases: [(String, CGWindowMetadata?, Set<UInt64>?, RestoreSpaceInventory)] = [
+            ("missing metadata", nil, [10], inventory),
+            ("owner", metadata(id: 7, pid: 99), [10], inventory),
+            ("identity", metadata(id: 8), [10], inventory),
+            ("frame", metadata(id: 7, frame: TestFixtures.windowFrame.offsetBy(dx: 20, dy: 0)), [10], inventory),
+            ("layer", metadata(id: 7, layer: 3), [10], inventory),
+            ("invalid bounds", metadata(id: 7, frame: .zero), [10], inventory),
+            ("unknown membership", original, nil, inventory),
+            ("fullscreen", original, [99], inventory),
+            ("sticky", original, [10, 11], inventory),
+            ("already destination", original, [22], inventory),
+            ("desktop changed", original, [10], changedMap)
+        ]
+        for (name, fresh, membership, currentInventory) in cases {
+            let spaces = coordinator(membership: { _ in membership }, windowMetadata: { _, _ in fresh },
+                                     inventoryProvider: { _ in currentInventory })
+            XCTAssertNil(spaces.inspection(for: original, pid: 42, displayID: 2, inventory: inventory), name)
+        }
+        let spaces = coordinator(membership: { _ in [10] }, windowMetadata: { _, _ in original })
+        XCTAssertNil(spaces.inspection(for: original, pid: 99, displayID: 2, inventory: inventory))
+        XCTAssertNil(spaces.inspection(for: original, pid: 42, displayID: 9, inventory: inventory))
+        XCTAssertNil(spaces.inspection(for: original, pid: 42, displayID: nil, inventory: inventory))
+    }
+
+    func testPrepareRejectsChangedExpectedSourceBeforeAnyMove() async {
+        for membership: Set<UInt64> in [[11], [22]] {
+            var submissions = 0
+            let spaces = coordinator(membership: { _ in membership }, move: { _, _ in submissions += 1; return true })
+            let result = await spaces.prepare(windowID: 7, displayID: 2, inventory: inventory,
+                                              ordinaryWindow: true, expectedSourceSpace: 10)
+            XCTAssertEqual(result, .ineligible)
+            XCTAssertEqual(submissions, 0)
+        }
+    }
+
+    func testInspectionSettlingUsesStableFrameAfterEarlyWindowServerGeometryChanges() async {
+        let finalFrame = TestFixtures.windowFrame.offsetBy(dx: 80, dy: 40)
+        var waits = 0
+        var spaces = coordinator(membership: { _ in [22] }, windowMetadata: { _, _ in
+            let frame = waits < 2 ? TestFixtures.windowFrame : (waits < 8 ? TestFixtures.windowFrame.offsetBy(dx: 40, dy: 20) : finalFrame)
+            return self.metadata(id: 7, frame: frame)
+        })
+        spaces.sleeper = { waits += 1 }
+
+        let settled = await spaces.settledWindow(windowID: 7, pid: 42, inSpace: 22, inventory: inventory)
+
+        XCTAssertEqual(settled?.bounds, finalFrame)
+        XCTAssertEqual(settled?.processIdentifier, 42)
+    }
+
+    func testInspectionSettlingAbortsOwnerMembershipAndDesktopChanges() async {
+        for change in ["owner", "membership", "desktop"] {
+            var changed = false
+            var spaces = coordinator(membership: { _ in changed && change == "membership" ? [11] : [22] },
+                                     windowMetadata: { _, _ in self.metadata(id: 7, pid: changed && change == "owner" ? 99 : 42) },
+                                     inventoryProvider: { _ in
+                                         changed && change == "desktop"
+                                             ? RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 11], ordinarySpaceIDs: [10, 11, 22]) : self.inventory
+                                     })
+            spaces.sleeper = { changed = true }
+
+            let settled = await spaces.settledWindow(windowID: 7, pid: 42, inSpace: 22, inventory: inventory)
+
+            XCTAssertNil(settled, change)
+        }
+    }
+
+    func testInspectionSettlingBoundsContinuouslyChangingGeometryWithoutMoving() async {
+        var waits = 0
+        var spaces = coordinator(membership: { _ in [22] }, move: { _, _ in XCTFail("Settling must not submit a move"); return false },
+                                 windowMetadata: { _, _ in self.metadata(id: 7, frame: TestFixtures.windowFrame.offsetBy(dx: CGFloat(waits * 10), dy: 0)) })
+        spaces.sleeper = { waits += 1 }
+
+        let settled = await spaces.settledWindow(windowID: 7, pid: 42, inSpace: 22, inventory: inventory)
+
+        XCTAssertNil(settled)
+        XCTAssertGreaterThan(waits, 0)
+        XCTAssertLessThan(waits, 100, "Unsettled geometry must have a bounded wait")
+    }
+
+    func testInspectionReturnSubmitsOnceToOriginalSourceAndConfirmsMembership() async {
+        let token = inspectionToken()
+        let inspectedFrame = TestFixtures.windowFrame.offsetBy(dx: 40, dy: 20)
+        var membership: Set<UInt64> = [22]
+        var submissions: [UInt64] = []
+        let spaces = coordinator(membership: { _ in membership }, move: { id, destination in
+            XCTAssertEqual(id, 7)
+            submissions.append(destination)
+            membership = [destination]
+            return true
+        }, windowMetadata: { _, _ in self.metadata(id: 7, frame: membership == [22] ? inspectedFrame : token.originalFrame) })
+
+        let returned = await spaces.returnWindow(token, expectedFrame: inspectedFrame, inventory: inventory)
+
+        XCTAssertTrue(returned)
+        XCTAssertEqual(submissions, [10])
+        XCTAssertEqual(membership, [10])
+    }
+
+    func testInspectionReturnAlreadyAtOriginalFrameAndSourceDoesNotResubmit() async {
+        var submissions = 0
+        let spaces = coordinator(membership: { _ in [10] }, move: { _, _ in submissions += 1; return true },
+                                 windowMetadata: { _, _ in self.metadata(id: 7) })
+
+        let returned = await spaces.returnWindow(inspectionToken(), expectedFrame: TestFixtures.windowFrame.offsetBy(dx: 40, dy: 20), inventory: inventory)
+
+        XCTAssertTrue(returned)
+        XCTAssertEqual(submissions, 0)
+    }
+
+    func testInspectionReturnRejectsChangedFrameOwnerSourceAndDesktopWithoutSubmitting() async {
+        let expectedFrame = TestFixtures.windowFrame.offsetBy(dx: 40, dy: 20)
+        let expected = metadata(id: 7, frame: expectedFrame)
+        let sourceGone = RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 22], ordinarySpaceIDs: [11, 22])
+        let changedMap = RestoreSpaceInventory(activeByDisplay: [1: 11, 2: 11], ordinarySpaceIDs: [10, 11, 22])
+        let cases: [(String, CGWindowMetadata, Set<UInt64>, RestoreSpaceInventory)] = [
+            ("changed frame", metadata(id: 7, frame: expectedFrame.offsetBy(dx: 10, dy: 0)), [22], inventory),
+            ("changed owner", metadata(id: 7, pid: 99, frame: expectedFrame), [22], inventory),
+            ("different source", expected, [11], inventory),
+            ("original source gone", expected, [22], sourceGone),
+            ("desktop changed", expected, [22], changedMap),
+            ("already source but wrong frame", expected, [10], inventory)
+        ]
+        for (name, current, membership, currentInventory) in cases {
+            var submissions = 0
+            let spaces = coordinator(membership: { _ in membership }, move: { _, _ in submissions += 1; return true },
+                                     windowMetadata: { _, _ in current }, inventoryProvider: { _ in currentInventory })
+
+            let returned = await spaces.returnWindow(inspectionToken(), expectedFrame: expectedFrame, inventory: inventory)
+
+            XCTAssertFalse(returned, name)
+            XCTAssertEqual(submissions, 0, name)
+        }
+    }
+
+    func testInspectionReturnMembershipTimeoutIsBoundedAndNeverResubmits() async {
+        var submissions = 0
+        var waits = 0
+        var spaces = coordinator(membership: { _ in [22] }, move: { _, _ in submissions += 1; return true },
+                                 windowMetadata: { _, _ in self.metadata(id: 7) })
+        spaces.sleeper = { waits += 1 }
+
+        let returned = await spaces.returnWindow(inspectionToken(), expectedFrame: TestFixtures.windowFrame, inventory: inventory)
+
+        XCTAssertFalse(returned)
+        XCTAssertEqual(submissions, 1)
+        XCTAssertGreaterThan(waits, 0)
+        XCTAssertLessThan(waits, 100, "A failed return must time out without another move")
+    }
+
+    private func inspectionToken() -> RestoreWindowInspection {
+        RestoreWindowInspection(pid: 42, windowID: 7, sourceSpaceID: 10,
+                                originalFrame: TestFixtures.windowFrame, destinationSpaceID: 22)
+    }
+
     func testAXWindowsEmptyAndFailureRemainDistinct() {
         let element = AXUIElementCreateSystemWide()
         let empty = AXAttributeReader(attributeResultProvider: { _, _ in .init(value: [] as CFArray, error: .success) })
@@ -404,6 +741,53 @@ final class RestoreSpacesTests: XCTestCase {
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertEqual(applier.appliedCount, 1)
         XCTAssertEqual(scans, 2)
+    }
+
+    func testWeakExposedMatchDoesNotSuppressUniqueHiddenWindowRecovery() async throws {
+        for visiblePID: pid_t in [42, 43] {
+            var hiddenSpace: Set<UInt64> = [10]
+            var movedIDs: [CGWindowID] = []
+            let applier = SpaceTestApplier()
+            let spaces = coordinator(membership: { $0 == 7 ? hiddenSpace : [22] }, move: { id, space in
+                movedIDs.append(id)
+                hiddenSpace = [space]
+                return true
+            })
+            let result = try await restore(saved: makeWindowRecord(displayID: 2), spaces: spaces, applier: applier) {
+                let sibling = self.window(id: 8, title: "Unrelated", frame: CGRect(x: 900, y: 700, width: 100, height: 100))
+                let visible = DiscoveredApplication(bundleIdentifier: TestFixtures.bundleIdentifier, pid: visiblePID,
+                    localizedName: nil, windows: visiblePID == 42 && hiddenSpace == [22]
+                        ? [sibling, self.window()] : [sibling])
+                let target = DiscoveredApplication(bundleIdentifier: TestFixtures.bundleIdentifier, pid: 42,
+                    localizedName: nil, windows: [self.window()])
+                return WindowDiscoveryResult(
+                    applications: hiddenSpace == [22] && visiblePID != 42 ? [visible, target] : [visible],
+                    diagnostics: [], unexposedApplications: hiddenSpace == [10]
+                        ? [self.unexposed([self.metadata(id: 7)])] : [])
+            }
+
+            XCTAssertEqual(result.restoredWindows, 1, "Visible PID: \(visiblePID)")
+            XCTAssertEqual(movedIDs, [7], "Visible PID: \(visiblePID)")
+            XCTAssertEqual(applier.appliedWindowIDs, [7], "Visible PID: \(visiblePID)")
+        }
+    }
+
+    func testWeakExposedMatchDoesNotMoveAnUnrelatedHiddenWindow() async throws {
+        let applier = SpaceTestApplier()
+        var movedIDs: [CGWindowID] = []
+        let spaces = coordinator(membership: { $0 == 7 ? [10] : [22] }, move: { id, _ in
+            movedIDs.append(id)
+            return false
+        })
+        let result = try await restore(saved: makeWindowRecord(displayID: 2), spaces: spaces, applier: applier) {
+            WindowDiscoveryResult(applications: [DiscoveredApplication(bundleIdentifier: TestFixtures.bundleIdentifier,
+                pid: 43, localizedName: nil, windows: [self.window(id: 8, title: "Renamed visible window")])],
+                diagnostics: [], unexposedApplications: [self.unexposed([self.metadata(id: 7, title: "Unrelated hidden window")])])
+        }
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(movedIDs.isEmpty)
+        XCTAssertEqual(applier.appliedWindowIDs, [8])
     }
 
     func testRecoveryNeverSubstitutesSameProcessSiblingAfterAXTimeout() async throws {
@@ -894,12 +1278,14 @@ final class RestoreSpacesTests: XCTestCase {
     private func coordinator(
         membership: @escaping (CGWindowID) -> Set<UInt64>?,
         move: @escaping (CGWindowID, UInt64) async -> Bool = { _, _ in false },
-        applicationWindowIDs: @escaping (pid_t) -> [CGWindowID]? = { _ in nil }
+        applicationWindowIDs: @escaping (pid_t) -> [CGWindowID]? = { _ in nil },
+        windowMetadata: @escaping (pid_t, CGWindowID) -> CGWindowMetadata? = { _, _ in nil },
+        inventoryProvider: (([UInt32]) -> RestoreSpaceInventory?)? = nil
     ) -> RestoreSpaceCoordinator {
         RestoreSpaceCoordinator(
             access: RestoreSpaceAccess(
-                inventory: { _ in self.inventory }, membership: membership, submitMove: move,
-                applicationWindowIDs: applicationWindowIDs),
+                inventory: inventoryProvider ?? { _ in self.inventory }, membership: membership, submitMove: move,
+                applicationWindowIDs: applicationWindowIDs, windowMetadata: windowMetadata),
             sleeper: {})
     }
 
@@ -910,17 +1296,19 @@ final class RestoreSpacesTests: XCTestCase {
 
     private func window(
         onScreen: Bool? = true, id: CGWindowID? = 7,
-        role: String = "AXWindow", subrole: String? = "AXStandardWindow", documentURLs: [URL] = []
+        role: String = "AXWindow", subrole: String? = "AXStandardWindow", documentURLs: [URL] = [],
+        title: String? = "Window", frame: CGRect = TestFixtures.windowFrame
     ) -> DiscoveredWindow {
         DiscoveredWindow(
-            axElement: AXUIElementCreateSystemWide(), documentURLs: documentURLs, title: "Window", role: role, subrole: subrole,
-            frame: TestFixtures.windowFrame, isMinimized: false, isFullscreen: false, isMain: false, isVisible: true,
+            axElement: AXUIElementCreateSystemWide(), documentURLs: documentURLs, title: title, role: role, subrole: subrole,
+            frame: frame, isMinimized: false, isFullscreen: false, isMain: false, isVisible: true,
             cgWindowID: id, ownerName: nil, cgLayer: 0, zOrderHint: nil, isOnScreen: onScreen)
     }
 
-    private func metadata(id: CGWindowID, title: String? = "Window") -> CGWindowMetadata {
+    private func metadata(id: CGWindowID, title: String? = "Window", pid: pid_t = 42,
+                          frame: CGRect = TestFixtures.windowFrame, layer: Int = 0) -> CGWindowMetadata {
         CGWindowMetadata(
-            windowID: id, processIdentifier: 42, ownerName: nil, layer: 0, bounds: TestFixtures.windowFrame,
+            windowID: id, processIdentifier: pid, ownerName: nil, layer: layer, bounds: frame,
             title: title, isOnScreen: false, zOrderHint: nil)
     }
 
@@ -930,9 +1318,9 @@ final class RestoreSpacesTests: XCTestCase {
 }
 
 private struct SpaceTestLauncher: RestoreApplicationLaunching {
-    func requestLaunch(bundleIdentifier: String) -> Bool {
+    func requestLaunch(bundleIdentifier: String) async -> pid_t? {
         XCTFail("Unexpected launch")
-        return false
+        return nil
     }
 }
 

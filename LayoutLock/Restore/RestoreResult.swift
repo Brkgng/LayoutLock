@@ -53,6 +53,8 @@ enum RestoreTargetIssueReason: String {
     case unsupportedURL
     case applicationUnavailable
     case openRequestFailed
+    case openingNotConfirmed
+    case unsupportedTarget
 
     var userFacingDescription: String {
         switch self {
@@ -66,6 +68,10 @@ enum RestoreTargetIssueReason: String {
             return "Saved application is unavailable."
         case .openRequestFailed:
             return "Target could not be opened."
+        case .openingNotConfirmed:
+            return "The file or folder could not be confirmed in the restored window."
+        case .unsupportedTarget:
+            return "This file or folder cannot be reopened automatically."
         }
     }
 }

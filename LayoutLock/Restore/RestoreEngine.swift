@@ -12,11 +12,14 @@ private let restoreWindowSettleNanoseconds: UInt64 = 100_000_000
 
 enum RestoreEngineError: LocalizedError {
     case accessibilityPermissionDenied
+    case inspectionNotReturned
 
     var errorDescription: String? {
         switch self {
         case .accessibilityPermissionDenied:
             return "Accessibility access is required to restore layouts."
+        case .inspectionNotReturned:
+            return "An inspected window could not be returned to its original desktop and position."
         }
     }
 }
@@ -24,6 +27,30 @@ enum RestoreEngineError: LocalizedError {
 private struct RestoreReadinessResult {
     let discoveryResult: WindowDiscoveryResult
     let timedOutWindowIDs: Set<UUID>
+}
+
+private enum RestoreWindowInspectionOutcome {
+    case unchanged
+    case confirmed(WindowDiscoveryResult, RestoreRecoveredWindow)
+    case returned(WindowDiscoveryResult, ruledOut: Bool)
+    case blocked(String)
+}
+
+private struct RestoreRecoveredWindow {
+    let pid: pid_t
+    let windowID: CGWindowID
+    let allowsRestore: Bool
+    let inspection: (context: RestoreWindowInspection, frame: CGRect)?
+}
+
+private struct RestoreAppInstancePreparation {
+    var processIdentifiers: [UUID: pid_t] = [:]
+    var targetsByWindowID: [UUID: [WindowOpenTarget]] = [:]
+    var blockedWindows: [UUID: String] = [:]
+    var handledBundles: Set<String> = []
+    var requestedBundles: Set<String> = []
+    var requestedTargetCount = 0
+    var targetIssues: [RestoreTargetIssue] = []
 }
 
 struct RestoreEngine {
@@ -63,7 +90,7 @@ struct RestoreEngine {
         runningApplicationBundleProvider: @escaping () -> Set<String> = {
             Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         },
-        launchTimeout: TimeInterval = 5,
+        launchTimeout: TimeInterval = 15,
         launchPollInterval: TimeInterval = 0.1,
         launchClock: @escaping () -> Date = Date.init,
         launchPollSleeper: @escaping (TimeInterval) async -> Void = { interval in
@@ -101,6 +128,26 @@ struct RestoreEngine {
     }
 
     func restoreSnapshot(id: UUID) async throws -> RestoreResult {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var stageStartedAt = startedAt
+        var stage: String? = "discovery"
+        var timingsMilliseconds: [String: Double] = [:]
+        func finishStage(next: String? = nil) {
+            let now = ProcessInfo.processInfo.systemUptime
+            if let stage {
+                timingsMilliseconds[stage] = (now - stageStartedAt) * 1_000
+            }
+            stage = next
+            stageStartedAt = now
+        }
+        telemetryLogger.log(TelemetryLogEvent(name: "restore.started", snapshotID: id))
+        defer {
+            finishStage()
+            timingsMilliseconds["total"] = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            telemetryLogger.log(TelemetryLogEvent(name: "restore.timing", snapshotID: id,
+                timingsMilliseconds: timingsMilliseconds))
+        }
+
         guard trustChecker.isTrusted() else {
             telemetryLogger.log(
                 .restoreFailed(
@@ -135,36 +182,87 @@ struct RestoreEngine {
             throw error
         }
         let unexposedApplications = discoveryResult.unexposedApplications
-        var recoveredWindowsBySavedID: [UUID: (pid: pid_t, windowID: CGWindowID, allowsRestore: Bool)] = [:]
-        for savedWindow in snapshot.windows {
+        let initialCandidates = Self.liveWindowsByCandidateID(from: discoveryResult.applications).map(\.candidate)
+        let initialMatches = matchPlanner.plans(for: snapshot.windows, candidates: initialCandidates)
+        let exposedSavedIDs = Set(initialMatches.compactMap { plan -> UUID? in
+            guard let candidate = plan.candidate else { return nil }
+            let saved = plan.savedWindow
+            let localTargets = saved.openingConfiguration.effectiveTargets.filter { $0.kind != .webURL }
+            if !localTargets.isEmpty {
+                return localTargets.allSatisfy(candidate.referencesLocalTarget) ? saved.id : nil
+            }
+            guard let title = saved.windowTitle?.nonEmptyValue, candidate.title?.nonEmptyValue == title,
+                snapshot.windows.count(where: { $0.bundleIdentifier == saved.bundleIdentifier && $0.windowTitle?.nonEmptyValue == title }) == 1,
+                initialCandidates.count(where: { $0.bundleIdentifier == saved.bundleIdentifier && $0.title?.nonEmptyValue == title }) == 1
+            else { return nil }
+            return saved.id
+        })
+        var recoveredWindowsBySavedID: [UUID: RestoreRecoveredWindow] = [:]
+        var reservedRecoveryIDs: Set<CGWindowID> = []
+        var ruledOutWindows: [UUID: (pid: pid_t, windowID: CGWindowID)] = [:]
+        var inspectionBlockedWindows: [UUID: String] = [:]
+        finishStage(next: "spaceRecovery")
+        for savedWindow in snapshot.windows where !exposedSavedIDs.contains(savedWindow.id) {
             guard let spaceInventory, let recovery = RestoreCGWindowRecovery(
                 ordinarySpaceIDs: spaceInventory.ordinarySpaceIDs,
                 membership: spaces.access.membership
             ).candidate(
                 for: savedWindow,
                 savedWindows: snapshot.windows,
-                applications: unexposedApplications
+                applications: unexposedApplications,
+                excludingWindowIDs: reservedRecoveryIDs
             ) else { continue }
+            if savedWindow.openingConfiguration.effectiveTargets.isEmpty,
+                initialMatches.contains(where: { $0.savedWindow.id == savedWindow.id && $0.candidate != nil }) {
+                // An unrelated hidden singleton must not displace an existing position-only match.
+                guard let title = savedWindow.windowTitle?.nonEmptyValue,
+                    recovery.window.title?.nonEmptyValue == title else { continue }
+            }
             let displayPlan = displayResolver.restorePlan(for: savedWindow, from: snapshot.sourceDisplayState, to: currentDisplayState)
+            if RestoreCGWindowRecovery.requiresLocalTargetInspection(for: savedWindow) ||
+                savedWindow.captureSignature.source == .coreGraphics ||
+                snapshot.windows.count(where: { $0.bundleIdentifier == savedWindow.bundleIdentifier }) > 1 {
+                // A title is only an inspection hint. Prove every resource before retaining the move.
+                guard savedWindow.openingConfiguration.effectiveTargets.filter({ $0.kind != .webURL })
+                    .allSatisfy({ localTargetValidationIssue(for: $0) == nil }) else { continue }
+                switch try await inspectRecoveredWindow(savedWindow: savedWindow, pid: recovery.pid,
+                    candidate: recovery.window, displayID: displayPlan.resolvedDisplayID, inventory: spaceInventory) {
+                case .unchanged: break
+                case let .confirmed(result, recovered):
+                    discoveryResult = result
+                    recoveredWindowsBySavedID[savedWindow.id] = recovered
+                    reservedRecoveryIDs.insert(recovery.window.windowID)
+                case let .returned(result, ruledOut):
+                    discoveryResult = result
+                    if ruledOut { ruledOutWindows[savedWindow.id] = (recovery.pid, recovery.window.windowID) }
+                case let .blocked(reason): inspectionBlockedWindows[savedWindow.id] = reason
+                }
+                continue
+            }
             let outcome = await spaces.prepare(
                 windowID: recovery.window.windowID,
                 displayID: displayPlan.resolvedDisplayID,
                 inventory: spaceInventory,
                 ordinaryWindow: true
             )
-            recoveredWindowsBySavedID[savedWindow.id] = (recovery.pid, recovery.window.windowID, outcome == .moved || outcome == .alreadyVisible)
+            recoveredWindowsBySavedID[savedWindow.id] = RestoreRecoveredWindow(pid: recovery.pid,
+                windowID: recovery.window.windowID, allowsRestore: outcome == .moved || outcome == .alreadyVisible, inspection: nil)
+            reservedRecoveryIDs.insert(recovery.window.windowID)
             AppLogger.restore.info("Space recovery bundle=\(savedWindow.bundleIdentifier, privacy: .public) windowID=\(recovery.window.windowID) outcome=\(outcome.rawValue, privacy: .public).")
             if outcome == .moved || outcome == .alreadyVisible {
                 // Only normal AX discovery can authorize geometry, never the CG-only candidate.
                 discoveryResult = try await rediscoverWindow(pid: recovery.pid, windowID: recovery.window.windowID).result
             }
         }
+        finishStage(next: "opening")
         var discoveredApplications = discoveryResult.applications
         var timedOutWindowIDs: Set<UUID> = []
 
         let initiallyRunningBundleIdentifiers = runningBundleIdentifiers(from: discoveredApplications)
-        var requestedTargetCount = 0
-        var targetIssues: [RestoreTargetIssue] = []
+        var appInstances = await prepareAppInstances(snapshot: snapshot, discoveryResult: discoveryResult,
+            inspectionBlockedWindows: inspectionBlockedWindows)
+        var requestedTargetCount = appInstances.requestedTargetCount
+        var targetIssues = appInstances.targetIssues
         var successfullyOpenedTargetBundleIdentifiers: Set<String> = []
         let initialOpenLocalTargets = OpenLocalTargetIndex(
             from: discoveredApplications
@@ -191,12 +289,13 @@ struct RestoreEngine {
         var provenanceRequiredBrowserWindowIDs: Set<UUID> = []
         var openedBrowserWindowsBySavedWindowID: [UUID: CapturedBrowserWindow] = [:]
         var genericColdOpenedBrowserWindowIDs: Set<UUID> = []
+        var unconfirmedLocalWindowIDs: Set<UUID> = []
         let savedWindowCountsByBundleIdentifier = Dictionary(
             grouping: snapshot.windows,
             by: \.bundleIdentifier
         ).mapValues(\.count)
 
-        for savedWindow in snapshot.windows {
+        for savedWindow in snapshot.windows where !appInstances.handledBundles.contains(savedWindow.bundleIdentifier) && inspectionBlockedWindows[savedWindow.id] == nil {
             var validTargets: [WindowOpenTarget] = []
 
             for target in savedWindow.openingConfiguration.effectiveTargets {
@@ -245,6 +344,18 @@ struct RestoreEngine {
                 bundleIdentifier: bundleIdentifier
             )
             for request in openRequests {
+                let ruledOutWindow = ruledOutWindows[savedWindow.id]
+                // Ordinary document delivery lets the app reuse its own windows. Forced
+                // window creation needs evidence that an AX-hidden owner is not still open.
+                if request.disposition == .newWindow,
+                   discoveryResult.unexposedApplications.contains(where: {
+                       $0.bundleIdentifier == bundleIdentifier &&
+                           $0.hasUnexposedOrdinaryWindow(membership: spaces.access.membership,
+                               excludingWindowID: ruledOutWindow?.pid == $0.pid ? ruledOutWindow?.windowID : nil)
+                   }) {
+                    unconfirmedLocalWindowIDs.insert(savedWindow.id)
+                    continue
+                }
                 let openResult = await targetOpener.open(
                     targets: request.targets,
                     bundleIdentifier: bundleIdentifier,
@@ -259,7 +370,10 @@ struct RestoreEngine {
                 }
 
                 switch openResult {
-                case .opened, .openedNewBrowserWindow:
+                case .opened, .openedNewBrowserWindow, .openedApplicationInstance:
+                    if case let .openedApplicationInstance(pid) = openResult {
+                        appInstances.processIdentifiers[savedWindow.id] = pid
+                    }
                     successfullyOpenedTargetBundleIdentifiers.insert(bundleIdentifier)
                     let isColdStart = !initiallyRunningBundleIdentifiers.contains(bundleIdentifier)
                     let requestedLocalTargets = request.targets.filter {
@@ -327,20 +441,28 @@ struct RestoreEngine {
 
         let runningBundleIdentifiersAfterTargetRequests = runningBundleIdentifiers(
             from: discoveredApplications
-        ).union(successfullyOpenedTargetBundleIdentifiers)
-        let missingBundleIdentifiers = orderedSavedBundleIdentifiers(in: snapshot).filter {
-            !runningBundleIdentifiersAfterTargetRequests.contains($0)
+        ).union(successfullyOpenedTargetBundleIdentifiers).union(appInstances.handledBundles)
+        let missingBundleIdentifiers = orderedSavedBundleIdentifiers(in: snapshot).filter { bundle in
+            !runningBundleIdentifiersAfterTargetRequests.contains(bundle) &&
+                snapshot.windows.contains { $0.bundleIdentifier == bundle && inspectionBlockedWindows[$0.id] == nil }
         }
-        let requestedLaunchBundleIdentifiers = Set(
-            missingBundleIdentifiers.filter {
-                applicationLauncher.requestLaunch(bundleIdentifier: $0)
+        var requestedLaunchBundleIdentifiers: Set<String> = []
+        for bundle in missingBundleIdentifiers {
+            guard let pid = await applicationLauncher.requestLaunch(bundleIdentifier: bundle), pid > 0 else { continue }
+            requestedLaunchBundleIdentifiers.insert(bundle)
+            let windows = snapshot.windows.filter { $0.bundleIdentifier == bundle }
+            if windows.count == 1, let window = windows.first,
+                window.captureSignature.source == .coreGraphics, window.openingConfiguration.effectiveTargets.isEmpty {
+                appInstances.processIdentifiers[window.id] = pid
             }
-        )
+        }
         let readinessBundleIdentifiers = successfullyOpenedTargetBundleIdentifiers
             .union(requestedLaunchBundleIdentifiers)
+            .union(appInstances.requestedBundles)
         let preferredBrowserScriptingIdentifiers = openedBrowserWindowsBySavedWindowID
             .compactMapValues(\.scriptingIdentifier)
 
+        finishStage(next: "readiness")
         if !readinessBundleIdentifiers.isEmpty {
             do {
                 let readinessResult = try await rediscoverApplicationsUntilRestoreReadiness(
@@ -352,31 +474,95 @@ struct RestoreEngine {
                     provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
                     openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID,
                     preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-                    genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs
+                    genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
+                    appInstances: appInstances
                 )
                 discoveryResult = readinessResult.discoveryResult
                 discoveredApplications = discoveryResult.applications
                 timedOutWindowIDs = readinessResult.timedOutWindowIDs
             } catch {
+                let blocked = await returnUnusedInspections(recoveredWindowsBySavedID,
+                    plannedWindowIDs: [:], snapshot: snapshot, inventory: spaceInventory)
+                let restoreError: Error = blocked.isEmpty ? error : RestoreEngineError.inspectionNotReturned
                 telemetryLogger.log(
                     .restoreFailed(
                         snapshotID: id,
-                        error: error
+                        error: restoreError
                     )
                 )
-                throw error
+                throw restoreError
             }
         }
 
+        finishStage(next: "matching")
+        // Keep return receipts while matching replacement processes under their new identities.
+        let inspectedWindows = recoveredWindowsBySavedID
+        for (windowID, pid) in appInstances.processIdentifiers {
+            if let recovered = recoveredWindowsBySavedID[windowID], recovered.allowsRestore, recovered.pid != pid {
+                recoveredWindowsBySavedID[windowID] = nil
+            }
+        }
         let liveWindowsByCandidateID = Self.liveWindowsByCandidateID(from: discoveredApplications)
-        let plans = matchPlanner.plans(
-            for: snapshot.windows,
+        let recoveredCandidateIdentifiers = recoveredWindowsBySavedID.filter {
+            !successfullyRequestedWebWindowIDs.contains($0.key)
+        }.compactMapValues { recovered -> Int? in
+            let candidates = liveWindowsByCandidateID.filter {
+                $0.candidate.pid == recovered.pid && $0.window.cgWindowID == recovered.windowID
+            }
+            return candidates.count == 1 ? candidates.first?.candidate.id : nil
+        }
+        let matchedPlans = matchPlanner.plans(
+            for: snapshot.windows.filter { appInstances.blockedWindows[$0.id] == nil && inspectionBlockedWindows[$0.id] == nil },
             candidates: liveWindowsByCandidateID.map { $0.candidate },
             runningBundleIdentifiers: runningBundleIdentifiers(from: discoveredApplications),
             genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
             preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs
-        ).map { plan -> RestoreWindowPlan in
+            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+            preferredProcessIdentifiers: recoveredWindowsBySavedID.mapValues(\.pid)
+                .merging(appInstances.processIdentifiers, uniquingKeysWith: { _, instance in instance }),
+            preferredCandidateIdentifiers: recoveredCandidateIdentifiers
+        )
+        let plannedWindowIDs = matchedPlans.reduce(into: [UUID: CGWindowID]()) { result, plan in
+            guard let candidate = plan.candidate,
+                let windowID = liveWindowsByCandidateID.first(where: { $0.candidate.id == candidate.id })?.window.cgWindowID
+            else { return }
+            result[plan.savedWindow.id] = windowID
+        }
+        let compensationBlocks = await returnUnusedInspections(inspectedWindows,
+            plannedWindowIDs: plannedWindowIDs, snapshot: snapshot, inventory: spaceInventory)
+        inspectionBlockedWindows.merge(compensationBlocks, uniquingKeysWith: { existing, _ in existing })
+        if Task.isCancelled, !compensationBlocks.isEmpty { throw RestoreEngineError.inspectionNotReturned }
+        try Task.checkCancellation()
+        // Document evidence is independent of whether subsequent Space placement succeeds.
+        for plan in matchedPlans {
+            for target in plan.savedWindow.openingConfiguration.effectiveTargets where target.kind != .webURL {
+                guard localTargetValidationIssue(for: target) == nil,
+                      plan.candidate?.referencesLocalTarget(target) != true,
+                      !targetIssues.contains(where: { $0.windowID == plan.savedWindow.id && $0.target.id == target.id }) else { continue }
+                targetIssues.append(RestoreTargetIssue(windowID: plan.savedWindow.id,
+                    bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
+                    target: target, reason: .openingNotConfirmed))
+            }
+        }
+        let matchedPlansByID = Dictionary(uniqueKeysWithValues: matchedPlans.map { ($0.savedWindow.id, $0) })
+        let plans = snapshot.windows.compactMap { savedWindow -> RestoreWindowPlan? in
+            if let reason = inspectionBlockedWindows[savedWindow.id] ?? appInstances.blockedWindows[savedWindow.id] {
+                return RestoreWindowPlan(savedWindow: savedWindow, candidate: nil, matchStrategy: nil,
+                    skip: RestoreSkip(bundleIdentifier: savedWindow.bundleIdentifier, windowTitle: savedWindow.windowTitle, reason: reason))
+            }
+            return matchedPlansByID[savedWindow.id]
+        }.map { plan -> RestoreWindowPlan in
+            if plan.candidate == nil, unconfirmedLocalWindowIDs.contains(plan.savedWindow.id) {
+                return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                    skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier,
+                        windowTitle: plan.savedWindow.windowTitle, reason: RestoreSkipReason.desktopUnconfirmed))
+            }
+            if plan.candidate == nil, let pid = appInstances.processIdentifiers[plan.savedWindow.id],
+               !discoveredApplications.contains(where: { $0.pid == pid }) {
+                return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
+                    skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
+                                      reason: RestoreSkipReason.appInstanceUnconfirmed))
+            }
             guard let expected = recoveredWindowsBySavedID[plan.savedWindow.id] else { return plan }
             let matchesRecovery = plan.candidate.map { candidate in
                 candidate.pid == expected.pid &&
@@ -407,6 +593,7 @@ struct RestoreEngine {
         var windowDiagnostics: [RestoreWindowDiagnostic] = []
         var restoredWindowZOrderItems: [RestoreWindowZOrderItem] = []
 
+        finishStage(next: "positioning")
         for plan in plans {
             let candidateCount = liveWindowsByCandidateID.count {
                 $0.candidate.bundleIdentifier == plan.savedWindow.bundleIdentifier
@@ -522,6 +709,7 @@ struct RestoreEngine {
             }
         }
 
+        finishStage(next: "stacking")
         await RestoreWindowZOrderRestorer(
             windowApplier: windowApplier,
             applicationActivator: applicationActivator,
@@ -533,6 +721,7 @@ struct RestoreEngine {
                 spaces.canActivate(windowID: item.liveWindow.cgWindowID, processIdentifier: item.processIdentifier, inventory: spaceInventory)
             }
         ).restore(restoredWindowZOrderItems)
+        finishStage()
 
         let restoreResult = RestoreResult(
             restoredWindows: restoredWindows,
@@ -546,6 +735,283 @@ struct RestoreEngine {
         )
         telemetryLogger.log(.restoreCompleted(snapshot: snapshot, result: restoreResult))
         return restoreResult
+    }
+
+    private func returnUnusedInspections(
+        _ recoveries: [UUID: RestoreRecoveredWindow],
+        plannedWindowIDs: [UUID: CGWindowID],
+        snapshot: Snapshot,
+        inventory: RestoreSpaceInventory?
+    ) async -> [UUID: String] {
+        var pending = recoveries.filter { $0.value.inspection != nil }
+        var blocked: [UUID: String] = [:]
+        // Each unused inspection is attempted once. A failed return can make another plan ineligible.
+        while let entry = pending.first(where: { entry in
+            !plannedWindowIDs.contains { blocked[$0.key] == nil && $0.value == entry.value.windowID }
+        }) {
+            pending.removeValue(forKey: entry.key)
+            guard let receipt = entry.value.inspection,
+                let saved = snapshot.windows.first(where: { $0.id == entry.key }) else { continue }
+            let returned = await Task {
+                if let ids = spaces.access.applicationWindowIDs(entry.value.pid), !ids.contains(entry.value.windowID) {
+                    return true
+                }
+                guard let inventory else { return false }
+                return await returnInspectedWindow(receipt.context, expectedFrame: receipt.frame,
+                    savedWindow: saved, inventory: inventory)
+            }.value
+            AppLogger.restore.info("Unused inspection bundle=\(saved.bundleIdentifier, privacy: .public) windowID=\(entry.value.windowID) returned=\(returned).")
+            if !returned {
+                for window in snapshot.windows where window.bundleIdentifier == saved.bundleIdentifier &&
+                    window.pidAtCapture == saved.pidAtCapture {
+                    blocked[window.id] = RestoreSkipReason.inspectionNotReturned
+                }
+            }
+        }
+        return blocked
+    }
+
+    private func prepareAppInstances(snapshot: Snapshot, discoveryResult: WindowDiscoveryResult,
+        inspectionBlockedWindows: [UUID: String]) async -> RestoreAppInstancePreparation {
+        var result = RestoreAppInstancePreparation()
+        let windowsByBundle = Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier)
+        for bundle in orderedSavedBundleIdentifiers(in: snapshot) {
+            let windows = windowsByBundle[bundle, default: []]
+            let capturePIDs = windows.map(\.pidAtCapture).reduce(into: [pid_t]()) { pids, pid in
+                if !pids.contains(pid) { pids.append(pid) }
+            }
+            // Browser window/profile restoration keeps its existing dedicated strategy.
+            guard capturePIDs.count > 1, capturePIDs.allSatisfy({ $0 > 0 }),
+                  !BrowserAutomationBrowser.allCases.contains(where: { $0.bundleIdentifier == bundle }),
+                  !windows.contains(where: { $0.openingConfiguration.effectiveTargets.contains(where: { $0.kind == .webURL }) }) else { continue }
+            result.handledBundles.insert(bundle)
+            let groups = capturePIDs.map { pid in windows.filter { $0.pidAtCapture == pid } }
+            let applications = discoveryResult.applications.filter { $0.bundleIdentifier == bundle }.sorted { $0.pid < $1.pid }
+            let preferredPIDs = matchPlanner.plans(for: windows,
+                candidates: Self.liveWindowsByCandidateID(from: applications).map(\.candidate),
+                runningBundleIdentifiers: [bundle], requiresRuntimeRole: true)
+                .reduce(into: [UUID: pid_t]()) { $0[$1.savedWindow.id] = $1.candidate?.pid }
+            let initialPIDs = Set(applications.map(\.pid)).union(
+                discoveryResult.unexposedApplications.filter { $0.bundleIdentifier == bundle }.map(\.pid))
+            let reusablePIDs = groups.map { group -> [pid_t] in
+                guard !group.contains(where: { inspectionBlockedWindows[$0.id] != nil }) else { return [] }
+                let reusable = applications.filter { application in
+                    var targets = OpenLocalTargetIndex(from: [application])
+                    guard group.allSatisfy({ window in
+                        window.openingConfiguration.effectiveTargets.allSatisfy {
+                            targets.consume($0, bundleIdentifier: bundle)
+                        }
+                    }) else { return false }
+                    let candidates = Self.liveWindowsByCandidateID(from: [application]).map(\.candidate)
+                    // Supply owner evidence only for the position-only CG singleton fallback.
+                    var processBindings: [UUID: pid_t] = [:]
+                    if group.count == 1, let window = group.first,
+                        window.captureSignature.source == .coreGraphics,
+                        window.openingConfiguration.effectiveTargets.isEmpty {
+                        processBindings[window.id] = application.pid
+                    }
+                    return matchPlanner.plans(for: group, candidates: candidates,
+                        runningBundleIdentifiers: [bundle],
+                        preferredProcessIdentifiers: processBindings, requiresRuntimeRole: true)
+                        .allSatisfy { $0.candidate != nil }
+                }.map(\.pid)
+                var preferredPID = group[0].pidAtCapture
+                if let pid = preferredPIDs[group[0].id], group.allSatisfy({ preferredPIDs[$0.id] == pid }) {
+                    preferredPID = pid
+                }
+                guard reusable.contains(preferredPID) else { return reusable }
+                return [preferredPID] + reusable.filter { $0 != preferredPID }
+            }
+            // Reserve a complete assignment before launching; broad matches must not steal a sibling's only match.
+            var groupByPID: [pid_t: Int] = [:]
+            func reserve(_ group: Int, visited: inout Set<pid_t>) -> Bool {
+                let choices = reusablePIDs[group].filter { groupByPID[$0] == nil } +
+                    reusablePIDs[group].filter { groupByPID[$0] != nil }
+                for pid in choices where visited.insert(pid).inserted {
+                    if let previous = groupByPID[pid], !reserve(previous, visited: &visited) { continue }
+                    groupByPID[pid] = group
+                    return true
+                }
+                return false
+            }
+            let reuseOrder = groups.indices.sorted { reusablePIDs[$0].count < reusablePIDs[$1].count }
+            for group in reuseOrder {
+                var visited: Set<pid_t> = []
+                _ = reserve(group, visited: &visited)
+            }
+            let pidByGroup = Dictionary(uniqueKeysWithValues: groupByPID.map { ($0.value, $0.key) })
+            var usedPIDs = Set(groupByPID.keys)
+            for (groupIndex, group) in groups.enumerated() {
+                if let reason = group.compactMap({ inspectionBlockedWindows[$0.id] }).first {
+                    for window in group { result.blockedWindows[window.id] = reason }
+                    continue
+                }
+                var validTargets: [(window: WindowRecord, target: WindowOpenTarget)] = []
+                for window in group {
+                    for target in window.openingConfiguration.effectiveTargets {
+                        if let reason = localTargetValidationIssue(for: target) {
+                            result.targetIssues.append(RestoreTargetIssue(windowID: window.id, bundleIdentifier: bundle,
+                                windowTitle: window.windowTitle, target: target, reason: reason))
+                        } else {
+                            validTargets.append((window, target))
+                            result.targetsByWindowID[window.id, default: []].append(target)
+                        }
+                    }
+                }
+                if let pid = pidByGroup[groupIndex] {
+                    for window in group { result.processIdentifiers[window.id] = pid }
+                    continue
+                }
+                // AX-invisible windows are unresolved, not evidence that an instance is closed.
+                if discoveryResult.unexposedApplications.contains(where: {
+                    $0.bundleIdentifier == bundle && !usedPIDs.contains($0.pid) &&
+                        $0.hasUnexposedOrdinaryWindow(membership: spaces.access.membership)
+                }) {
+                    for window in group { result.blockedWindows[window.id] = RestoreSkipReason.desktopUnconfirmed }
+                    continue
+                }
+                let hasTargets = group.contains { !$0.openingConfiguration.effectiveTargets.isEmpty }
+                var launchedPID: pid_t?
+                if !validTargets.isEmpty {
+                    // One batch launches one captured process, including all its document windows.
+                    let opened = await targetOpener.open(targets: validTargets.map(\.target),
+                        bundleIdentifier: bundle, disposition: .newApplicationInstance)
+                    if opened.wasSubmitted { result.requestedTargetCount += validTargets.count }
+                    if case let .openedApplicationInstance(pid) = opened { launchedPID = pid }
+                    if case let .failed(reason) = opened {
+                        for item in validTargets {
+                            result.targetIssues.append(RestoreTargetIssue(windowID: item.window.id, bundleIdentifier: bundle,
+                                windowTitle: item.window.windowTitle, target: item.target, reason: reason))
+                        }
+                    }
+                } else if !hasTargets {
+                    launchedPID = await applicationLauncher.launchInstance(bundleIdentifier: bundle)
+                }
+                guard let pid = launchedPID, pid > 0, !initialPIDs.contains(pid), usedPIDs.insert(pid).inserted else {
+                    for window in group { result.blockedWindows[window.id] = RestoreSkipReason.appInstanceUnconfirmed }
+                    continue
+                }
+                result.requestedBundles.insert(bundle)
+                for window in group { result.processIdentifiers[window.id] = pid }
+            }
+        }
+        return result
+    }
+
+    private func inspectRecoveredWindow(
+        savedWindow: WindowRecord,
+        pid: pid_t,
+        candidate: CGWindowMetadata,
+        displayID: UInt32?,
+        inventory: RestoreSpaceInventory
+    ) async throws -> RestoreWindowInspectionOutcome {
+        guard let inspection = spaces.inspection(for: candidate, pid: pid, displayID: displayID, inventory: inventory)
+        else { return .unchanged }
+        try Task.checkCancellation()
+        // Once inspection begins, finish observing the submitted move before honoring cancellation.
+        let outcome = await Task {
+            await spaces.prepare(windowID: inspection.windowID, displayID: displayID,
+                inventory: inventory, ordinaryWindow: true, expectedSourceSpace: inspection.sourceSpaceID)
+        }.value
+        guard outcome == .moved else {
+            try Task.checkCancellation()
+            return outcome == .unconfirmed ? .blocked(RestoreSkipReason.desktopUnconfirmed) : .unchanged
+        }
+        // Complete this bounded observation even if the restore is cancelled, so compensation has a settled baseline.
+        let settled = await Task {
+            await spaces.settledWindow(windowID: inspection.windowID, pid: pid,
+                inSpace: inspection.destinationSpaceID, inventory: inventory)
+        }.value
+        guard let settled else {
+            if Task.isCancelled { throw RestoreEngineError.inspectionNotReturned }
+            return .blocked(RestoreSkipReason.inspectionNotReturned)
+        }
+
+        var inspectionError: Error?
+        var observedIntervention = false
+        var ruledOut = false
+        do {
+            try Task.checkCancellation()
+            let rediscovery = try await rediscoverWindow(pid: pid, windowID: inspection.windowID)
+            observedIntervention = rediscovery.window.map { $0.isMinimized || $0.isFullscreen } ?? false
+            try Task.checkCancellation()
+            let live = Self.liveWindowsByCandidateID(from: rediscovery.result.applications)
+                .first { $0.candidate.pid == pid && $0.window.cgWindowID == inspection.windowID }
+            if rediscovery.window != nil, let live {
+                let targets = savedWindow.openingConfiguration.effectiveTargets.filter { $0.kind != .webURL }
+                let differentResource = !targets.isEmpty && live.candidate.documentURLs.contains(where: \.isFileURL) &&
+                    !targets.contains(where: live.candidate.referencesLocalTarget)
+                ruledOut = differentResource || live.window.role != kAXWindowRole as String ||
+                    live.window.subrole.map { $0 != kAXStandardWindowSubrole as String } == true
+            }
+            if !observedIntervention, rediscovery.window != nil, let live,
+                live.window.role == kAXWindowRole as String,
+                live.window.subrole == kAXStandardWindowSubrole as String,
+                savedWindow.openingConfiguration.effectiveTargets.filter({ $0.kind != .webURL })
+                    .allSatisfy(live.candidate.referencesLocalTarget),
+                spaces.destinationsAreUnchanged(inventory),
+                spaces.access.membership(inspection.windowID) == [inspection.destinationSpaceID],
+                let current = spaces.access.windowMetadata(pid, inspection.windowID),
+                current.processIdentifier == pid, current.windowID == inspection.windowID,
+                RestoreWindowInspection.framesMatch(settled.bounds, current.bounds) {
+                return .confirmed(rediscovery.result, RestoreRecoveredWindow(pid: pid, windowID: inspection.windowID,
+                    allowsRestore: true, inspection: (inspection, settled.bounds)))
+            }
+        } catch {
+            inspectionError = error
+        }
+        if observedIntervention {
+            if inspectionError != nil { throw RestoreEngineError.inspectionNotReturned }
+            return .blocked(RestoreSkipReason.inspectionNotReturned)
+        }
+
+        // Cancellation must not cancel the awaited return. Never reopen or place another window before it is proven.
+        let returned = await Task {
+            await returnInspectedWindow(inspection, expectedFrame: settled.bounds,
+                savedWindow: savedWindow, inventory: inventory)
+        }.value
+        AppLogger.restore.info("Window inspection bundle=\(savedWindow.bundleIdentifier, privacy: .public) windowID=\(inspection.windowID) returned=\(returned).")
+        if !returned, inspectionError != nil || Task.isCancelled { throw RestoreEngineError.inspectionNotReturned }
+        if let inspectionError { throw inspectionError }
+        try Task.checkCancellation()
+        guard returned else { return .blocked(RestoreSkipReason.inspectionNotReturned) }
+        // Discard the wrong-file hint and rebuild discovery before ordinary file opening.
+        return .returned(try discoveryResultProvider(), ruledOut: ruledOut)
+    }
+
+    private func returnInspectedWindow(
+        _ inspection: RestoreWindowInspection,
+        expectedFrame: CGRect,
+        savedWindow: WindowRecord,
+        inventory: RestoreSpaceInventory
+    ) async -> Bool {
+        guard await spaces.returnWindow(inspection, expectedFrame: expectedFrame, inventory: inventory),
+            let returned = await spaces.settledWindow(windowID: inspection.windowID, pid: inspection.pid,
+                inSpace: inspection.sourceSpaceID, inventory: inventory)
+        else { return false }
+        if inspection.matchesOriginalFrame(returned.bounds) { return true }
+        let window: DiscoveredWindow
+        do {
+            guard let rediscovered = try await rediscoverWindow(pid: inspection.pid, windowID: inspection.windowID).window
+            else { return false }
+            window = rediscovered
+        } catch { return false }
+        guard window.cgWindowID == inspection.windowID, !window.isMinimized, !window.isFullscreen,
+            spaces.destinationsAreUnchanged(inventory),
+            spaces.access.membership(inspection.windowID) == [inspection.sourceSpaceID],
+            let current = spaces.access.windowMetadata(inspection.pid, inspection.windowID),
+            current.processIdentifier == inspection.pid, current.windowID == inspection.windowID,
+            RestoreWindowInspection.framesMatch(returned.bounds, current.bounds)
+        else { return false }
+        // Only a freshly rediscovered handle may repair geometry. Do not unminimize or focus it.
+        do {
+            _ = try await windowApplier.restoreFrame(savedWindow: savedWindow,
+                targetFrame: inspection.originalFrame, to: window)
+        } catch { return false }
+        guard let final = await spaces.settledWindow(windowID: inspection.windowID, pid: inspection.pid,
+            inSpace: inspection.sourceSpaceID, inventory: inventory)
+        else { return false }
+        return inspection.matchesOriginalFrame(final.bounds)
     }
 
     private func rediscoverWindow(pid: pid_t, windowID: CGWindowID) async throws -> (result: WindowDiscoveryResult, window: DiscoveredWindow?) {
@@ -569,72 +1035,64 @@ struct RestoreEngine {
         provenanceRequiredBrowserWindowIDs: Set<UUID>,
         openedBrowserWindowsBySavedWindowID: [UUID: CapturedBrowserWindow],
         preferredBrowserScriptingIdentifiers: [UUID: String],
-        genericColdOpenedBrowserWindowIDs: Set<UUID>
+        genericColdOpenedBrowserWindowIDs: Set<UUID>,
+        appInstances: RestoreAppInstancePreparation
     ) async throws -> RestoreReadinessResult {
         let deadline = launchClock().addingTimeInterval(launchTimeout)
+        let identityReadinessBundles = Set(expectedOpenedLocalTargetCounts.keys).union(appInstances.requestedBundles)
         var discoveryResult = enrichedRestoreDiscoveryResult(
             try discoveryResultProvider(),
             openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID
         )
-        var discoveredApplications = discoveryResult.applications
-
-        if requestedApplicationsAreReady(
-            snapshot: snapshot,
-            requestedBundleIdentifiers: requestedBundleIdentifiers,
-            expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
-            successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
-            successfullyRequestedWebWindowIDs: successfullyRequestedWebWindowIDs,
-            provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
-            preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-            genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-            discoveredApplications: discoveredApplications
-        ) {
-            return RestoreReadinessResult(
-                discoveryResult: discoveryResult,
-                timedOutWindowIDs: []
+        // Newly opened AX documents can precede their owner-validated WindowServer IDs.
+        var identityPollsRemaining = 5
+        while true {
+            try Task.checkCancellation()
+            let applications = discoveryResult.applications
+            let contentReady = requestedApplicationsAreReady(
+                snapshot: snapshot,
+                requestedBundleIdentifiers: requestedBundleIdentifiers,
+                expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
+                successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
+                successfullyRequestedWebWindowIDs: successfullyRequestedWebWindowIDs,
+                provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+                preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
+                genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
+                discoveredApplications: applications,
+                appInstances: appInstances
             )
-        }
-
-        while launchClock() < deadline {
-            await launchPollSleeper(launchPollInterval)
+            if contentReady {
+                let identityPending = applications.contains { application in
+                    identityReadinessBundles.contains(application.bundleIdentifier) && application.windows.contains {
+                        $0.role == kAXWindowRole as String && $0.subrole == kAXStandardWindowSubrole as String &&
+                            !$0.isFullscreen && $0.cgWindowID == nil
+                    }
+                }
+                guard identityPending, identityPollsRemaining > 0, launchClock() < deadline else {
+                    return RestoreReadinessResult(discoveryResult: discoveryResult, timedOutWindowIDs: [])
+                }
+                identityPollsRemaining -= 1
+            } else if launchClock() >= deadline {
+                return RestoreReadinessResult(discoveryResult: discoveryResult,
+                    timedOutWindowIDs: unreadyRequestedWindowIDs(
+                        snapshot: snapshot,
+                        requestedBundleIdentifiers: requestedBundleIdentifiers,
+                        expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
+                        successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
+                        successfullyRequestedWebWindowIDs: successfullyRequestedWebWindowIDs,
+                        provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+                        preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
+                        genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
+                        discoveredApplications: applications,
+                        appInstances: appInstances))
+            }
+            await launchPollSleeper(contentReady ? 0.05 : launchPollInterval)
+            try Task.checkCancellation()
             discoveryResult = enrichedRestoreDiscoveryResult(
                 try discoveryResultProvider(),
                 openedBrowserWindowsBySavedWindowID: openedBrowserWindowsBySavedWindowID
             )
-            discoveredApplications = discoveryResult.applications
-
-            if requestedApplicationsAreReady(
-                snapshot: snapshot,
-                requestedBundleIdentifiers: requestedBundleIdentifiers,
-                expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
-                successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
-                successfullyRequestedWebWindowIDs: successfullyRequestedWebWindowIDs,
-                provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
-                preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-                genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-                discoveredApplications: discoveredApplications
-            ) {
-                return RestoreReadinessResult(
-                    discoveryResult: discoveryResult,
-                    timedOutWindowIDs: []
-                )
-            }
         }
-
-        return RestoreReadinessResult(
-            discoveryResult: discoveryResult,
-            timedOutWindowIDs: unreadyRequestedWindowIDs(
-                snapshot: snapshot,
-                requestedBundleIdentifiers: requestedBundleIdentifiers,
-                expectedOpenedLocalTargetCounts: expectedOpenedLocalTargetCounts,
-                successfullyRequestedTargetWindowIDs: successfullyRequestedTargetWindowIDs,
-                successfullyRequestedWebWindowIDs: successfullyRequestedWebWindowIDs,
-                provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
-                preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-                genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-                discoveredApplications: discoveredApplications
-            )
-        )
     }
 
     private func requestedApplicationsAreReady(
@@ -646,7 +1104,8 @@ struct RestoreEngine {
         provenanceRequiredBrowserWindowIDs: Set<UUID>,
         preferredBrowserScriptingIdentifiers: [UUID: String],
         genericColdOpenedBrowserWindowIDs: Set<UUID>,
-        discoveredApplications: [DiscoveredApplication]
+        discoveredApplications: [DiscoveredApplication],
+        appInstances: RestoreAppInstancePreparation
     ) -> Bool {
         unreadyRequestedWindowIDs(
             snapshot: snapshot,
@@ -657,7 +1116,8 @@ struct RestoreEngine {
             provenanceRequiredBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
             preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
             genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-            discoveredApplications: discoveredApplications
+            discoveredApplications: discoveredApplications,
+            appInstances: appInstances
         ).isEmpty
     }
 
@@ -670,7 +1130,8 @@ struct RestoreEngine {
         provenanceRequiredBrowserWindowIDs: Set<UUID>,
         preferredBrowserScriptingIdentifiers: [UUID: String],
         genericColdOpenedBrowserWindowIDs: Set<UUID>,
-        discoveredApplications: [DiscoveredApplication]
+        discoveredApplications: [DiscoveredApplication],
+        appInstances: RestoreAppInstancePreparation
     ) -> Set<UUID> {
         let discoveredTargets = OpenLocalTargetIndex(
             from: discoveredApplications
@@ -688,13 +1149,26 @@ struct RestoreEngine {
         if !localTargetRequestsAreReady {
             unreadyWindowIDs.formUnion(successfullyRequestedTargetWindowIDs)
         }
+        var instanceTargets = Dictionary(uniqueKeysWithValues: Set(appInstances.processIdentifiers.values).map { pid in
+            (pid, OpenLocalTargetIndex(from: discoveredApplications.filter { $0.pid == pid }))
+        })
+        for window in snapshot.windows {
+            guard let pid = appInstances.processIdentifiers[window.id],
+                  let targets = appInstances.targetsByWindowID[window.id],
+                  var index = instanceTargets[pid] else { continue }
+            for target in targets where !index.consume(target, bundleIdentifier: window.bundleIdentifier) {
+                unreadyWindowIDs.insert(window.id)
+            }
+            instanceTargets[pid] = index
+        }
 
         let liveWindowsByCandidateID = Self.liveWindowsByCandidateID(from: discoveredApplications)
         let runningBundleIdentifiers = runningBundleIdentifiers(from: discoveredApplications)
         let savedWindowsForRequests = snapshot.windows.filter { savedWindow in
-            successfullyRequestedTargetWindowIDs.contains(savedWindow.id) ||
+            appInstances.blockedWindows[savedWindow.id] == nil && (
+                successfullyRequestedTargetWindowIDs.contains(savedWindow.id) ||
                 successfullyRequestedWebWindowIDs.contains(savedWindow.id) ||
-                requestedBundleIdentifiers.contains(savedWindow.bundleIdentifier)
+                requestedBundleIdentifiers.contains(savedWindow.bundleIdentifier))
         }
         let plans = matchPlanner.plans(
             for: savedWindowsForRequests,
@@ -702,7 +1176,8 @@ struct RestoreEngine {
             runningBundleIdentifiers: runningBundleIdentifiers,
             genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
             preferredBrowserScriptingIdentifiers: preferredBrowserScriptingIdentifiers,
-            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs
+            openedBrowserWindowIDs: provenanceRequiredBrowserWindowIDs,
+            preferredProcessIdentifiers: appInstances.processIdentifiers
         )
         unreadyWindowIDs.formUnion(plans.compactMap { plan in
             plan.candidate == nil ? plan.savedWindow.id : nil
@@ -988,11 +1463,18 @@ protocol RestoreApplicationActivating {
 
 protocol RestoreApplicationLaunching {
     @discardableResult
-    func requestLaunch(bundleIdentifier: String) -> Bool
+    func requestLaunch(bundleIdentifier: String) async -> pid_t?
+    func launchInstance(bundleIdentifier: String) async -> pid_t?
+}
+
+extension RestoreApplicationLaunching {
+    func launchInstance(bundleIdentifier: String) async -> pid_t? { nil }
 }
 
 enum RestoreTargetOpenResult {
+    // Delivery was accepted; discovery must still confirm the requested content.
     case opened
+    case openedApplicationInstance(pid_t)
     case openedNewBrowserWindow(
         CapturedBrowserWindow,
         startupWindows: [CapturedBrowserWindow] = [],
@@ -1004,7 +1486,7 @@ enum RestoreTargetOpenResult {
         switch self {
         case .openedNewBrowserWindow(_, _, let openedTargetCount):
             return openedTargetCount != 0
-        case .opened, .failed(.openRequestFailed):
+        case .opened, .openedApplicationInstance, .failed(.openRequestFailed):
             return true
         case .failed:
             return false
@@ -1016,6 +1498,7 @@ enum RestoreTargetOpenDisposition: Equatable {
     case applicationDefault
     case newWindow
     case newBrowserWindow
+    case newApplicationInstance
 }
 
 struct RestoreTargetOpenRequest {
@@ -1046,13 +1529,13 @@ struct RestoreTargetOpenRequestPlanner {
         }
         var indexedRequests: [(index: Int, request: RestoreTargetOpenRequest)] = []
 
-        if Self.codeBasedEditorBundleIdentifiers.contains(bundleIdentifier),
+        if (Self.codeBasedEditorBundleIdentifiers.contains(bundleIdentifier) || UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier)),
            let firstLocalTarget = indexedLocalTargets.first {
             indexedRequests.append((
                 firstLocalTarget.offset,
                 RestoreTargetOpenRequest(
                     targets: indexedLocalTargets.map(\.element),
-                    disposition: .newWindow
+                    disposition: UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) ? .applicationDefault : .newWindow
                 )
             ))
         } else {
@@ -1102,6 +1585,9 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
     private let browserWindowOpener: BrowserWindowOpening
     private let workspaceOpener:
         ([URL], URL, NSWorkspace.OpenConfiguration) async -> Bool
+    private let instanceWorkspaceOpener:
+        ([URL], URL, NSWorkspace.OpenConfiguration) async -> pid_t?
+    private let runningUnityProjectsProvider: () -> Set<URL>
 
     init(
         workspace: NSWorkspace = .shared,
@@ -1109,7 +1595,10 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         commandRunner: @escaping (URL, [String]) async -> Bool = Self.runCommand,
         browserWindowOpener: BrowserWindowOpening? = nil,
         workspaceOpener:
-            (([URL], URL, NSWorkspace.OpenConfiguration) async -> Bool)? = nil
+            (([URL], URL, NSWorkspace.OpenConfiguration) async -> Bool)? = nil,
+        instanceWorkspaceOpener:
+            (([URL], URL, NSWorkspace.OpenConfiguration) async -> pid_t?)? = nil,
+        runningUnityProjectsProvider: (() -> Set<URL>)? = nil
     ) {
         self.applicationURLProvider = applicationURLProvider ?? {
             workspace.urlForApplication(withBundleIdentifier: $0)
@@ -1131,6 +1620,26 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
                 }
             }
         }
+        self.instanceWorkspaceOpener = instanceWorkspaceOpener ?? { urls, applicationURL, configuration in
+            await withCheckedContinuation { continuation in
+                let completion: @Sendable (NSRunningApplication?, Error?) -> Void = { app, error in
+                    continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
+                }
+                if urls.isEmpty {
+                    workspace.openApplication(at: applicationURL, configuration: configuration, completionHandler: completion)
+                } else {
+                    workspace.open(urls, withApplicationAt: applicationURL, configuration: configuration, completionHandler: completion)
+                }
+            }
+        }
+        self.runningUnityProjectsProvider = runningUnityProjectsProvider ?? {
+            let resolver = UnityProjectResolver()
+            return Set(workspace.runningApplications.compactMap { application in
+                guard application.bundleIdentifier.map(UnityProjectResolver.isUnity(bundleIdentifier:)) == true,
+                    !application.isTerminated, application.activationPolicy == .regular else { return nil }
+                return resolver.resolve(processIdentifier: application.processIdentifier, documentURL: nil)
+            })
+        }
     }
 
     func open(
@@ -1138,6 +1647,9 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         bundleIdentifier: String,
         disposition: RestoreTargetOpenDisposition
     ) async -> RestoreTargetOpenResult {
+        if UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) {
+            return await openUnityProject(targets: targets)
+        }
         guard let applicationURL = applicationURLProvider(bundleIdentifier) else {
             return .failed(.applicationUnavailable)
         }
@@ -1175,9 +1687,16 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
-        configuration.createsNewApplicationInstance = false
+        configuration.createsNewApplicationInstance = disposition == .newApplicationInstance
         configuration.allowsRunningApplicationSubstitution = true
         configuration.promptsUserIfNeeded = true
+
+        if disposition == .newApplicationInstance {
+            guard let pid = await instanceWorkspaceOpener(targets.map(\.url), applicationURL, configuration) else {
+                return .failed(.openRequestFailed)
+            }
+            return .openedApplicationInstance(pid)
+        }
 
         var deliveryURLs = targets.map(\.url)
         if bundleIdentifier == BrowserAutomationBrowser.chrome.bundleIdentifier,
@@ -1192,6 +1711,38 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
             configuration
         )
         return didOpen ? .opened : .failed(.openRequestFailed)
+    }
+
+    private func openUnityProject(targets: [WindowOpenTarget]) async -> RestoreTargetOpenResult {
+        let resolver = UnityProjectResolver()
+        let projects = targets.compactMap { resolver.projectURL(containing: $0.url) }
+        guard !targets.isEmpty, projects.count == targets.count, let project = projects.first,
+            projects.allSatisfy({ $0 == project }), targets.allSatisfy({ $0.kind != .webURL }) else {
+            return .failed(.unsupportedTarget)
+        }
+        let documents = targets.filter { $0.kind == .file }
+        guard documents.count <= 1,
+            documents.allSatisfy({ ["unity", "unitypackage"].contains($0.url.pathExtension.lowercased()) }) else {
+            return .failed(.unsupportedTarget)
+        }
+        // Native file delivery can select a different running Unity project and replace
+        // its unsaved scene. Never deliver to an arbitrary existing Editor.
+        guard !runningUnityProjectsProvider().contains(project) else { return .failed(.openingNotConfirmed) }
+        guard let editor = resolver.editorURL(projectURL: project,
+            preferredApplicationURL: applicationURLProvider("com.unity3d.UnityEditor5.x")) else {
+            return .failed(.applicationUnavailable)
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.createsNewApplicationInstance = true
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.promptsUserIfNeeded = true
+        configuration.arguments = ["-projectPath", project.path]
+        if let document = documents.first { configuration.arguments += ["-openfile", document.url.path] }
+        guard let pid = await instanceWorkspaceOpener([], editor, configuration), pid > 0 else {
+            return .failed(.openRequestFailed)
+        }
+        return .openedApplicationInstance(pid)
     }
 
     private func codeBasedEditorCommandURL(
@@ -1249,11 +1800,11 @@ struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
         self.workspace = workspace
     }
 
-    func requestLaunch(bundleIdentifier: String) -> Bool {
+    func requestLaunch(bundleIdentifier: String) async -> pid_t? {
         guard let applicationURL = workspace.urlForApplication(
             withBundleIdentifier: bundleIdentifier
         ) else {
-            return false
+            return nil
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
@@ -1262,8 +1813,24 @@ struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
         configuration.allowsRunningApplicationSubstitution = true
         configuration.promptsUserIfNeeded = true
 
-        workspace.openApplication(at: applicationURL, configuration: configuration) { _, _ in }
-        return true
+        return await withCheckedContinuation { continuation in
+            workspace.openApplication(at: applicationURL, configuration: configuration) { app, error in
+                continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
+            }
+        }
+    }
+
+    func launchInstance(bundleIdentifier: String) async -> pid_t? {
+        guard let applicationURL = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.createsNewApplicationInstance = true
+        configuration.promptsUserIfNeeded = true
+        return await withCheckedContinuation { continuation in
+            workspace.openApplication(at: applicationURL, configuration: configuration) { app, error in
+                continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
+            }
+        }
     }
 }
 
@@ -1463,10 +2030,10 @@ private extension String {
         let path = url.path
         let abbreviatedPath = (path as NSString).abbreviatingWithTildeInPath
 
-        return [path, abbreviatedPath].contains { candidate in
+        return [url.absoluteString, path, abbreviatedPath].contains { candidate in
             ranges(of: candidate).contains { range in
-                range.upperBound == endIndex ||
-                self[range.upperBound].isLocalPathReferenceBoundary
+                (range.lowerBound == startIndex || self[index(before: range.lowerBound)].isLocalPathReferenceBoundary) &&
+                (range.upperBound == endIndex || self[range.upperBound].isLocalPathReferenceBoundary)
             }
         }
     }
@@ -1486,7 +2053,22 @@ private extension String {
 
 private extension Character {
     var isLocalPathReferenceBoundary: Bool {
-        isWhitespace || [":", "|", ")", "]", "}", "—", "–"].contains(self)
+        isWhitespace || [":", "|", "(", ")", "[", "]", "{", "}", "\"", "'", "—", "–"].contains(self)
+    }
+}
+
+private extension UnexposedApplicationWindows {
+    func hasUnexposedOrdinaryWindow(membership: (CGWindowID) -> Set<UInt64>?,
+        excludingWindowID: CGWindowID? = nil) -> Bool {
+        // CG records can outlive closed windows. Unknown membership still blocks.
+        windows.contains {
+            $0.windowID != excludingWindowID &&
+                $0.processIdentifier == pid && $0.windowID != 0 && $0.layer == 0 &&
+                $0.bounds.width > 0 && $0.bounds.height > 0 &&
+                $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite &&
+                $0.bounds.width.isFinite && $0.bounds.height.isFinite &&
+                (membership($0.windowID)?.isEmpty != true)
+        }
     }
 }
 
@@ -1501,6 +2083,13 @@ struct RestoreWindowCandidate {
     let role: String
     let subrole: String?
     let frame: CGRect
+
+    func referencesLocalTarget(_ target: WindowOpenTarget) -> Bool {
+        guard target.kind != .webURL, target.url.isFileURL else { return false }
+        let url = target.url.standardizedFileURL
+        return documentURLs.contains { $0.isFileURL && $0.standardizedFileURL == url } ||
+            documentTitles.contains { $0.referencesLocalURL(url) }
+    }
 }
 
 struct RestoreWindowPlan {
@@ -1523,7 +2112,10 @@ struct RestoreWindowMatchPlanner {
         runningBundleIdentifiers: Set<String>? = nil,
         genericColdOpenedBrowserWindowIDs: Set<UUID> = [],
         preferredBrowserScriptingIdentifiers: [UUID: String] = [:],
-        openedBrowserWindowIDs: Set<UUID> = []
+        openedBrowserWindowIDs: Set<UUID> = [],
+        preferredProcessIdentifiers: [UUID: pid_t] = [:],
+        preferredCandidateIdentifiers: [UUID: Int] = [:],
+        requiresRuntimeRole: Bool = false
     ) -> [RestoreWindowPlan] {
         let runningBundleIdentifiers = runningBundleIdentifiers ?? Set(candidates.map(\.bundleIdentifier))
         var plans = Array<RestoreWindowPlan?>(repeating: nil, count: savedWindows.count)
@@ -1569,7 +2161,10 @@ struct RestoreWindowMatchPlanner {
             }
             let scoredAssignments = bestAssignments(
                 for: remainingSavedWindows,
-                from: remainingCandidates
+                from: remainingCandidates,
+                preferredProcessIdentifiers: preferredProcessIdentifiers,
+                preferredCandidateIdentifiers: preferredCandidateIdentifiers,
+                requiresRuntimeRole: requiresRuntimeRole
             )
             assignments.merge(
                 scoredAssignments,
@@ -1579,17 +2174,24 @@ struct RestoreWindowMatchPlanner {
                 matchStrategies[index] = .scored
             }
 
-            if savedWindowsForBundle.count == 1,
-               candidatesForBundle.count == 1,
-               let savedWindow = savedWindowsForBundle.first,
-               assignments[savedWindow.index] == nil,
-               let candidate = candidatesForBundle.first,
-               canUseSingletonFallback(
-                   for: savedWindow.window,
-                   candidate: candidate,
-                   genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
-                   openedBrowserWindowIDs: openedBrowserWindowIDs
-               ) {
+            for savedWindow in savedWindowsForBundle where assignments[savedWindow.index] == nil {
+                let pid = preferredProcessIdentifiers[savedWindow.window.id]
+                let savedCount = savedWindowsForBundle.count {
+                    pid == nil || preferredProcessIdentifiers[$0.window.id] == pid
+                }
+                let singletonCandidates = candidatesForBundle.filter { pid == nil || $0.pid == pid }
+                guard savedCount == 1,
+                    singletonCandidates.count == 1,
+                    let candidate = singletonCandidates.first,
+                    !assignments.values.contains(where: { $0.id == candidate.id }),
+                    preferredCandidateIdentifiers[savedWindow.window.id].map({ $0 == candidate.id }) != false,
+                    canUseSingletonFallback(
+                        for: savedWindow.window,
+                        candidate: candidate,
+                        preferredProcessIdentifier: pid,
+                        genericColdOpenedBrowserWindowIDs: genericColdOpenedBrowserWindowIDs,
+                        openedBrowserWindowIDs: openedBrowserWindowIDs
+                    ) else { continue }
                 assignments[savedWindow.index] = candidate
                 matchStrategies[savedWindow.index] = .singleton
             }
@@ -1666,15 +2268,23 @@ struct RestoreWindowMatchPlanner {
     private func canUseSingletonFallback(
         for savedWindow: WindowRecord,
         candidate: RestoreWindowCandidate,
+        preferredProcessIdentifier: pid_t?,
         genericColdOpenedBrowserWindowIDs: Set<UUID>,
         openedBrowserWindowIDs: Set<UUID>
     ) -> Bool {
-        guard savedWindow.role == kAXWindowRole as String,
-              savedWindow.subrole == kAXStandardWindowSubrole as String,
-              candidate.role == savedWindow.role,
-              candidate.subrole == savedWindow.subrole else {
+        guard !savedWindow.openingConfiguration.effectiveTargets.contains(where: { $0.kind != .webURL }) else {
             return false
         }
+        guard savedWindow.role == kAXWindowRole as String,
+              candidate.role == kAXWindowRole as String,
+              candidate.subrole == kAXStandardWindowSubrole as String else {
+            return false
+        }
+        if savedWindow.captureSignature.source == .coreGraphics, savedWindow.subrole == nil,
+            savedWindow.openingConfiguration.effectiveTargets.isEmpty {
+            return preferredProcessIdentifier == candidate.pid
+        }
+        guard savedWindow.subrole == candidate.subrole else { return false }
 
         if openedBrowserWindowIDs.contains(savedWindow.id) {
             return genericColdOpenedBrowserWindowIDs.contains(savedWindow.id)
@@ -1684,32 +2294,58 @@ struct RestoreWindowMatchPlanner {
 
     private func bestAssignments(
         for savedWindows: [(index: Int, window: WindowRecord)],
-        from candidates: [RestoreWindowCandidate]
+        from candidates: [RestoreWindowCandidate],
+        preferredProcessIdentifiers: [UUID: pid_t],
+        preferredCandidateIdentifiers: [UUID: Int],
+        requiresRuntimeRole: Bool
     ) -> [Int: RestoreWindowCandidate] {
         let scoredMatches = savedWindows.flatMap { savedWindow in
             candidates.compactMap { candidate in
                 scoredMatch(
                     savedIndex: savedWindow.index,
                     savedWindow: savedWindow.window,
-                    candidate: candidate
+                    candidate: candidate,
+                    preferredProcessIdentifier: preferredProcessIdentifiers[savedWindow.window.id],
+                    preferredCandidateIdentifier: preferredCandidateIdentifiers[savedWindow.window.id],
+                    requiresRuntimeRole: requiresRuntimeRole
                 )
             }
         }
         .sorted()
 
-        var assignedSavedWindowIndexes = Set<Int>()
-        var assignedCandidateIDs = Set<Int>()
+        var savedIndexByCandidateID: [Int: Int] = [:]
         var assignments: [Int: RestoreWindowCandidate] = [:]
 
         for scoredMatch in scoredMatches {
-            guard !assignedSavedWindowIndexes.contains(scoredMatch.savedIndex),
-                  !assignedCandidateIDs.contains(scoredMatch.candidate.id) else {
+            guard assignments[scoredMatch.savedIndex] == nil,
+                  savedIndexByCandidateID[scoredMatch.candidate.id] == nil else {
                 continue
             }
 
-            assignedSavedWindowIndexes.insert(scoredMatch.savedIndex)
-            assignedCandidateIDs.insert(scoredMatch.candidate.id)
+            savedIndexByCandidateID[scoredMatch.candidate.id] = scoredMatch.savedIndex
             assignments[scoredMatch.savedIndex] = scoredMatch.candidate
+        }
+
+        // Keep the preferred matches unless an unmatched local document needs one.
+        // Only other local-document matches may move; web-only and position-only matches stay fixed.
+        let localWindowIndexes = Set(savedWindows.filter {
+            $0.window.openingConfiguration.effectiveTargets.contains { $0.kind != .webURL }
+        }.map(\.index))
+        let matchesBySavedIndex = Dictionary(grouping: scoredMatches, by: \.savedIndex)
+        func reserve(_ savedIndex: Int, visited: inout Set<Int>) -> Bool {
+            guard localWindowIndexes.contains(savedIndex) else { return false }
+            for match in matchesBySavedIndex[savedIndex, default: []] where visited.insert(match.candidate.id).inserted {
+                if let previous = savedIndexByCandidateID[match.candidate.id],
+                    !reserve(previous, visited: &visited) { continue }
+                savedIndexByCandidateID[match.candidate.id] = savedIndex
+                assignments[savedIndex] = match.candidate
+                return true
+            }
+            return false
+        }
+        for savedWindow in savedWindows where assignments[savedWindow.index] == nil {
+            var visited: Set<Int> = []
+            _ = reserve(savedWindow.index, visited: &visited)
         }
 
         return assignments
@@ -1718,11 +2354,21 @@ struct RestoreWindowMatchPlanner {
     private func scoredMatch(
         savedIndex: Int,
         savedWindow: WindowRecord,
-        candidate: RestoreWindowCandidate
+        candidate: RestoreWindowCandidate,
+        preferredProcessIdentifier: pid_t?,
+        preferredCandidateIdentifier: Int?,
+        requiresRuntimeRole: Bool
     ) -> RestoreWindowScoredMatch? {
+        if let preferredProcessIdentifier, candidate.pid != preferredProcessIdentifier { return nil }
+        if let preferredCandidateIdentifier, candidate.id != preferredCandidateIdentifier { return nil }
+        if requiresRuntimeRole || preferredProcessIdentifier != nil, savedWindow.role == kAXWindowRole as String,
+            savedWindow.subrole == kAXStandardWindowSubrole as String {
+            guard candidate.role == kAXWindowRole as String,
+                candidate.subrole == kAXStandardWindowSubrole as String else { return nil }
+        }
         let savedFrame = savedWindow.frame.cgRect
         let distance = candidate.frame.restoreDistance(to: savedFrame)
-        let pidMatches = candidate.pid == savedWindow.pidAtCapture
+        let pidMatches = candidate.pid == (preferredProcessIdentifier ?? savedWindow.pidAtCapture)
         let validator = WindowOpenTargetValidator()
         let savedTargetURLs = Set(
             savedWindow.openingConfiguration.matchingTargets.compactMap { target in
@@ -1743,6 +2389,13 @@ struct RestoreWindowMatchPlanner {
                     : validator.webTarget(url: url)?.url
             }
         )
+        let requiredLocalTargets = savedWindow.openingConfiguration.effectiveTargets.filter { $0.kind != .webURL }
+        guard requiredLocalTargets.isEmpty || requiredLocalTargets.contains(where: candidate.referencesLocalTarget) else { return nil }
+        if UnityProjectResolver.isUnity(bundleIdentifier: savedWindow.bundleIdentifier) {
+            // Project identity complements a saved scene; it cannot stand in for that scene.
+            let scenes = requiredLocalTargets.filter { $0.kind == .file }
+            guard scenes.allSatisfy(candidate.referencesLocalTarget) else { return nil }
+        }
         let localTitleTargetMatches = savedTargetURLs.contains { savedURL in
             savedURL.isFileURL && candidate.documentTitles.contains {
                 $0.referencesLocalURL(savedURL)
@@ -1753,8 +2406,14 @@ struct RestoreWindowMatchPlanner {
         let savedTitle = savedWindow.windowTitle?.nonEmptyRestoreValue
         let titleMatches = savedTitle != nil &&
             candidate.title?.nonEmptyRestoreValue == savedTitle
+        if savedWindow.captureSignature.source == .coreGraphics {
+            // CG capture cannot establish an AX role. A fresh standard AX window is required.
+            guard candidate.role == kAXWindowRole as String,
+                candidate.subrole == kAXStandardWindowSubrole as String,
+                !requiredLocalTargets.isEmpty || titleMatches || preferredCandidateIdentifier != nil else { return nil }
+        }
         let roleMatches = candidate.role == savedWindow.role &&
-            candidate.subrole == savedWindow.subrole
+            (candidate.subrole == savedWindow.subrole || savedWindow.captureSignature.source == .coreGraphics)
         let plausibleFrame = candidate.frame.isPlausibleRoleRestoreMatch(to: savedFrame)
 
         guard pidMatches || targetMatches || titleMatches || (roleMatches && plausibleFrame) else {
@@ -1823,10 +2482,22 @@ protocol RestoreWindowApplying {
         to discoveredWindow: DiscoveredWindow
     ) async throws -> RestoreWindowApplyResult
 
+    func restoreFrame(
+        savedWindow: WindowRecord,
+        targetFrame: CGRect,
+        to discoveredWindow: DiscoveredWindow
+    ) async throws -> RestoreWindowApplyResult
+
     @discardableResult
     func raise(_ discoveredWindow: DiscoveredWindow) -> Bool
 
     func focus(_ discoveredWindow: DiscoveredWindow) -> RestoreWindowFocusResult
+}
+
+extension RestoreWindowApplying {
+    func restoreFrame(savedWindow: WindowRecord, targetFrame: CGRect, to discoveredWindow: DiscoveredWindow) async throws -> RestoreWindowApplyResult {
+        try await apply(savedWindow: savedWindow, targetFrame: targetFrame, to: discoveredWindow)
+    }
 }
 
 protocol RestoreWindowGeometryAccessing {
@@ -1917,8 +2588,18 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
             return .failed(reason: RestoreSkipReason.restoreFailed)
         }
 
+        return try await applyFrame(savedWindow: savedWindow, targetFrame: targetFrame,
+            to: discoveredWindow, attempts: attemptLimit)
+    }
+
+    func restoreFrame(savedWindow: WindowRecord, targetFrame: CGRect, to discoveredWindow: DiscoveredWindow) async throws -> RestoreWindowApplyResult {
+        try await applyFrame(savedWindow: savedWindow, targetFrame: targetFrame, to: discoveredWindow, attempts: 1)
+    }
+
+    private func applyFrame(savedWindow: WindowRecord, targetFrame: CGRect,
+        to discoveredWindow: DiscoveredWindow, attempts: Int) async throws -> RestoreWindowApplyResult {
         var lastObservedFrame: CGRect?
-        for attemptIndex in 0..<attemptLimit {
+        for attemptIndex in 0..<attempts {
             try Task.checkCancellation()
             applyGeometry(targetFrame, to: discoveredWindow.axElement)
 
@@ -1942,7 +2623,7 @@ struct AXRestoreWindowApplier: RestoreWindowApplying {
         )
         return .failed(
             reason: RestoreSkipReason.windowGeometryDidNotSettle,
-            attemptCount: attemptLimit,
+            attemptCount: attempts,
             finalObservedFrame: lastObservedFrame
         )
     }
@@ -2029,8 +2710,10 @@ enum RestoreSkipReason {
     static let windowNotFound = "window not found"
     static let openedBrowserWindowNotIdentified = "opened browser window could not be identified"
     static let desktopUnconfirmed = "window desktop could not be confirmed"
+    static let inspectionNotReturned = "inspected window could not be returned"
     static let restoreFailed = "restore failed"
     static let windowGeometryDidNotSettle = "window geometry did not settle"
+    static let appInstanceUnconfirmed = "separate app instance could not be confirmed"
 }
 
 enum RestoreDowngradeReason {

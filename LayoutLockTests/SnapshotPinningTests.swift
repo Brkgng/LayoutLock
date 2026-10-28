@@ -23,6 +23,40 @@ final class SnapshotPinningTests: XCTestCase {
         XCTAssertEqual(try store.listSummaries().map(\.id), [snapshot.id])
     }
 
+    func testExistingLayoutWithoutAppInstanceSettingPreservesCapturedProcesses() throws {
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        let snapshot = makeSnapshot(windows: [
+            makeWindowRecord(pidAtCapture: 42),
+            makeWindowRecord(pidAtCapture: 43)
+        ])
+        try store.save(snapshot)
+        let fileURL = directory.url.appendingPathComponent("\(snapshot.id.uuidString).json")
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertNil(object["restoreSeparateAppInstances"])
+        XCTAssertEqual(try store.loadSnapshot(id: snapshot.id).windows.map(\.pidAtCapture), [42, 43])
+    }
+
+    func testObsoleteAppInstanceSettingDoesNotChangeCapturedProcesses() throws {
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        let snapshot = makeSnapshot(windows: [
+            makeWindowRecord(pidAtCapture: 42),
+            makeWindowRecord(pidAtCapture: 43)
+        ])
+        try store.save(snapshot)
+        let fileURL = directory.url.appendingPathComponent("\(snapshot.id.uuidString).json")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        object["restoreSeparateAppInstances"] = false
+        try JSONSerialization.data(withJSONObject: object).write(to: fileURL)
+
+        XCTAssertEqual(try store.loadSnapshot(id: snapshot.id).windows.map(\.pidAtCapture), [42, 43])
+    }
+
     func testPinningPrioritizesLayoutsAndUnpinningRestoresDateOrder() throws {
         let directory = try TestTemporaryDirectory()
         let store = SnapshotStore(snapshotsDirectoryURL: directory.url)

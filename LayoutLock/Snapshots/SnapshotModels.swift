@@ -402,6 +402,11 @@ extension WindowRecord {
     }
 }
 
+enum WindowCaptureSource: String, Codable {
+    case accessibility
+    case coreGraphics
+}
+
 struct WindowSignature: Codable, Hashable {
     let bundleIdentifier: String
     let owningPid: Int32?
@@ -410,6 +415,7 @@ struct WindowSignature: Codable, Hashable {
     let subrole: String?
     let capturedFrame: CGRectCodable
     let cgWindowID: UInt32?
+    let source: WindowCaptureSource?
 
     init(
         bundleIdentifier: String,
@@ -418,7 +424,8 @@ struct WindowSignature: Codable, Hashable {
         role: String,
         subrole: String?,
         capturedFrame: CGRectCodable,
-        cgWindowID: UInt32?
+        cgWindowID: UInt32?,
+        source: WindowCaptureSource? = nil
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.owningPid = owningPid
@@ -427,6 +434,7 @@ struct WindowSignature: Codable, Hashable {
         self.subrole = subrole
         self.capturedFrame = capturedFrame
         self.cgWindowID = cgWindowID
+        self.source = source
     }
 
     init(application: DiscoveredApplication, window: DiscoveredWindow) {
@@ -437,7 +445,8 @@ struct WindowSignature: Codable, Hashable {
             role: window.role,
             subrole: window.subrole,
             capturedFrame: CGRectCodable(window.frame),
-            cgWindowID: window.cgWindowID
+            cgWindowID: window.cgWindowID,
+            source: .accessibility
         )
     }
 }

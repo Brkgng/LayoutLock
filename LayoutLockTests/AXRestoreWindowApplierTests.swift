@@ -226,6 +226,44 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         }
     }
 
+    func testFrameRestorationRepairsMinimizedWindowWithoutUnminimizing() async throws {
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: CGRect(x: 100, y: 100, width: 500, height: 400))
+        var sleepCount = 0
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, sleeper: { _ in sleepCount += 1 })
+
+        // The synthetic AX handle cannot be unminimized. Geometry compensation must
+        // use the injected accessor without trying to change the window's state.
+        let result = try await applier.restoreFrame(savedWindow: makeWindowRecord(frame: targetFrame),
+            targetFrame: targetFrame, to: makeDiscoveredWindow(isMinimized: true))
+
+        XCTAssertTrue(result.didRestore)
+        XCTAssertEqual(accessor.frame, targetFrame)
+        XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
+        XCTAssertEqual(sleepCount, 1)
+        XCTAssertEqual(result.attemptCount, 1)
+        XCTAssertEqual(result.finalObservedFrame, targetFrame)
+    }
+
+    func testFrameRestorationDoesNotRetryMismatchDespiteConfiguredAttemptLimit() async throws {
+        let originalFrame = CGRect(x: 100, y: 100, width: 500, height: 400)
+        let targetFrame = CGRect(x: -900, y: 40, width: 800, height: 600)
+        let accessor = RecordingGeometryAccessor(frame: originalFrame, commitsWritesImmediately: false)
+        var sleepCount = 0
+        let applier = AXRestoreWindowApplier(geometryAccessor: accessor, attemptLimit: 7,
+                                             sleeper: { _ in sleepCount += 1 })
+
+        let result = try await applier.restoreFrame(savedWindow: makeWindowRecord(frame: targetFrame),
+            targetFrame: targetFrame, to: makeDiscoveredWindow())
+
+        XCTAssertFalse(result.didRestore)
+        XCTAssertEqual(result.failureReason, RestoreSkipReason.windowGeometryDidNotSettle)
+        XCTAssertEqual(accessor.writeOrder, [.position, .size, .position])
+        XCTAssertEqual(sleepCount, 1)
+        XCTAssertEqual(result.attemptCount, 1)
+        XCTAssertEqual(result.finalObservedFrame, originalFrame)
+    }
+
     private func makeWindowRecord(frame: CGRect) -> WindowRecord {
         WindowRecord(
             bundleIdentifier: "org.mozilla.firefoxdeveloperedition",
@@ -258,7 +296,8 @@ final class AXRestoreWindowApplierTests: XCTestCase {
     }
 
     private func makeDiscoveredWindow(
-        frame: CGRect = CGRect(x: 100, y: 100, width: 500, height: 400)
+        frame: CGRect = CGRect(x: 100, y: 100, width: 500, height: 400),
+        isMinimized: Bool = false
     ) -> DiscoveredWindow {
         DiscoveredWindow(
             axElement: AXUIElementCreateSystemWide(),
@@ -266,7 +305,7 @@ final class AXRestoreWindowApplierTests: XCTestCase {
             role: "AXWindow",
             subrole: "AXStandardWindow",
             frame: frame,
-            isMinimized: false,
+            isMinimized: isMinimized,
             isFullscreen: false,
             isMain: true,
             isVisible: true,

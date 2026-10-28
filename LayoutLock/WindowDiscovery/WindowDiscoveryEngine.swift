@@ -96,6 +96,7 @@ struct UnexposedApplicationWindows {
     let bundleIdentifier: String
     let pid: pid_t
     let windows: [CGWindowMetadata]
+    var documentURLs: [URL] = []
 }
 
 struct WindowDiscoveryResult {
@@ -166,6 +167,7 @@ struct WindowDiscoveryEngine {
     private let cgWindowMetadataProvider: (Set<pid_t>) -> [pid_t: [CGWindowMetadata]]
     private let windowIDProvider: (AXUIElement) -> CGWindowID?
     private let applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
+    private let unityProjectURLProvider: (pid_t, URL?) -> URL?
     private let currentProcessIdentifier: pid_t
 
     init(
@@ -179,7 +181,10 @@ struct WindowDiscoveryEngine {
         runningApplicationsProvider: (() -> [RunningApplicationSnapshot])? = nil,
         appElementProvider: @escaping (pid_t) -> AXUIElement = AXUIElementCreateApplication,
         cgWindowMetadataProvider: ((Set<pid_t>) -> [pid_t: [CGWindowMetadata]])? = nil,
-        windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = AXAttributeReader.windowID
+        windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = AXAttributeReader.windowID,
+        unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = {
+            UnityProjectResolver().resolve(processIdentifier: $0, documentURL: $1)
+        }
     ) {
         self.trustChecker = trustChecker
         self.attributeReader = attributeReader
@@ -192,6 +197,7 @@ struct WindowDiscoveryEngine {
             cgWindowMetadataReader.readWindowMetadata(processIdentifiers: $0)
         }
         self.currentProcessIdentifier = currentProcessIdentifier
+        self.unityProjectURLProvider = unityProjectURLProvider
         self.windowIDProvider = windowIDProvider
     }
 
@@ -220,23 +226,32 @@ struct WindowDiscoveryEngine {
         )
 
         var diagnostics: [WindowDiscoveryDiagnostic] = []
+        var unexposedCGWindows = cgWindowMetadataByProcessIdentifier
         let applications = candidateApplications.compactMap { application in
             discoveredApplication(
                 from: application,
                 cgWindowMetadata: cgWindowMetadataByProcessIdentifier[application.processIdentifier] ?? [],
                 applicationDocumentURLResolver: preparedDocumentURLResolver,
-                diagnostics: &diagnostics
+                diagnostics: &diagnostics,
+                unexposedCGWindows: &unexposedCGWindows[application.processIdentifier, default: []]
             )
         }
 
-        let discoveredPIDs = Set(applications.map(\.pid))
         let unexposedApplications = candidateApplications.compactMap { application -> UnexposedApplicationWindows? in
-            guard !discoveredPIDs.contains(application.processIdentifier),
-                  let bundleIdentifier = application.bundleIdentifier else { return nil }
+            guard let bundleIdentifier = application.bundleIdentifier else { return nil }
+            let exposed = applications.first { $0.pid == application.processIdentifier }?.windows ?? []
+            // Without AX identities, a CG record could describe an already captured window.
+            guard !exposed.contains(where: { $0.cgWindowID == nil }) else { return nil }
+            let remaining = unexposedCGWindows[application.processIdentifier] ?? []
+            guard exposed.isEmpty || !remaining.isEmpty else { return nil }
+            let project = UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) &&
+                remaining.contains(where: { $0.layer == 0 && $0.bounds.width > 0 && $0.bounds.height > 0 })
+                ? unityProjectURLProvider(application.processIdentifier, nil) : nil
             return UnexposedApplicationWindows(
                 bundleIdentifier: bundleIdentifier,
                 pid: application.processIdentifier,
-                windows: cgWindowMetadataByProcessIdentifier[application.processIdentifier] ?? []
+                windows: remaining,
+                documentURLs: project.map { [$0] } ?? []
             )
         }
         return WindowDiscoveryResult(applications: applications, diagnostics: diagnostics, unexposedApplications: unexposedApplications)
@@ -261,7 +276,8 @@ struct WindowDiscoveryEngine {
         from application: RunningApplicationSnapshot,
         cgWindowMetadata: [CGWindowMetadata],
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver,
-        diagnostics: inout [WindowDiscoveryDiagnostic]
+        diagnostics: inout [WindowDiscoveryDiagnostic],
+        unexposedCGWindows: inout [CGWindowMetadata]
     ) -> DiscoveredApplication? {
         guard let bundleIdentifier = application.bundleIdentifier else {
             return nil
@@ -283,7 +299,8 @@ struct WindowDiscoveryEngine {
             appIsHidden: appIsHidden,
             cgWindowMetadata: cgWindowMetadata,
             applicationDocumentURLResolver: applicationDocumentURLResolver,
-            diagnostics: &diagnostics
+            diagnostics: &diagnostics,
+            unexposedCGWindows: &unexposedCGWindows
         )
 
         guard !windows.isEmpty else {
@@ -305,7 +322,8 @@ struct WindowDiscoveryEngine {
         appIsHidden: Bool,
         cgWindowMetadata: [CGWindowMetadata],
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver,
-        diagnostics: inout [WindowDiscoveryDiagnostic]
+        diagnostics: inout [WindowDiscoveryDiagnostic],
+        unexposedCGWindows: inout [CGWindowMetadata]
     ) -> [DiscoveredWindow] {
         let windowRead = attributeReader.windows(from: appElement)
         let windows = windowRead.elements
@@ -324,9 +342,21 @@ struct WindowDiscoveryEngine {
         var discoveredWindows: [DiscoveredWindow] = []
 
         for window in windows {
+            let resolvedWindowID = windowIDProvider(window)
+            let identifiedMetadata = cgWindowMetadata.first {
+                $0.windowID != 0 && $0.windowID == resolvedWindowID && $0.processIdentifier == processIdentifier
+            }
+            // AX-observed windows must not re-enter through CG fallback after rejection.
+            if let identifiedMetadata {
+                unexposedCGWindows.removeAll { $0.windowID == identifiedMetadata.windowID }
+            } else {
+                // An unresolved AX identity makes this owner's remaining CG records ambiguous.
+                unexposedCGWindows.removeAll()
+            }
             guard let axWindowSnapshot = axWindowSnapshot(
                 from: window,
                 bundleIdentifier: bundleIdentifier,
+                processIdentifier: processIdentifier,
                 appIsHidden: appIsHidden,
                 applicationDocumentURLResolver: applicationDocumentURLResolver
             ) else {
@@ -340,10 +370,6 @@ struct WindowDiscoveryEngine {
                 continue
             }
 
-            let resolvedWindowID = windowIDProvider(window)
-            let identifiedMetadata = cgWindowMetadata.first {
-                $0.windowID != 0 && $0.windowID == resolvedWindowID && $0.processIdentifier == processIdentifier
-            }
             // Geometry can supply presentation hints, but never an identity for Space operations.
             let cgWindowMatch = identifiedMetadata ?? bestCGWindowMatch(
                 for: axWindowSnapshot,
@@ -383,6 +409,7 @@ struct WindowDiscoveryEngine {
     private func axWindowSnapshot(
         from window: AXUIElement,
         bundleIdentifier: String,
+        processIdentifier: pid_t,
         appIsHidden: Bool,
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
     ) -> AXWindowSnapshot? {
@@ -418,7 +445,12 @@ struct WindowDiscoveryEngine {
             bundleIdentifier: bundleIdentifier,
             windowTitle: title
         )
-        let documentURLs = applicationDocumentURL.map { [$0] } ?? documentMetadata.urls
+        var documentURLs = applicationDocumentURL.map { [$0] } ?? documentMetadata.urls
+        if UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier),
+            let project = unityProjectURLProvider(processIdentifier, documentURLs.first),
+            !documentURLs.contains(project) {
+            documentURLs.append(project)
+        }
 
         return AXWindowSnapshot(
             documentURL: documentURLs.first,

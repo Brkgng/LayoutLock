@@ -50,6 +50,7 @@ struct SnapshotCaptureService {
     let telemetryLogger: TelemetryLogging
     private let browserTabCapturer: BrowserTabCapturing
     private let discoveryResultProvider: (() throws -> WindowDiscoveryResult)?
+    private let restoreSpaceAccess: RestoreSpaceAccess
 
     init(
         windowDiscoveryEngine: WindowDiscoveryEngine = WindowDiscoveryEngine(),
@@ -57,7 +58,8 @@ struct SnapshotCaptureService {
         snapshotStore: SnapshotStore,
         telemetryLogger: TelemetryLogging = NoOpTelemetryLogger(),
         browserTabCapturer: BrowserTabCapturing = BrowserTabCaptureService(),
-        discoveryResultProvider: (() throws -> WindowDiscoveryResult)? = nil
+        discoveryResultProvider: (() throws -> WindowDiscoveryResult)? = nil,
+        restoreSpaceAccess: RestoreSpaceAccess = .live
     ) {
         self.windowDiscoveryEngine = windowDiscoveryEngine
         self.displayResolver = displayResolver
@@ -65,6 +67,7 @@ struct SnapshotCaptureService {
         self.telemetryLogger = telemetryLogger
         self.browserTabCapturer = browserTabCapturer
         self.discoveryResultProvider = discoveryResultProvider
+        self.restoreSpaceAccess = restoreSpaceAccess
     }
 
     func defaultSnapshotName(now: Date = Date()) -> String {
@@ -325,7 +328,10 @@ struct SnapshotCaptureService {
             applications: rawDiscoveryResult.applications.filter {
                 !excludedSnapshotBundleIdentifiers.contains($0.bundleIdentifier)
             },
-            diagnostics: rawDiscoveryResult.diagnostics
+            diagnostics: rawDiscoveryResult.diagnostics,
+            unexposedApplications: rawDiscoveryResult.unexposedApplications.filter {
+                !excludedSnapshotBundleIdentifiers.contains($0.bundleIdentifier)
+            }
         )
         let browserCaptureResult = browserTabCapturer.captureTabs(
             runningApplications: runningApplications
@@ -341,7 +347,7 @@ struct SnapshotCaptureService {
             throw SnapshotCaptureServiceError.noDisplaysAvailable
         }
 
-        let windows = try discoveryResult.applications.flatMap { application in
+        var windows = try discoveryResult.applications.flatMap { application in
             try application.windows.map { window in
                 try makeWindowRecord(
                     application: application,
@@ -350,6 +356,7 @@ struct SnapshotCaptureService {
                 )
             }
         }
+        windows += captureUnexposedWindows(in: discoveryResult, displayState: displayState)
         guard !windows.isEmpty else {
             throw SnapshotCaptureServiceError.noWindowsAvailable
         }
@@ -360,6 +367,82 @@ struct SnapshotCaptureService {
             discoveryDiagnostics: discoveryResult.diagnostics,
             browserCaptureIssues: enrichment.issues
         )
+    }
+
+    private func captureUnexposedWindows(
+        in discoveryResult: WindowDiscoveryResult,
+        displayState: DisplayState
+    ) -> [WindowRecord] {
+        guard !discoveryResult.unexposedApplications.isEmpty,
+              let inventory = restoreSpaceAccess.inventory(displayState.displays.map(\.id)) else {
+            return []
+        }
+        let activeSpaces = Set(inventory.activeByDisplay.values)
+        guard !activeSpaces.isEmpty else { return [] }
+        let representedIDs = Set(discoveryResult.applications.flatMap { $0.windows.compactMap(\.cgWindowID) })
+        let ownersWithUnknownWindowIDs = Set(discoveryResult.applications.filter {
+            $0.windows.contains { $0.cgWindowID == nil }
+        }.map(\.pid))
+        let occurrences = Dictionary(grouping: discoveryResult.unexposedApplications.flatMap(\.windows), by: \.windowID)
+        var records: [WindowRecord] = []
+
+        for owner in discoveryResult.unexposedApplications {
+            guard !ownersWithUnknownWindowIDs.contains(owner.pid) else { continue }
+            let eligible = owner.windows.compactMap { candidate -> CGWindowMetadata? in
+                guard candidate.processIdentifier == owner.pid,
+                      candidate.windowID != 0,
+                      !representedIDs.contains(candidate.windowID),
+                      occurrences[candidate.windowID]?.count == 1,
+                      let current = restoreSpaceAccess.windowMetadata(owner.pid, candidate.windowID),
+                      current.windowID == candidate.windowID, current.processIdentifier == owner.pid,
+                      current.layer == 0, !current.isOnScreen,
+                      current.bounds.origin.x.isFinite, current.bounds.origin.y.isFinite,
+                      current.bounds.size.width.isFinite, current.bounds.size.height.isFinite,
+                      current.bounds.size.width > 0, current.bounds.size.height > 0,
+                      let spaces = restoreSpaceAccess.membership(current.windowID), spaces.count == 1,
+                      let space = spaces.first, inventory.ordinarySpaceIDs.contains(space),
+                      !activeSpaces.contains(space) else {
+                    return nil
+                }
+                return current
+            }
+            let targets = owner.documentURLs.compactMap {
+                WindowOpenTargetValidator().existingLocalTarget(url: $0)
+            }
+            for window in eligible {
+                guard window.title?.nonEmptyValue != nil || eligible.count == 1,
+                      let display = displayResolver.resolveDisplay(for: window.bounds, in: displayState) else {
+                    continue
+                }
+                let signature = WindowSignature(
+                    bundleIdentifier: owner.bundleIdentifier,
+                    owningPid: owner.pid,
+                    windowTitle: window.title,
+                    role: "AXWindow",
+                    subrole: nil,
+                    capturedFrame: CGRectCodable(window.bounds),
+                    cgWindowID: window.windowID,
+                    source: .coreGraphics
+                )
+                records.append(WindowRecord(
+                    bundleIdentifier: owner.bundleIdentifier,
+                    pidAtCapture: owner.pid,
+                    windowTitle: window.title,
+                    role: "AXWindow",
+                    subrole: nil,
+                    frame: CGRectCodable(window.bounds),
+                    displayID: display.id,
+                    normalizedFrame: displayResolver.normalizedFrame(for: window.bounds, in: display),
+                    zOrderHint: window.zOrderHint,
+                    isMinimized: false,
+                    isFullscreen: false,
+                    isVisible: false,
+                    captureSignature: signature,
+                    openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: targets)
+                ))
+            }
+        }
+        return records
     }
 
     private struct CapturedWindowState {
@@ -436,6 +519,20 @@ struct SnapshotWindowOpeningConfigurationMerger {
             previousIndexByCapturedIndex: &previousIndexByCapturedIndex,
             key: descriptiveWindowKey
         )
+        matchUniqueWindows(
+            previousWindows: previousWindows,
+            capturedWindows: capturedWindows,
+            unmatchedPreviousIndices: &unmatchedPreviousIndices,
+            unmatchedCapturedIndices: &unmatchedCapturedIndices,
+            previousIndexByCapturedIndex: &previousIndexByCapturedIndex,
+            key: windowTitleKey,
+            canMatch: { previous, captured in
+                previous.captureSignature.source == .coreGraphics &&
+                    previous.role == "AXWindow" && previous.subrole == nil &&
+                    captured.captureSignature.source == .accessibility &&
+                    captured.subrole == "AXStandardWindow"
+            }
+        )
         matchSingletonApplications(
             previousWindows: previousWindows,
             capturedWindows: capturedWindows,
@@ -467,7 +564,8 @@ struct SnapshotWindowOpeningConfigurationMerger {
         unmatchedPreviousIndices: inout Set<Int>,
         unmatchedCapturedIndices: inout Set<Int>,
         previousIndexByCapturedIndex: inout [Int: Int],
-        key: (WindowRecord) -> Key?
+        key: (WindowRecord) -> Key?,
+        canMatch: (WindowRecord, WindowRecord) -> Bool = { _, _ in true }
     ) {
         let previousGroups = Dictionary(grouping: unmatchedPreviousIndices) {
             key(previousWindows[$0])
@@ -482,7 +580,8 @@ struct SnapshotWindowOpeningConfigurationMerger {
                   let capturedIndices = capturedGroups[matchKey],
                   capturedIndices.count == 1,
                   let previousIndex = previousIndices.first,
-                  let capturedIndex = capturedIndices.first else {
+                  let capturedIndex = capturedIndices.first,
+                  canMatch(previousWindows[previousIndex], capturedWindows[capturedIndex]) else {
                 continue
             }
 
@@ -549,6 +648,18 @@ struct SnapshotWindowOpeningConfigurationMerger {
         )
     }
 
+    private func windowTitleKey(_ window: WindowRecord) -> WindowTitleKey? {
+        guard let title = window.windowTitle?.nonEmptyValue else {
+            return nil
+        }
+
+        return WindowTitleKey(
+            bundleIdentifier: window.bundleIdentifier,
+            title: title,
+            role: window.role
+        )
+    }
+
     private struct ProcessWindowKey: Hashable {
         let bundleIdentifier: String
         let owningPid: Int32
@@ -560,5 +671,11 @@ struct SnapshotWindowOpeningConfigurationMerger {
         let title: String
         let role: String
         let subrole: String?
+    }
+
+    private struct WindowTitleKey: Hashable {
+        let bundleIdentifier: String
+        let title: String
+        let role: String
     }
 }

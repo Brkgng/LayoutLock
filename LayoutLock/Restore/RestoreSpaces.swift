@@ -14,6 +14,7 @@ struct RestoreSpaceAccess {
     var membership: (CGWindowID) -> Set<UInt64>?
     var submitMove: (CGWindowID, UInt64) async -> Bool
     var applicationWindowIDs: (pid_t) -> [CGWindowID]? = { _ in nil }
+    var windowMetadata: (pid_t, CGWindowID) -> CGWindowMetadata? = { _, _ in nil }
 
     static let unavailable = Self(inventory: { _ in nil }, membership: { _ in nil }, submitMove: { _, _ in false })
 
@@ -24,8 +25,29 @@ struct RestoreSpaceAccess {
         submitMove: { windowID, spaceID in
             await MainActor.run { NativeRestoreSpaces.shared?.submit(windowID: windowID, spaceID: spaceID) ?? false }
         },
-        applicationWindowIDs: { CGWindowMetadataReader().readWindowIDs(processIdentifier: $0) }
+        applicationWindowIDs: { CGWindowMetadataReader().readWindowIDs(processIdentifier: $0) },
+        windowMetadata: { pid, windowID in
+            CGWindowMetadataReader().readWindowMetadata(processIdentifiers: [pid])[pid]?
+                .first { $0.windowID == windowID }
+        }
     )
+}
+
+struct RestoreWindowInspection {
+    let pid: pid_t
+    let windowID: CGWindowID
+    let sourceSpaceID: UInt64
+    let originalFrame: CGRect
+    let destinationSpaceID: UInt64
+
+    static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) <= 2 && abs(lhs.origin.y - rhs.origin.y) <= 2 &&
+            abs(lhs.width - rhs.width) <= 2 && abs(lhs.height - rhs.height) <= 2
+    }
+
+    func matchesOriginalFrame(_ frame: CGRect) -> Bool {
+        Self.framesMatch(originalFrame, frame)
+    }
 }
 
 enum RestoreSpaceOutcome: String {
@@ -43,7 +65,8 @@ struct RestoreSpaceCoordinator {
         windowID: CGWindowID?,
         displayID: UInt32?,
         inventory: RestoreSpaceInventory?,
-        ordinaryWindow: Bool
+        ordinaryWindow: Bool,
+        expectedSourceSpace: UInt64? = nil
     ) async -> RestoreSpaceOutcome {
         guard ordinaryWindow else { return .ineligible }
         guard let windowID else { return .identityUnconfirmed }
@@ -56,6 +79,7 @@ struct RestoreSpaceCoordinator {
         else {
             return .ineligible
         }
+        if let expectedSourceSpace, source != expectedSourceSpace { return .ineligible }
         guard destinationsAreUnchanged(inventory) else { return .unconfirmed }
         if source == destination { return .alreadyVisible }
         guard !Task.isCancelled, await access.submitMove(windowID, destination) else { return .unconfirmed }
@@ -66,6 +90,109 @@ struct RestoreSpaceCoordinator {
             if attempt < 39 { await sleeper() }
         }
         return .unconfirmed
+    }
+
+    func inspection(
+        for candidate: CGWindowMetadata,
+        pid: pid_t,
+        displayID: UInt32?,
+        inventory: RestoreSpaceInventory
+    ) -> RestoreWindowInspection? {
+        guard candidate.processIdentifier == pid,
+            candidate.layer == 0, candidate.bounds.width > 0, candidate.bounds.height > 0,
+            candidate.bounds.origin.x.isFinite, candidate.bounds.origin.y.isFinite,
+            candidate.bounds.width.isFinite, candidate.bounds.height.isFinite,
+            let window = freshWindow(windowID: candidate.windowID, pid: pid),
+            RestoreWindowInspection.framesMatch(candidate.bounds, window.bounds),
+            let displayID, let destination = inventory.activeByDisplay[displayID],
+            let membership = access.membership(window.windowID), membership.count == 1,
+            let source = membership.first, source != destination,
+            inspectionSpacesAreCurrent(source: source, destination: destination, inventory: inventory)
+        else { return nil }
+        return RestoreWindowInspection(pid: pid, windowID: window.windowID,
+            sourceSpaceID: source, originalFrame: window.bounds, destinationSpaceID: destination)
+    }
+
+    func settledWindow(
+        windowID: CGWindowID,
+        pid: pid_t,
+        inSpace spaceID: UInt64,
+        inventory: RestoreSpaceInventory
+    ) async -> CGWindowMetadata? {
+        var stableFrame: CGRect?
+        var stableObservations = 0
+        for attempt in 0..<40 {
+            guard !Task.isCancelled,
+                inspectionSpacesAreCurrent(source: spaceID, destination: spaceID, inventory: inventory),
+                access.membership(windowID) == [spaceID],
+                let window = freshWindow(windowID: windowID, pid: pid)
+            else { return nil }
+            if let stableFrame, RestoreWindowInspection.framesMatch(stableFrame, window.bounds) {
+                stableObservations += 1
+            } else {
+                stableFrame = window.bounds
+                stableObservations = 1
+            }
+            // Allow the native move to finish adjusting bounds before treating drift as user input.
+            if attempt >= 10, stableObservations >= 7 { return window }
+            if attempt < 39 { await sleeper() }
+        }
+        return nil
+    }
+
+    func returnWindow(
+        _ inspection: RestoreWindowInspection,
+        expectedFrame: CGRect,
+        inventory: RestoreSpaceInventory
+    ) async -> Bool {
+        guard !Task.isCancelled,
+            inspectionSpacesAreCurrent(source: inspection.sourceSpaceID,
+                destination: inspection.destinationSpaceID, inventory: inventory),
+            let window = freshWindow(windowID: inspection.windowID, pid: inspection.pid),
+            let membership = access.membership(inspection.windowID)
+        else { return false }
+        if membership == [inspection.sourceSpaceID] {
+            return inspection.matchesOriginalFrame(window.bounds)
+        }
+        guard membership == [inspection.destinationSpaceID],
+            RestoreWindowInspection.framesMatch(window.bounds, expectedFrame),
+            await access.submitMove(inspection.windowID, inspection.sourceSpaceID)
+        else { return false }
+        for attempt in 0..<40 {
+            guard !Task.isCancelled,
+                inspectionSpacesAreCurrent(source: inspection.sourceSpaceID,
+                    destination: inspection.destinationSpaceID, inventory: inventory),
+                freshWindow(windowID: inspection.windowID, pid: inspection.pid) != nil,
+                let spaces = access.membership(inspection.windowID)
+            else { return false }
+            if spaces == [inspection.sourceSpaceID] { return true }
+            guard spaces == [inspection.destinationSpaceID] else { return false }
+            if attempt < 39 { await sleeper() }
+        }
+        return false
+    }
+
+    private func freshWindow(windowID: CGWindowID, pid: pid_t) -> CGWindowMetadata? {
+        guard pid > 0, windowID != 0,
+            let window = access.windowMetadata(pid, windowID),
+            window.processIdentifier == pid, window.windowID == windowID, window.layer == 0,
+            window.bounds.width > 0, window.bounds.height > 0,
+            window.bounds.origin.x.isFinite, window.bounds.origin.y.isFinite,
+            window.bounds.width.isFinite, window.bounds.height.isFinite
+        else { return nil }
+        return window
+    }
+
+    private func inspectionSpacesAreCurrent(
+        source: UInt64,
+        destination: UInt64,
+        inventory: RestoreSpaceInventory
+    ) -> Bool {
+        guard inventory.ordinarySpaceIDs.contains(source), inventory.ordinarySpaceIDs.contains(destination),
+            let current = access.inventory(Array(inventory.activeByDisplay.keys)),
+            current.activeByDisplay == inventory.activeByDisplay
+        else { return false }
+        return current.ordinarySpaceIDs.contains(source) && current.ordinarySpaceIDs.contains(destination)
     }
 
     func destinationsAreUnchanged(_ inventory: RestoreSpaceInventory) -> Bool {
@@ -106,42 +233,63 @@ struct RestoreCGWindowRecovery {
     let ordinarySpaceIDs: Set<UInt64>
     let membership: (CGWindowID) -> Set<UInt64>?
 
-    func candidate(for saved: WindowRecord, savedWindows: [WindowRecord], applications: [UnexposedApplicationWindows])
+    static func requiresLocalTargetInspection(for saved: WindowRecord) -> Bool {
+        let configuration = saved.openingConfiguration
+        return !saved.isMinimized && !configuration.isManual && !configuration.effectiveTargets.isEmpty &&
+            configuration.effectiveTargets.allSatisfy { $0.kind != .webURL && $0.url.isFileURL } &&
+            !BrowserAutomationBrowser.allCases.contains { $0.bundleIdentifier == saved.bundleIdentifier }
+    }
+
+    func candidate(for saved: WindowRecord, savedWindows: [WindowRecord], applications: [UnexposedApplicationWindows],
+        excludingWindowIDs: Set<CGWindowID> = [])
         -> (pid: pid_t, window: CGWindowMetadata)?
     {
         let targets = saved.openingConfiguration.effectiveTargets
         let automaticNonbrowserWebHint =
             !saved.openingConfiguration.isManual && targets.allSatisfy { $0.kind == .webURL }
             && !BrowserAutomationBrowser.allCases.contains { $0.bundleIdentifier == saved.bundleIdentifier }
-        // Explicit targets and browser opens can intentionally create a different window.
-        guard targets.isEmpty || automaticNonbrowserWebHint,
-            !saved.isFullscreen, saved.role == "AXWindow", saved.subrole == "AXStandardWindow",
-            savedWindows.filter({ $0.bundleIdentifier == saved.bundleIdentifier }).count == 1
+        // Automatic local resources must be verified after moving the inspection candidate.
+        // Manual targets and browser opens can intentionally create a different window.
+        guard targets.isEmpty || automaticNonbrowserWebHint || Self.requiresLocalTargetInspection(for: saved),
+            !saved.isFullscreen, saved.role == "AXWindow",
+            saved.subrole == "AXStandardWindow" || saved.captureSignature.source == .coreGraphics
         else { return nil }
+        let savedForBundle = savedWindows.filter { $0.bundleIdentifier == saved.bundleIdentifier }
         let owners = applications.filter { $0.bundleIdentifier == saved.bundleIdentifier }
-        guard owners.count == 1, let owner = owners.first else { return nil }
-        let eligible = owner.windows.filter {
-            guard $0.processIdentifier == owner.pid, $0.windowID != 0, $0.layer == 0,
-                $0.bounds.origin.x.isFinite, $0.bounds.origin.y.isFinite,
-                $0.bounds.size.width.isFinite, $0.bounds.size.height.isFinite,
-                $0.bounds.size.width > 0, $0.bounds.size.height > 0,
-                let spaces = membership($0.windowID), spaces.count == 1,
+        let folders = Set(targets.filter { $0.kind == .folder }.map { $0.url.standardizedFileURL })
+        let eligible = owners.flatMap { owner in owner.windows.compactMap { window -> (pid: pid_t, window: CGWindowMetadata)? in
+            let ownerFolders = Set(owner.documentURLs.filter { $0.isFileURL && $0.hasDirectoryPath }.map(\.standardizedFileURL))
+            guard folders.isEmpty || ownerFolders.isEmpty || !folders.isDisjoint(with: ownerFolders) else { return nil }
+            guard window.processIdentifier == owner.pid, window.windowID != 0, window.layer == 0,
+                !excludingWindowIDs.contains(window.windowID),
+                window.bounds.origin.x.isFinite, window.bounds.origin.y.isFinite,
+                window.bounds.width.isFinite, window.bounds.height.isFinite,
+                window.bounds.width > 0, window.bounds.height > 0,
+                let spaces = membership(window.windowID), spaces.count == 1,
                 let space = spaces.first, ordinarySpaceIDs.contains(space)
-            else { return false }
-            return true
+            else { return nil }
+            return (owner.pid, window)
+        } }
+        if let title = saved.windowTitle?.nonEmptyValue,
+            savedForBundle.count(where: { $0.windowTitle?.nonEmptyValue == title }) == 1 {
+            let matching = eligible.filter { $0.window.title?.nonEmptyValue == title }
+            if matching.count == 1 { return matching.first }
         }
-        let titleMatches = eligible.filter {
-            guard let title = saved.windowTitle?.nonEmptyValue else { return false }
-            return $0.title?.nonEmptyValue == title
+        // A process resource (for example a project folder) is useful only when it
+        // identifies one saved window and one current owner/window unambiguously.
+        if !folders.isEmpty {
+            let matchingSaved = savedForBundle.filter { window in
+                window.openingConfiguration.effectiveTargets.contains {
+                    $0.kind == .folder && folders.contains($0.url.standardizedFileURL)
+                }
+            }
+            let matchingOwners = Set(owners.filter { owner in
+                owner.documentURLs.contains { $0.isFileURL && folders.contains($0.standardizedFileURL) }
+            }.map(\.pid))
+            let matching = eligible.filter { matchingOwners.contains($0.pid) }
+            if matchingSaved.count == 1, matching.count == 1 { return matching.first }
         }
-        let selected = titleMatches.count == 1 ? titleMatches.first : (eligible.count == 1 ? eligible.first : nil)
-        let titledCount = eligible.count { $0.title?.nonEmptyValue != nil }
-        let screenCaptureAllowed = CGPreflightScreenCaptureAccess()
-        AppLogger.restore.info(
-            "Space recovery candidates bundle=\(saved.bundleIdentifier, privacy: .public) pid=\(owner.pid) screenCaptureAllowed=\(screenCaptureAllowed) rawCount=\(owner.windows.count) eligibleCount=\(eligible.count) titledCount=\(titledCount) exactTitleCount=\(titleMatches.count) selectedWindowID=\(selected?.windowID ?? 0)."
-        )
-        guard let selected else { return nil }
-        return (owner.pid, selected)
+        return savedForBundle.count == 1 && eligible.count == 1 ? eligible.first : nil
     }
 }
 

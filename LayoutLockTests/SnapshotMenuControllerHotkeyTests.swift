@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import Combine
 import Foundation
 import XCTest
 @testable import LayoutLock
@@ -828,6 +829,233 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "\"Coding\" restored")
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, false)
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
+    }
+
+    func testSlowRestoreHidesLoadingOverlayWhileBusyStatusPersistsUntilCompletion() async throws {
+        let snapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let uiSleeper = ControlledMenuUISleeper()
+        let restoreGate = ControlledMenuUISleeper()
+        defer {
+            uiSleeper.resumeAll()
+            restoreGate.resumeAll()
+        }
+        let overlayDelayStarted = expectation(description: "overlay delay started")
+        let restoreStarted = expectation(description: "restore is waiting for verification")
+        let overlayHidden = expectation(description: "loading overlay hidden")
+        let statusDelayStarted = expectation(description: "completed status can expire")
+        uiSleeper.didSleep = { interval in
+            if interval == 15 { overlayDelayStarted.fulfill() }
+            if interval == 5 { statusDelayStarted.fulfill() }
+        }
+        restoreGate.didSleep = { _ in restoreStarted.fulfill() }
+        overlayPresenter.didHide = { overlayHidden.fulfill() }
+        let controller = try makeWaitingRestoreController(
+            store: store,
+            snapshotID: snapshotID,
+            overlayPresenter: overlayPresenter,
+            uiSleep: uiSleeper.sleep,
+            beforeApply: { await restoreGate.sleep(0) }
+        )
+
+        let task = controller.restoreSnapshot(id: snapshotID)
+        await fulfillment(of: [overlayDelayStarted, restoreStarted], timeout: 1)
+        XCTAssertEqual(controller.status?.message, "Restoring...")
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+
+        uiSleeper.resumeFirst(interval: 15)
+        await fulfillment(of: [overlayHidden], timeout: 1)
+
+        XCTAssertTrue(controller.isOperating)
+        XCTAssertEqual(controller.status?.message, "Restoring in the background")
+        XCTAssertFalse(uiSleeper.intervals.contains(5))
+        XCTAssertTrue(overlayPresenter.restoreCompletions.isEmpty)
+        XCTAssertNil(controller.restoreCompletionID)
+        XCTAssertNil(controller.restoreSnapshot(id: snapshotID))
+        XCTAssertNil(controller.captureCurrentSnapshot(named: "Second layout"))
+        XCTAssertEqual(controller.status?.message, "Restoring in the background")
+
+        restoreGate.resumeFirst(interval: 0)
+        await task?.value
+        await fulfillment(of: [statusDelayStarted], timeout: 1)
+
+        XCTAssertFalse(controller.isOperating)
+        XCTAssertEqual(overlayPresenter.hideCount, 1)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.count, 1)
+        XCTAssertNotNil(controller.restoreCompletionID)
+        XCTAssertTrue(controller.status?.message.hasPrefix("Restored \"Coding\": 1 window restored") == true)
+
+        let statusCleared = expectation(description: "completed status cleared")
+        let statusObserver = controller.$status.sink { status in
+            if status == nil { statusCleared.fulfill() }
+        }
+        defer { statusObserver.cancel() }
+        uiSleeper.resumeFirst(interval: 5)
+        await fulfillment(of: [statusCleared], timeout: 1)
+    }
+
+    func testFastRestoreCancelsLoadingDelayBeforeCompletionAndNextOperation() async throws {
+        let fastSnapshotID = UUID()
+        let waitingSnapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: fastSnapshotID, name: "Fast"))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let uiSleeper = ControlledMenuUISleeper()
+        let restoreGate = ControlledMenuUISleeper()
+        defer {
+            uiSleeper.resumeAll()
+            restoreGate.resumeAll()
+        }
+        let firstOverlayDelayStarted = expectation(description: "first loading delay started")
+        let firstStatusDelayStarted = expectation(description: "first completed status delay started")
+        let firstOverlayDelayWoke = expectation(description: "cancelled loading delay woke")
+        let waitingRestoreStarted = expectation(description: "next restore started")
+        var overlayDelayCount = 0
+        var statusDelayCount = 0
+        uiSleeper.didSleep = { interval in
+            if interval == 15 {
+                overlayDelayCount += 1
+                if overlayDelayCount == 1 { firstOverlayDelayStarted.fulfill() }
+            }
+            if interval == 5 {
+                statusDelayCount += 1
+                if statusDelayCount == 1 { firstStatusDelayStarted.fulfill() }
+            }
+        }
+        uiSleeper.didWake = { interval, wasCancelled in
+            if interval == 15 {
+                XCTAssertTrue(wasCancelled)
+                firstOverlayDelayWoke.fulfill()
+            }
+        }
+        restoreGate.didSleep = { _ in waitingRestoreStarted.fulfill() }
+        let controller = try makeWaitingRestoreController(
+            store: store,
+            snapshotID: waitingSnapshotID,
+            overlayPresenter: overlayPresenter,
+            uiSleep: uiSleeper.sleep,
+            beforeApply: { await restoreGate.sleep(0) }
+        )
+
+        await controller.restoreSnapshot(id: fastSnapshotID)?.value
+        await fulfillment(of: [firstOverlayDelayStarted, firstStatusDelayStarted], timeout: 1)
+
+        XCTAssertEqual(overlayPresenter.restoreCompletions.count, 1)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+        let secondTask = controller.restoreSnapshot(id: waitingSnapshotID)
+        await fulfillment(of: [waitingRestoreStarted], timeout: 1)
+        uiSleeper.resumeFirst(interval: 15)
+        uiSleeper.resumeFirst(interval: 5)
+        await fulfillment(of: [firstOverlayDelayWoke], timeout: 1)
+        await Task.yield()
+
+        XCTAssertEqual(overlayPresenter.shownKinds, [.restore, .restore])
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+        XCTAssertEqual(overlayPresenter.restoreCompletions.count, 1)
+        XCTAssertEqual(controller.status?.message, "Restoring...")
+        XCTAssertTrue(controller.isOperating)
+
+        uiSleeper.didWake = nil
+        restoreGate.resumeFirst(interval: 0)
+        await secondTask?.value
+        XCTAssertEqual(overlayPresenter.restoreCompletions.count, 2)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+    }
+
+    func testFailedRestoreCancelsLoadingDelayAndKeepsFailureStatus() async throws {
+        let snapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let uiSleeper = ControlledMenuUISleeper()
+        defer { uiSleeper.resumeAll() }
+        let overlayDelayStarted = expectation(description: "loading delay started")
+        let overlayDelayWoke = expectation(description: "cancelled loading delay woke")
+        uiSleeper.didSleep = { interval in
+            if interval == 15 { overlayDelayStarted.fulfill() }
+        }
+        uiSleeper.didWake = { interval, wasCancelled in
+            if interval == 15 {
+                XCTAssertTrue(wasCancelled)
+                overlayDelayWoke.fulfill()
+            }
+        }
+        let controller = makeRestoreController(
+            store: store,
+            isTrusted: false,
+            overlayPresenter: overlayPresenter,
+            uiSleep: uiSleeper.sleep
+        )
+
+        await controller.restoreSnapshot(id: snapshotID)?.value
+        await fulfillment(of: [overlayDelayStarted], timeout: 1)
+        uiSleeper.resumeFirst(interval: 15)
+        await fulfillment(of: [overlayDelayWoke], timeout: 1)
+        await Task.yield()
+
+        XCTAssertFalse(controller.isOperating)
+        XCTAssertEqual(controller.status?.message, "Accessibility access is required to restore layouts.")
+        XCTAssertEqual(controller.status?.isError, true)
+        XCTAssertEqual(overlayPresenter.hideCount, 1)
+        XCTAssertTrue(overlayPresenter.restoreCompletions.isEmpty)
+        XCTAssertNil(controller.restoreCompletionID)
+    }
+
+    func testCancelledRestoreCancelsLoadingDelayBeforeEngineSettles() async throws {
+        let snapshotID = UUID()
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let uiSleeper = ControlledMenuUISleeper()
+        let restoreGate = ControlledMenuUISleeper()
+        defer {
+            uiSleeper.resumeAll()
+            restoreGate.resumeAll()
+        }
+        let overlayDelayStarted = expectation(description: "loading delay started")
+        let restoreStarted = expectation(description: "restore started")
+        let overlayDelayWoke = expectation(description: "cancelled loading delay woke")
+        uiSleeper.didSleep = { interval in
+            if interval == 15 { overlayDelayStarted.fulfill() }
+        }
+        uiSleeper.didWake = { interval, wasCancelled in
+            if interval == 15 {
+                XCTAssertTrue(wasCancelled)
+                overlayDelayWoke.fulfill()
+            }
+        }
+        restoreGate.didSleep = { _ in restoreStarted.fulfill() }
+        let controller = try makeWaitingRestoreController(
+            store: store,
+            snapshotID: snapshotID,
+            overlayPresenter: overlayPresenter,
+            uiSleep: uiSleeper.sleep,
+            beforeApply: {
+                await restoreGate.sleep(0)
+                try Task.checkCancellation()
+            }
+        )
+
+        let task = controller.restoreSnapshot(id: snapshotID)
+        await fulfillment(of: [overlayDelayStarted, restoreStarted], timeout: 1)
+        task?.cancel()
+        uiSleeper.resumeFirst(interval: 15)
+        await fulfillment(of: [overlayDelayWoke], timeout: 1)
+        await Task.yield()
+
+        XCTAssertTrue(controller.isOperating)
+        XCTAssertEqual(overlayPresenter.hideCount, 0)
+        XCTAssertEqual(controller.status?.message, "Restoring...")
+
+        restoreGate.resumeFirst(interval: 0)
+        await task?.value
+
+        XCTAssertFalse(controller.isOperating)
+        XCTAssertEqual(controller.status?.message, "Restore cancelled.")
+        XCTAssertEqual(controller.status?.isError, false)
+        XCTAssertEqual(overlayPresenter.hideCount, 1)
+        XCTAssertTrue(overlayPresenter.restoreCompletions.isEmpty)
+        XCTAssertNil(controller.restoreCompletionID)
     }
 
     func testRestoreSnapshotCompletionIncludesDisplayFallbackCount() async throws {
@@ -1838,7 +2066,10 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         appNameResolver: @escaping SnapshotMenuController.AppNameResolver = { $0 },
         screenProvider: @escaping () -> [DisplayResolver.ScreenSnapshot] = { [] },
         discoveredApplicationsProvider: @escaping () throws -> [DiscoveredApplication] = { [] },
-        windowApplier: RestoreWindowApplying = RestoringWindowApplier()
+        windowApplier: RestoreWindowApplying = RestoringWindowApplier(),
+        uiSleep: @escaping @MainActor (TimeInterval) async throws -> Void = { interval in
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
     ) -> SnapshotMenuController {
         let trustChecker = AccessibilityTrustChecker { isTrusted }
         let restoreEngine = RestoreEngine(
@@ -1857,7 +2088,46 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             snapshotStore: store,
             restoreEngine: restoreEngine,
             appNameResolver: appNameResolver,
-            operationOverlayPresenter: overlayPresenter
+            operationOverlayPresenter: overlayPresenter,
+            uiSleep: uiSleep
+        )
+    }
+
+    private func makeWaitingRestoreController(
+        store: SnapshotStore,
+        snapshotID: UUID,
+        overlayPresenter: OperationOverlayPresenting,
+        uiSleep: @escaping @MainActor (TimeInterval) async throws -> Void,
+        beforeApply: @escaping @MainActor () async throws -> Void
+    ) throws -> SnapshotMenuController {
+        let display = makeDisplayRecord(id: 1)
+        let window = makeWindow(bundleIdentifier: "com.example.editor", displayID: 1)
+        try store.save(makeSnapshot(
+            id: snapshotID,
+            name: "Coding",
+            windows: [window],
+            displays: [display],
+            primaryDisplayID: 1
+        ))
+        return makeRestoreController(
+            store: store,
+            overlayPresenter: overlayPresenter,
+            screenProvider: { [self.makeScreenSnapshot(from: display)] },
+            discoveredApplicationsProvider: {
+                [DiscoveredApplication(
+                    bundleIdentifier: window.bundleIdentifier,
+                    pid: window.pidAtCapture,
+                    localizedName: "Editor",
+                    windows: [makeDiscoveredWindow(
+                        title: window.windowTitle,
+                        role: window.role,
+                        subrole: window.subrole,
+                        frame: window.frame.cgRect
+                    )]
+                )]
+            },
+            windowApplier: RestoringWindowApplier(beforeApply: beforeApply),
+            uiSleep: uiSleep
         )
     }
 
@@ -1910,6 +2180,7 @@ private final class RecordingOperationOverlayPresenter: OperationOverlayPresenti
     private(set) var restoreCompletionSummaries: [String] = []
     private(set) var restoreCompletionDetails: [String?] = []
     private(set) var hideCount = 0
+    var didHide: (() -> Void)?
 
     func showOverlay(kind: OperationOverlayKind) async {
         shownKinds.append(kind)
@@ -1927,6 +2198,40 @@ private final class RecordingOperationOverlayPresenter: OperationOverlayPresenti
 
     func hideOverlay() {
         hideCount += 1
+        didHide?()
+    }
+}
+
+@MainActor
+private final class ControlledMenuUISleeper {
+    private(set) var intervals: [TimeInterval] = []
+    var didSleep: ((TimeInterval) -> Void)?
+    var didWake: ((TimeInterval, Bool) -> Void)?
+    private var pending: [(interval: TimeInterval, continuation: CheckedContinuation<Void, Never>)] = []
+
+    func sleep(_ interval: TimeInterval) async {
+        intervals.append(interval)
+        await withCheckedContinuation { continuation in
+            pending.append((interval, continuation))
+            didSleep?(interval)
+        }
+        didWake?(interval, Task.isCancelled)
+    }
+
+    func resumeFirst(interval: TimeInterval) {
+        guard let index = pending.firstIndex(where: { $0.interval == interval }) else {
+            XCTFail("No pending UI delay for \(interval) seconds.")
+            return
+        }
+        pending.remove(at: index).continuation.resume()
+    }
+
+    func resumeAll() {
+        let remaining = pending
+        pending = []
+        for request in remaining {
+            request.continuation.resume()
+        }
     }
 }
 
@@ -1956,8 +2261,8 @@ private final class SuspendingOperationOverlayPresenter: OperationOverlayPresent
 }
 
 private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
-    func requestLaunch(bundleIdentifier _: String) -> Bool {
-        false
+    func requestLaunch(bundleIdentifier _: String) async -> pid_t? {
+        nil
     }
 }
 
@@ -1968,12 +2273,19 @@ private struct NoOpRestoreApplicationActivator: RestoreApplicationActivating {
 }
 
 private final class RestoringWindowApplier: RestoreWindowApplying {
+    private let beforeApply: @MainActor () async throws -> Void
+
+    init(beforeApply: @escaping @MainActor () async throws -> Void = {}) {
+        self.beforeApply = beforeApply
+    }
+
     func apply(
         savedWindow _: WindowRecord,
         targetFrame _: CGRect,
         to _: DiscoveredWindow
     ) async throws -> RestoreWindowApplyResult {
-        .restored()
+        try await beforeApply()
+        return .restored()
     }
 
     func raise(_ discoveredWindow: DiscoveredWindow) -> Bool {

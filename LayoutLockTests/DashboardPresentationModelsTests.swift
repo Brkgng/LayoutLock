@@ -410,13 +410,12 @@ final class DashboardPresentationModelsTests: XCTestCase {
         }
     }
 
-    func testOpeningTargetCapabilitiesKeepUnsupportedAppOnlyWindowsUneditable() {
+    func testOpeningTargetCapabilitiesKeepKnownAppOnlyWindowsUneditable() {
         let appOnlyBundleIdentifiers = [
             "com.openai.chat",
             "com.openai.codex",
             "com.toggl.daneel",
-            "net.whatsapp.WhatsApp",
-            "com.example.unknown"
+            "net.whatsapp.WhatsApp"
         ]
 
         for bundleIdentifier in appOnlyBundleIdentifiers {
@@ -429,7 +428,19 @@ final class DashboardPresentationModelsTests: XCTestCase {
         }
     }
 
-    func testOpeningTargetCapabilitiesUseOnlyAutomaticKindsForUnknownApps() throws {
+    func testOpeningTargetCapabilitiesAllowFilesAndFoldersForUnknownAppsWithoutTargets() {
+        let capabilities = DashboardOpeningTargetCapabilities.resolve(
+            for: makeWindow(bundleIdentifier: "com.example.unknown")
+        )
+
+        XCTAssertEqual(capabilities.supportedKinds, [.file, .folder])
+        XCTAssertEqual(capabilities.localTargetSelection, .filesAndFolders)
+        XCTAssertFalse(capabilities.supportsWebURLs)
+        XCTAssertFalse(capabilities.hasExistingTargets)
+        XCTAssertTrue(capabilities.showsEditor)
+    }
+
+    func testOpeningTargetCapabilitiesPreserveAutomaticAndManualKindsForUnknownApps() throws {
         let fileTarget = WindowOpenTarget(
             kind: .file,
             url: URL(fileURLWithPath: "/tmp/Document.txt")
@@ -448,7 +459,7 @@ final class DashboardPresentationModelsTests: XCTestCase {
         let manualOnlyWindow = makeWindow(
             bundleIdentifier: "com.example.manual"
         ).withOpeningConfiguration(
-            WindowOpeningConfiguration(manualTargets: [fileTarget])
+            WindowOpeningConfiguration(manualTargets: [fileTarget, webTarget])
         )
 
         let automaticCapabilities = DashboardOpeningTargetCapabilities.resolve(
@@ -458,11 +469,15 @@ final class DashboardPresentationModelsTests: XCTestCase {
             for: manualOnlyWindow
         )
 
-        XCTAssertEqual(automaticCapabilities.supportedKinds, [.file, .webURL])
-        XCTAssertEqual(automaticCapabilities.localTargetSelection, .files)
+        XCTAssertEqual(automaticCapabilities.supportedKinds, [.file, .folder, .webURL])
+        XCTAssertEqual(automaticCapabilities.localTargetSelection, .filesAndFolders)
         XCTAssertTrue(automaticCapabilities.supportsWebURLs)
+        XCTAssertTrue(automaticCapabilities.hasExistingTargets)
         XCTAssertTrue(automaticCapabilities.showsEditor)
-        XCTAssertTrue(manualCapabilities.supportedKinds.isEmpty)
+        XCTAssertEqual(manualCapabilities.supportedKinds, [.file, .folder, .webURL])
+        XCTAssertEqual(manualCapabilities.localTargetSelection, .filesAndFolders)
+        XCTAssertTrue(manualCapabilities.supportsWebURLs)
+        XCTAssertTrue(manualCapabilities.hasExistingTargets)
         XCTAssertTrue(manualCapabilities.showsEditor)
     }
 

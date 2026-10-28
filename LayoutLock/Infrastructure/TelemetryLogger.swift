@@ -291,6 +291,7 @@ struct TelemetryLogEvent: Codable {
     let fullscreenWindowCount: Int?
     let visibleWindowCount: Int?
     let errorReason: String?
+    let timingsMilliseconds: [String: Double]?
     let details: [TelemetryLogDetail]
 
     init(
@@ -309,6 +310,7 @@ struct TelemetryLogEvent: Codable {
         fullscreenWindowCount: Int? = nil,
         visibleWindowCount: Int? = nil,
         errorReason: String? = nil,
+        timingsMilliseconds: [String: Double]? = nil,
         details: [TelemetryLogDetail] = []
     ) {
         self.id = id
@@ -326,6 +328,7 @@ struct TelemetryLogEvent: Codable {
         self.fullscreenWindowCount = fullscreenWindowCount
         self.visibleWindowCount = visibleWindowCount
         self.errorReason = errorReason
+        self.timingsMilliseconds = timingsMilliseconds
         self.details = details
     }
 }

@@ -475,6 +475,12 @@ private struct DashboardDisplayWindowRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+
+                if window.openingConfiguration.effectiveTargets.isEmpty {
+                    Text("Window position only")
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
+                }
             }
 
             Spacer(minLength: 0)
@@ -605,6 +611,12 @@ private struct DashboardUnassignedWindowRow: View {
                         .foregroundStyle(DashboardVisualStyle.supportingText)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                }
+
+                if window.openingConfiguration.effectiveTargets.isEmpty {
+                    Text("Window position only")
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
                 }
             }
 

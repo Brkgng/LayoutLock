@@ -51,6 +51,23 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertEqual(events.map(\.name), ["capture.completed", "restore.completed"])
     }
 
+    func testRestoreTimingsRoundTripAlongsideEventsWithoutTimings() throws {
+        let logURL = temporaryDirectoryURL.appendingPathComponent("events.log")
+        let logger = TelemetryLogger(eventsLogURL: logURL)
+        let snapshotID = UUID()
+        logger.log(TelemetryLogEvent(name: "restore.started", snapshotID: snapshotID))
+        let timings = ["discovery": 125.5, "readiness": 15_000.0, "total": 15_250.25]
+
+        logger.log(TelemetryLogEvent(name: "restore.timing", snapshotID: snapshotID,
+            timingsMilliseconds: timings))
+
+        let events = try readEvents(from: logURL)
+        XCTAssertEqual(events.map(\.name), ["restore.started", "restore.timing"])
+        XCTAssertEqual(events.map(\.snapshotID), [snapshotID, snapshotID])
+        XCTAssertNil(events.first?.timingsMilliseconds)
+        XCTAssertEqual(events.last?.timingsMilliseconds, timings)
+    }
+
     func testRestoreEventOmitsSnapshotNamesAndWindowTitlesFromEncodedJSON() throws {
         let snapshot = makeSnapshot(
             name: "Secret Snapshot Name",

@@ -345,8 +345,8 @@ private final class MonetizationHotkeyRegistrar: HotkeyRegistering {
 }
 
 private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
-    func requestLaunch(bundleIdentifier _: String) -> Bool {
-        false
+    func requestLaunch(bundleIdentifier _: String) async -> pid_t? {
+        nil
     }
 }
 

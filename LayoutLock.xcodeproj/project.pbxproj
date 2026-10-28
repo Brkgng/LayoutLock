@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */; };
+		F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */; };
+		CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */; };
 		AC0130000000000000000004 /* RestoreSpacesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000003 /* RestoreSpacesTests.swift */; };
 		AC0130000000000000000002 /* RestoreSpaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000001 /* RestoreSpaces.swift */; };
 		A00000000000000000000002 /* LayoutLockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* LayoutLockApp.swift */; };
@@ -135,6 +138,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectOpeningTests.swift; sourceTree = "<group>"; };
+		060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolverTests.swift; sourceTree = "<group>"; };
+		57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolver.swift; sourceTree = "<group>"; };
 		AC0130000000000000000003 /* RestoreSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpacesTests.swift; sourceTree = "<group>"; };
 		AC0130000000000000000001 /* RestoreSpaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpaces.swift; sourceTree = "<group>"; };
 		A0000000000000000000000A /* LayoutLock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLock.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -336,6 +342,8 @@
 				A0000000000000000000007C /* TelemetryLoggerTests.swift */,
 				A00000000000000000000094 /* TestSupport.swift */,
 				A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */,
+				060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */,
+				04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */,
 			);
 			path = LayoutLockTests;
 			sourceTree = "<group>";
@@ -400,6 +408,7 @@
 				A00000000000000000000033 /* AXAttributeReader.swift */,
 				A00000000000000000000037 /* CGWindowMetadataReader.swift */,
 				A00000000000000000000035 /* WindowDiscoveryEngine.swift */,
+				57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */,
 			);
 			path = WindowDiscovery;
 			sourceTree = "<group>";
@@ -739,6 +748,7 @@
 				A00000000000000000000079 /* TelemetryLogger.swift in Sources */,
 				A00000000000000000000091 /* ValueExtensions.swift in Sources */,
 				A00000000000000000000034 /* WindowDiscoveryEngine.swift in Sources */,
+				CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -775,6 +785,8 @@
 				A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */,
 				A00000000000000000000093 /* TestSupport.swift in Sources */,
 				A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */,
+				F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */,
+				D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
