@@ -664,7 +664,7 @@ final class OperationOverlayWindow: NSPanel {
             .stationary,
             .ignoresCycle
         ]
-        contentView = OperationOverlayContentView(message: message, layoutName: layoutName, compact: compact)
+        contentView = OperationOverlayContentView(message: message, layoutName: layoutName, compact: compact, width: width)
     }
 
     override var canBecomeKey: Bool {
@@ -1379,12 +1379,12 @@ final class OperationOverlayContentView: NSView {
     private let layoutLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSImageView()
 
-    init(message: String, layoutName: String? = nil, compact: Bool = false) {
+    init(message: String, layoutName: String? = nil, compact: Bool = false, width: CGFloat) {
         label = NSTextField(wrappingLabelWithString: message)
         super.init(frame: .zero)
         layoutLabel.stringValue = layoutName ?? ""
         layoutLabel.isHidden = layoutName == nil
-        buildView(compact: compact)
+        buildView(compact: compact, width: width)
     }
 
     func updateMessage(_ message: String, layoutName: String) {
@@ -1398,7 +1398,7 @@ final class OperationOverlayContentView: NSView {
         nil
     }
 
-    private func buildView(compact: Bool) {
+    private func buildView(compact: Bool, width: CGFloat) {
         let backgroundEffectView = NSVisualEffectView()
         backgroundEffectView.material = .underWindowBackground
         backgroundEffectView.blendingMode = .behindWindow
@@ -1421,7 +1421,7 @@ final class OperationOverlayContentView: NSView {
         label.alignment = .center
         label.maximumNumberOfLines = 0
         label.lineBreakMode = .byWordWrapping
-        label.preferredMaxLayoutWidth = 412
+        label.preferredMaxLayoutWidth = width - 48
         label.setContentCompressionResistancePriority(.required, for: .vertical)
 
         layoutLabel.font = .systemFont(ofSize: 12)
@@ -1471,9 +1471,8 @@ final class OperationOverlayContentView: NSView {
         NSLayoutConstraint.activate([
             hudView.centerXAnchor.constraint(equalTo: centerXAnchor),
             hudView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            hudView.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
+            hudView.widthAnchor.constraint(equalToConstant: width),
             hudView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor),
-            hudView.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
             hudView.heightAnchor.constraint(greaterThanOrEqualToConstant: 112),
             progressIndicator.widthAnchor.constraint(equalToConstant: 24),
             progressIndicator.heightAnchor.constraint(equalToConstant: 24),

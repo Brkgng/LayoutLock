@@ -688,7 +688,7 @@ struct SettingsView: View {
         Form {
             Section {
                 Text(
-                    "LayoutLock stores diagnostic logs locally on this Mac to help troubleshoot layout capture and restore issues. Logs are never uploaded automatically. Entries older than 7 days are removed, and the log file is capped at 5 MiB."
+                    "LayoutLock stores diagnostic logs locally on this Mac to help troubleshoot layout capture and restore issues. Logs include saved file and folder paths and are never uploaded automatically. Entries older than 7 days are removed, and the log file is capped at 5 MiB."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

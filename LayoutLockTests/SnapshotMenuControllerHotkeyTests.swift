@@ -2837,9 +2837,9 @@ final class OperationCompletionToastTests: XCTestCase {
         }
     }
 
-    func testRestoreProgressKeepsEachPhaseReadableAboveLongLayoutNames() throws {
+    func testRestoreProgressKeepsEachPhaseReadableAboveShortAndLongLayoutNames() throws {
         let screen = try XCTUnwrap(NSScreen.main)
-        let name = String(repeating: "Layout – 2026 · Long saved layout name ", count: 20)
+        let names = ["Layout 1", String(repeating: "Layout – 2026 · Long saved layout name ", count: 20)]
         let phases: [RestoreProgress] = [.discovering, .recoveringWindows, .opening, .waiting, .positioning, .stacking]
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             for compact in [false, true] {
@@ -2847,7 +2847,7 @@ final class OperationCompletionToastTests: XCTestCase {
                 defer { window.close() }
                 window.appearance = NSAppearance(named: appearance)
                 let content = try XCTUnwrap(window.contentView as? OperationOverlayContentView)
-                for phase in phases {
+                for (phase, name) in names.flatMap({ name in phases.map { ($0, name) } }) {
                     content.updateMessage(phase.message, layoutName: name)
                     content.layoutSubtreeIfNeeded()
                     let labels = descendants(of: content).compactMap { $0 as? NSTextField }
@@ -2855,9 +2855,11 @@ final class OperationCompletionToastTests: XCTestCase {
                     let nameLabel = try XCTUnwrap(labels.first { $0.stringValue == name })
                     XCTAssertFalse(phaseLabel.hasAmbiguousLayout)
                     XCTAssertEqual(phaseLabel.lineBreakMode, .byWordWrapping)
-                    let requiredHeight = try XCTUnwrap(phaseLabel.cell).cellSize(forBounds: CGRect(
-                        x: 0, y: 0, width: phaseLabel.bounds.width, height: .greatestFiniteMagnitude
-                    )).height
+                    let requiredHeight = (phase.message as NSString).boundingRect(
+                        with: CGSize(width: phaseLabel.bounds.width, height: .greatestFiniteMagnitude),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        attributes: [.font: try XCTUnwrap(phaseLabel.font)]
+                    ).height
                     XCTAssertGreaterThanOrEqual(phaseLabel.bounds.height + 0.5, requiredHeight)
                     let phaseFrame = phaseLabel.convert(phaseLabel.bounds, to: content)
                     let nameFrame = nameLabel.convert(nameLabel.bounds, to: content)

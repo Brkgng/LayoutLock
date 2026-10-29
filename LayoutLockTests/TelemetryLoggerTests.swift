@@ -68,7 +68,7 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertEqual(events.last?.timingsMilliseconds, timings)
     }
 
-    func testRestoreEventOmitsSnapshotNamesAndWindowTitlesFromEncodedJSON() throws {
+    func testRestoreEventIncludesLocalPathsButOmitsSnapshotNamesWindowTitlesAndWebURLs() throws {
         let snapshot = makeSnapshot(
             name: "Secret Snapshot Name",
             windowTitle: "Secret Project Document"
@@ -148,8 +148,11 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertFalse(json.contains("Secret Fullscreen Tab"))
         XCTAssertFalse(json.contains("Secret Target Window"))
         XCTAssertFalse(json.contains("Secret Browser Window"))
-        XCTAssertFalse(json.contains("Secret Project.txt"))
-        XCTAssertFalse(json.contains("/Users/example"))
+        XCTAssertEqual(event.details.first(where: { $0.kind == "restoreTargetIssue" })?.targetPaths,
+            ["/Users/example/Secret Project.txt"])
+        XCTAssertEqual(event.details.first(where: { $0.kind == "restoreTargetIssue" })?.windowID,
+            result.targetIssues.first?.windowID)
+        XCTAssertNil(event.details.last(where: { $0.kind == "restoreTargetIssue" })?.targetPaths)
         XCTAssertFalse(json.contains("secret.example.com"))
         XCTAssertFalse(json.contains("/private"))
         XCTAssertTrue(json.contains("com.example.editor"))
@@ -319,7 +322,7 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertEqual(event.fullscreenWindowCount, 1)
         XCTAssertEqual(event.visibleWindowCount, 1)
         XCTAssertEqual(
-            event.details,
+            event.details.filter { $0.kind != "windowResources" },
             [
                 TelemetryLogDetail(
                     kind: "windowRejected",
@@ -329,6 +332,46 @@ final class TelemetryLoggerTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    func testCaptureAndRestoreLogsIncludeEffectiveLocalPathsForEachWindow() throws {
+        let filePath = "/Projects/First/Scene.ma"
+        let folderPath = "/Projects/First"
+        let manualPath = "/Projects/Second/Project.spp"
+        let snapshot = makeSnapshot(windows: [
+            makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(
+                automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: filePath)),
+                    WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: folderPath)),
+                    WindowOpenTarget(kind: .webURL, url: URL(string: "https://secret.example.com/private")!)
+                ]
+            )),
+            makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(
+                automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/Replaced.ma"))
+                ],
+                manualTargets: [WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: manualPath))]
+            )),
+            makeWindowRecord()
+        ])
+        let logURL = temporaryDirectoryURL.appendingPathComponent("events.log")
+        let logger = TelemetryLogger(eventsLogURL: logURL)
+        logger.log(.captureCompleted(snapshot: snapshot, discoveryDiagnostics: []))
+        logger.log(.restoreCompleted(snapshot: snapshot, result: RestoreResult(
+            restoredWindows: 3, skippedItems: [], downgradedItems: [], displayFallbacks: [])))
+
+        let events = try readEvents(from: logURL)
+        XCTAssertEqual(events.map(\.name), ["capture.completed", "restore.completed"])
+        for event in events {
+            let resources = event.details.filter { $0.kind == "windowResources" }
+            XCTAssertEqual(resources.map(\.windowID), snapshot.windows.map { Optional($0.id) })
+            XCTAssertEqual(resources.map(\.targetPaths), [[filePath, folderPath], [manualPath], []])
+            XCTAssertEqual(resources.map(\.bundleIdentifier), snapshot.windows.map { Optional($0.bundleIdentifier) })
+            XCTAssertEqual(resources.map(\.processIdentifier), snapshot.windows.map { Optional($0.pidAtCapture) })
+        }
+        let json = try String(contentsOf: logURL, encoding: .utf8)
+        XCTAssertFalse(json.contains("Replaced.ma"))
+        XCTAssertFalse(json.contains("secret.example.com"))
     }
 
     func testBrowserAutomationTelemetryContainsOnlyFixedBrowserMetadata() throws {
@@ -395,8 +438,9 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertEqual(event.skippedWindowCount, 1)
         XCTAssertEqual(event.downgradedWindowCount, 1)
         XCTAssertEqual(event.displayFallbackCount, 1)
-        XCTAssertEqual(event.details.count, 4)
+        XCTAssertEqual(event.details.count, 5)
         XCTAssertEqual(event.details.map(\.kind), [
+            "windowResources",
             "restoreSkipped",
             "restoreDowngraded",
             "displayFallback",
@@ -405,6 +449,8 @@ final class TelemetryLoggerTests: XCTestCase {
         XCTAssertEqual(event.details.last?.bundleIdentifier, "com.example.editor")
         XCTAssertEqual(event.details.last?.reason, "missingTarget")
         XCTAssertEqual(event.details.last?.targetKind, "folder")
+        XCTAssertEqual(event.details.last?.targetPaths, ["/private/ignored"])
+        XCTAssertEqual(event.details.last?.windowID, result.targetIssues.first?.windowID)
     }
 
     private func readEvents(from logURL: URL) throws -> [TelemetryLogEvent] {
@@ -459,7 +505,8 @@ final class TelemetryLoggerTests: XCTestCase {
         windowTitle: String? = "Window",
         isMinimized: Bool = false,
         isFullscreen: Bool = false,
-        isVisible: Bool = true
+        isVisible: Bool = true,
+        openingConfiguration: WindowOpeningConfiguration = WindowOpeningConfiguration()
     ) -> WindowRecord {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 200)
         return WindowRecord(
@@ -488,7 +535,8 @@ final class TelemetryLoggerTests: XCTestCase {
                 subrole: "AXStandardWindow",
                 capturedFrame: CGRectCodable(frame),
                 cgWindowID: nil
-            )
+            ),
+            openingConfiguration: openingConfiguration
         )
     }
 

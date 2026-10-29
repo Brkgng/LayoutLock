@@ -227,7 +227,10 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertTrue(record.isMinimized)
         XCTAssertEqual(record.captureSignature.cgWindowID, 123)
         XCTAssertEqual(telemetryLogger.events.map(\.name), ["capture.completed"])
-        XCTAssertEqual(telemetryLogger.events.first?.details.first?.reason, WindowDiscoveryDiagnosticReason.transientRole)
+        XCTAssertEqual(
+            telemetryLogger.events.first?.details.first(where: { $0.kind == diagnostic.kind.rawValue })?.reason,
+            WindowDiscoveryDiagnosticReason.transientRole
+        )
     }
 
     func testCaptureSnapshotWithContextUsesContextScreens() throws {
