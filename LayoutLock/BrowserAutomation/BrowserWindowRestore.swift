@@ -14,7 +14,10 @@ enum BrowserWindowOpenResult {
 protocol BrowserWindowOpening {
     func openNewWindow(
         targets: [WindowOpenTarget],
-        browser: BrowserAutomationBrowser
+        browser: BrowserAutomationBrowser,
+        excludingWindowIdentifiers: Set<String>,
+        preferredApplicationURL: URL?,
+        remainingWindowTargets: [[WindowOpenTarget]]
     ) async -> BrowserWindowOpenResult
 }
 
@@ -69,7 +72,10 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
 
     func openNewWindow(
         targets: [WindowOpenTarget],
-        browser: BrowserAutomationBrowser
+        browser: BrowserAutomationBrowser,
+        excludingWindowIdentifiers: Set<String> = [],
+        preferredApplicationURL: URL? = nil,
+        remainingWindowTargets: [[WindowOpenTarget]] = []
     ) async -> BrowserWindowOpenResult {
         guard !targets.isEmpty,
               targets.allSatisfy({ $0.kind == .webURL }),
@@ -87,7 +93,8 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
 
         let wasRunning = runningApplicationProvider(browser.bundleIdentifier)
         if !wasRunning {
-            guard let applicationURL = applicationURLProvider(browser.bundleIdentifier),
+            guard let applicationURL = preferredApplicationURL?.validatedApplicationBundleURL(
+                withBundleIdentifier: browser.bundleIdentifier) ?? applicationURLProvider(browser.bundleIdentifier),
                   await applicationLauncher(applicationURL),
                   await waitUntilRunning(browser) else {
                 return .failed
@@ -104,70 +111,69 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         do {
             var startupWindows: [CapturedBrowserWindow] = []
             var targetsToOpen = targets
+            var existingWindow: CapturedBrowserWindow?
             var startupWindowIdentifier: String?
             var startupTabIdentifier: String?
             defer {
                 if let startupWindowIdentifier, let startupTabIdentifier {
                     do {
-                        _ = try scriptEvaluator.evaluate(Self.chromeStartupCleanupScript(
+                        _ = try scriptEvaluator.evaluate(Self.chromiumStartupCleanupScript(
                             windowIdentifier: startupWindowIdentifier,
-                            tabIdentifier: startupTabIdentifier
+                            tabIdentifier: startupTabIdentifier,
+                            browser: browser
                         ))
                     } catch {
-                        AppLogger.browserAutomation.error("Chrome startup blank-tab cleanup failed.")
+                        AppLogger.browserAutomation.error("Browser startup blank-tab cleanup failed.")
                     }
                 }
             }
-            if browser == .chrome {
-                // Creating Chrome's first window can itself trigger session restoration.
+            if browser.isChromium {
+                // Creating Chromium's first window can itself trigger session restoration.
                 // Initialize it without opening a target, then inventory the restored tabs.
-                let startupDescriptor = try scriptEvaluator.evaluate(Self.chromeStartupScript)
+                let startupDescriptor = try scriptEvaluator.evaluate(Self.chromiumStartupScript(for: browser))
                 startupWindowIdentifier = startupDescriptor.atIndex(1)?.stringValue
                 startupTabIdentifier = startupDescriptor.atIndex(2)?.stringValue
             }
-            if browser == .chrome, !wasRunning || startupWindowIdentifier != nil {
-                for attempt in 0..<50 {
-                    let descriptor = try scriptEvaluator.evaluate(
-                        BrowserTabCaptureService.script(for: browser)
+            let attemptCount = browser.isChromium && (!wasRunning || startupWindowIdentifier != nil) ? 50 : 1
+            for attempt in 0..<attemptCount {
+                let descriptor = try scriptEvaluator.evaluate(
+                    BrowserTabCaptureService.script(for: browser)
+                )
+                startupWindows = try BrowserScriptResultParser().parse(
+                    descriptor,
+                    browser: browser
+                )
+                let candidates = startupWindows.filter {
+                    $0.scriptingIdentifier.map { !excludingWindowIdentifiers.contains($0) } == true
+                }
+                existingWindow = Self.reusableWindow(targets: targets,
+                    remainingWindowTargets: remainingWindowTargets, candidates: candidates)
+                targetsToOpen = existingWindow.map { Self.missingTargets(targets, in: $0) } ?? targets
+                if attempt == 0 || targetsToOpen.isEmpty || attempt == attemptCount - 1 {
+                    AppLogger.browserAutomation.info(
+                        "\(browser.displayName, privacy: .public) startup inventory attempt=\(attempt + 1) windowCount=\(startupWindows.count) tabCount=\(startupWindows.reduce(0) { $0 + $1.tabs.count }) missingTargetCount=\(targetsToOpen.count) createdStartupWindow=\(startupWindowIdentifier != nil)."
                     )
-                    startupWindows = try BrowserScriptResultParser().parse(
-                        descriptor,
-                        browser: browser
-                    )
-                    var openTargets = OpenWebTargetIndex(
-                        captureResult: BrowserTabCaptureResult(
-                            windows: startupWindows,
-                            issues: []
-                        )
-                    )
-                    targetsToOpen = targets.filter {
-                        !openTargets.consume($0, bundleIdentifier: browser.bundleIdentifier)
-                    }
-                    if attempt == 0 || targetsToOpen.isEmpty || attempt == 49 {
-                        AppLogger.browserAutomation.info(
-                            "Chrome startup inventory attempt=\(attempt + 1) windowCount=\(startupWindows.count) tabCount=\(startupWindows.reduce(0) { $0 + $1.tabs.count }) missingTargetCount=\(targetsToOpen.count) createdStartupWindow=\(startupWindowIdentifier != nil)."
-                        )
-                    }
-                    if targetsToOpen.isEmpty {
-                        // Keep the window identity so restore can position the reused window.
-                        if let window = startupWindows.first(where: { window in
-                            window.tabs.contains { $0.URL == targets[0].url }
-                        }) {
-                            return .opened(window, startupWindows: startupWindows, openedTargetCount: 0)
-                        }
-                    }
-                    if attempt < 49 {
-                        await launchPollSleeper(0.1)
+                }
+                if targetsToOpen.isEmpty {
+                    // Keep the window identity so restore can position the reused window.
+                    if let window = existingWindow {
+                        selectSavedTab(targets: targets, window: window, browser: browser)
+                        return .opened(window, startupWindows: startupWindows, openedTargetCount: 0)
                     }
                 }
+                if attempt < attemptCount - 1 {
+                    await launchPollSleeper(0.1)
+                }
             }
+            if targetsToOpen.count == targets.count { existingWindow = nil }
 
             let descriptor = try scriptEvaluator.evaluate(
                 Self.script(
                     for: browser,
                     targets: targetsToOpen,
                     reuseDisposableStartupWindow: !wasRunning || startupWindowIdentifier != nil,
-                    startupWindowIdentifier: startupWindowIdentifier
+                    startupWindowIdentifier: startupWindowIdentifier,
+                    existingWindowIdentifier: existingWindow?.scriptingIdentifier
                 )
             )
             guard let openedWindow = try BrowserScriptResultParser()
@@ -175,6 +181,7 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                 .first else {
                 return .failed
             }
+            selectSavedTab(targets: targets, window: openedWindow, browser: browser)
             return .opened(
                 openedWindow,
                 startupWindows: startupWindows,
@@ -188,14 +195,97 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         }
     }
 
+    private static func reusableWindow(targets: [WindowOpenTarget],
+        remainingWindowTargets: [[WindowOpenTarget]], candidates: [CapturedBrowserWindow]) -> CapturedBrowserWindow? {
+        let groups = [targets] + remainingWindowTargets
+        let completeMatches = groups.map { group in
+            candidates.indices.filter { missingTargets(group, in: candidates[$0]).isEmpty }
+        }
+        // Reserve complete matches before adding tabs; a broad group must not steal a sibling's only match.
+        var groupByWindow: [Int: Int] = [:]
+        func reserve(_ group: Int, visited: inout Set<Int>) -> Bool {
+            let choices = completeMatches[group].filter { groupByWindow[$0] == nil } +
+                completeMatches[group].filter { groupByWindow[$0] != nil }
+            for window in choices where visited.insert(window).inserted {
+                if let previous = groupByWindow[window], !reserve(previous, visited: &visited) { continue }
+                groupByWindow[window] = group
+                return true
+            }
+            return false
+        }
+        for group in groups.indices.sorted(by: { completeMatches[$0].count < completeMatches[$1].count }) {
+            var visited: Set<Int> = []
+            _ = reserve(group, visited: &visited)
+        }
+        return candidates.indices.filter { groupByWindow[$0] == nil || groupByWindow[$0] == 0 }
+            .map { candidates[$0] }.min { missingTargets(targets, in: $0).count < missingTargets(targets, in: $1).count }
+    }
+
+    private static func missingTargets(_ targets: [WindowOpenTarget], in window: CapturedBrowserWindow) -> [WindowOpenTarget] {
+        var available = window.tabs.map(\.URL)
+        return targets.filter { target in
+            guard let index = available.firstIndex(of: target.url) else { return true }
+            available.remove(at: index)
+            return false
+        }
+    }
+
+    private func selectSavedTab(targets: [WindowOpenTarget], window: CapturedBrowserWindow, browser: BrowserAutomationBrowser) {
+        guard let selected = targets.firstIndex(where: { $0.isSelectedBrowserTab == true }),
+              let identifier = window.scriptingIdentifier else { return }
+        let target = targets[selected]
+        let occurrence = targets[...selected].filter { $0.url == target.url }.count
+        let selection = browser.isChromium
+            ? "set active tab index of targetWindow to selectedTabIndex"
+            : "set current tab of targetWindow to browserTab"
+        let script = """
+        tell application id "\(browser.bundleIdentifier)"
+            repeat with targetWindow in windows
+                if ((id of targetWindow) as text) is \(Self.appleScriptLiteral(identifier)) then
+                    set remainingOccurrence to \(occurrence)
+                    set selectedTabIndex to 0
+                    repeat with browserTab in tabs of targetWindow
+                        set selectedTabIndex to selectedTabIndex + 1
+                        considering case
+                            if (URL of browserTab) is \(Self.appleScriptLiteral(target.url.absoluteString)) then
+                                set remainingOccurrence to remainingOccurrence - 1
+                                if remainingOccurrence is 0 then
+                                    \(selection)
+                                    return
+                                end if
+                            end if
+                        end considering
+                    end repeat
+                end if
+            end repeat
+        end tell
+        """
+        do { _ = try scriptEvaluator.evaluate(script) }
+        catch { AppLogger.browserAutomation.error("Saved browser tab could not be selected.") }
+    }
+
     static func script(
         for browser: BrowserAutomationBrowser,
         targets: [WindowOpenTarget],
         reuseDisposableStartupWindow: Bool = false,
-        startupWindowIdentifier: String? = nil
+        startupWindowIdentifier: String? = nil,
+        existingWindowIdentifier: String? = nil
     ) -> String {
         let URLs = targets.map { appleScriptLiteral($0.url.absoluteString) }
         let URLList = "{\(URLs.joined(separator: ", "))}"
+        let selectExistingWindow = existingWindowIdentifier.map { identifier in
+            """
+            set targetWindow to missing value
+            repeat with browserWindow in windows
+                if ((id of browserWindow) as text) is \(appleScriptLiteral(identifier)) then
+                    set targetWindow to window id (id of browserWindow)
+                    exit repeat
+                end if
+            end repeat
+            if targetWindow is missing value then error "The browser window is no longer available."
+            """
+        }
+        let firstNewTab = existingWindowIdentifier == nil ? 2 : 1
 
         switch browser {
         case .safari:
@@ -231,17 +321,17 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
             return """
             set targetURLs to \(URLList)
             tell application id "com.apple.Safari"
-                \(selectTargetWindow)
-                set URL of current tab of targetWindow to item 1 of targetURLs
-                if (count targetURLs) > 1 then
-                    repeat with tabIndex from 2 to count targetURLs
+                \(selectExistingWindow ?? selectTargetWindow)
+                \(existingWindowIdentifier == nil ? "set URL of current tab of targetWindow to item 1 of targetURLs" : "")
+                if (count targetURLs) >= \(firstNewTab) then
+                    repeat with tabIndex from \(firstNewTab) to count targetURLs
                         set tabURL to item tabIndex of targetURLs
                         tell targetWindow
                             make new tab at end of tabs with properties {URL:tabURL as text}
                         end tell
                     end repeat
                 end if
-                set current tab of targetWindow to tab 1 of targetWindow
+                \(existingWindowIdentifier == nil ? "set current tab of targetWindow to tab 1 of targetWindow" : "")
                 set capturedTabs to {}
                 repeat with browserTab in tabs of targetWindow
                     set tabURL to URL of browserTab
@@ -255,7 +345,7 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                 return {{(id of targetWindow) as text, (name of targetWindow) as text, normalizedBounds, capturedTabs}}
             end tell
             """
-        case .chrome:
+        case .chrome, .brave:
             let selectOwnedStartupWindow = startupWindowIdentifier.map { identifier in
                 """
                 repeat with browserWindow in windows
@@ -281,7 +371,7 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                             set shouldReuseFrontWindow to true
                         else
                             set candidateURLText to candidateURL as text
-                            if candidateURLText is "" or candidateURLText starts with "chrome://newtab" then
+                            if candidateURLText is "" or candidateURLText starts with "chrome://newtab" or candidateURLText starts with "brave://newtab" then
                                 set shouldReuseFrontWindow to true
                             end if
                         end if
@@ -299,18 +389,18 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
                 """
             return """
             set targetURLs to \(URLList)
-            tell application id "com.google.Chrome"
-                \(selectTargetWindow)
-                set URL of active tab of targetWindow to item 1 of targetURLs
-                if (count targetURLs) > 1 then
-                    repeat with tabIndex from 2 to count targetURLs
+            tell application id "\(browser.bundleIdentifier)"
+                \(selectExistingWindow ?? selectTargetWindow)
+                \(existingWindowIdentifier == nil ? "set URL of active tab of targetWindow to item 1 of targetURLs" : "")
+                if (count targetURLs) >= \(firstNewTab) then
+                    repeat with tabIndex from \(firstNewTab) to count targetURLs
                         set tabURL to item tabIndex of targetURLs
                         tell targetWindow
                             make new tab at end of tabs with properties {URL:tabURL as text}
                         end tell
                     end repeat
                 end if
-                set active tab index of targetWindow to 1
+                \(existingWindowIdentifier == nil ? "set active tab index of targetWindow to 1" : "")
                 set capturedTabs to {}
                 repeat with browserTab in tabs of targetWindow
                     set tabURL to URL of browserTab
@@ -327,8 +417,9 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         }
     }
 
-    static let chromeStartupScript = """
-    tell application id "com.google.Chrome"
+    static func chromiumStartupScript(for browser: BrowserAutomationBrowser) -> String {
+    """
+    tell application id "\(browser.bundleIdentifier)"
         repeat with browserWindow in windows
             if (mode of browserWindow) is "normal" then return {}
         end repeat
@@ -336,20 +427,22 @@ struct BrowserAutomationWindowOpener: BrowserWindowOpening {
         return {(id of startupWindow) as text, (id of active tab of startupWindow) as text}
     end tell
     """
+    }
 
-    static func chromeStartupCleanupScript(
+    static func chromiumStartupCleanupScript(
         windowIdentifier: String,
-        tabIdentifier: String
+        tabIdentifier: String,
+        browser: BrowserAutomationBrowser = .chrome
     ) -> String {
         """
-        tell application id "com.google.Chrome"
+        tell application id "\(browser.bundleIdentifier)"
             repeat with browserWindow in windows
                 if ((id of browserWindow) as text) is \(appleScriptLiteral(windowIdentifier)) then
                     repeat with browserTab in tabs of browserWindow
                         if ((id of browserTab) as text) is \(appleScriptLiteral(tabIdentifier)) then
                             set tabURL to URL of browserTab
                             if tabURL is missing value then set tabURL to ""
-                            if tabURL is "" or tabURL is "about:blank" or tabURL starts with "chrome://newtab" then
+                            if tabURL is "" or tabURL is "about:blank" or tabURL starts with "chrome://newtab" or tabURL starts with "brave://newtab" then
                                 close browserTab
                             end if
                             return

@@ -16,7 +16,7 @@ repositioning windows across your displays.
 - **Relaunches inactive apps** automatically when a layout is restored.
 - **Per-layout global hotkeys** to restore a layout from anywhere.
 - **Pin layouts** to keep them at the top of the dashboard and menu bar lists.
-- **Browser tab capture** for Safari and Chrome (tabs are saved and reopened
+- **Browser tab capture** for Safari, Chrome, and Brave (tabs are saved and reopened
   alongside the rest of the layout).
 - **Opening targets** — reopen the documents, folders, and URLs a window had
   open.
@@ -35,7 +35,7 @@ repositioning windows across your displays.
 - macOS 14.0 (Sonoma) or newer.
 - **Accessibility** permission (required to inspect and move windows).
 - **Automation (Apple Events)** permission (only required to save and restore
-  Safari/Chrome browser tabs).
+  Safari/Chrome/Brave browser tabs).
 
 ## Development
 
@@ -63,7 +63,7 @@ LayoutLock uses two distinct macOS permissions, requested independently:
 - **Accessibility** — needed to read window state and move/resize windows. Until
   it is granted, the app runs in a limited mode and prompts from the menu bar
   and onboarding window.
-- **Automation (Apple Events)** — needed only when you connect Safari or Chrome
+- **Automation (Apple Events)** — needed only when you connect Safari, Chrome, or Brave
   so LayoutLock can save and restore browser tabs.
 
 ## Free vs Pro

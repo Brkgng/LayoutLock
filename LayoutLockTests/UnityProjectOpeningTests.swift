@@ -74,6 +74,45 @@ final class UnityProjectOpeningTests: XCTestCase {
         XCTAssertEqual(recorder.workspaceRequestCount, 0)
     }
 
+    func testProjectOpeningPrefersCapturedEditorAtCustomLocationAndFallsBackIfMissing() async throws {
+        let project = try makeProject("Project")
+        let registeredEditor = try makeEditor()
+        let capturedEditor = directory.appendingPathComponent("Custom Editor.app", isDirectory: true)
+        try FileManager.default.copyItem(at: registeredEditor, to: capturedEditor)
+        let recorder = OpeningRecorder()
+        let opener = makeOpener(application: registeredEditor, recorder: recorder)
+        let targets = [WindowOpenTarget(kind: .folder, url: project)]
+
+        let capturedResult = await opener.open(targets: targets, bundleIdentifier: unityBundleIdentifier,
+            disposition: .applicationDefault, preferredApplicationURL: capturedEditor)
+        try FileManager.default.removeItem(at: capturedEditor)
+        let fallbackResult = await opener.open(targets: targets, bundleIdentifier: unityBundleIdentifier,
+            disposition: .applicationDefault, preferredApplicationURL: capturedEditor)
+
+        assertOpenedInstance(capturedResult)
+        assertOpenedInstance(fallbackResult)
+        XCTAssertEqual(recorder.requests.map(\.applicationURL), [capturedEditor, registeredEditor])
+        XCTAssertEqual(recorder.workspaceRequestCount, 0)
+    }
+
+    func testCapturedEditorWithDifferentProjectVersionKeepsRegisteredEditorFallback() async throws {
+        let version = "9999.999.999f1"
+        let project = try makeProject("Project", version: version)
+        let registeredEditor = try makeEditor(version: version)
+        let differentVersion = try makeEditor()
+        let capturedEditor = directory.appendingPathComponent("Captured Editor.app", isDirectory: true)
+        try FileManager.default.copyItem(at: differentVersion, to: capturedEditor)
+        let recorder = OpeningRecorder()
+        let opener = makeOpener(application: registeredEditor, recorder: recorder)
+
+        let result = await opener.open(targets: [WindowOpenTarget(kind: .folder, url: project)],
+            bundleIdentifier: unityBundleIdentifier, disposition: .applicationDefault,
+            preferredApplicationURL: capturedEditor)
+
+        assertOpenedInstance(result)
+        XCTAssertEqual(recorder.requests.map(\.applicationURL), [registeredEditor])
+    }
+
     func testSavedSceneAloneDerivesItsProjectForExistingSnapshots() async throws {
         let project = try makeProject("Project")
         let scene = try makeAsset(in: project, named: "Scenes/Saved.unity")

@@ -2704,7 +2704,7 @@ private final class SuspendingOperationOverlayPresenter: OperationOverlayPresent
 
 private struct AcceptedCompletionTargetOpener: RestoreTargetOpening {
     func open(targets: [WindowOpenTarget], bundleIdentifier: String,
-        disposition: RestoreTargetOpenDisposition) async -> RestoreTargetOpenResult { .opened }
+        disposition: RestoreTargetOpenDisposition, preferredApplicationURL: URL?) async -> RestoreTargetOpenResult { .opened }
 }
 
 private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
@@ -2714,7 +2714,7 @@ private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
         !unavailableBundleIdentifiers.contains(bundleIdentifier)
     }
 
-    func requestLaunch(bundleIdentifier _: String) async -> pid_t? {
+    func requestLaunch(bundleIdentifier _: String, preferredApplicationURL: URL?) async -> pid_t? {
         nil
     }
 }

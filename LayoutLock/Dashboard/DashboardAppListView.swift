@@ -50,6 +50,9 @@ struct DashboardInactiveAppsView: View {
         .onChange(of: snapshot.windows.map(\.bundleIdentifier)) { _, _ in
             refreshAvailability()
         }
+        .onChange(of: snapshot.windows.map(\.applicationBundleURL)) { _, _ in
+            refreshAvailability()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshAvailability()
         }
@@ -59,10 +62,19 @@ struct DashboardInactiveAppsView: View {
     }
 
     private func refreshAvailability() {
-        unavailableBundleIdentifiers = Set(snapshot.windows.map(\.bundleIdentifier)).filter { bundle in
+        unavailableBundleIdentifiers = Self.unavailableApplications(in: snapshot,
+            runningBundleIdentifiers: runningBundleIdentifiers,
+            registeredApplicationURL: { NSWorkspace.shared.existingApplicationURL(withBundleIdentifier: $0) })
+    }
+
+    static func unavailableApplications(in snapshot: Snapshot, runningBundleIdentifiers: Set<String>,
+        registeredApplicationURL: (String) -> URL?) -> Set<String> {
+        Set(Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier).filter { bundle, windows in
             !runningBundleIdentifiers.contains(bundle) &&
-                NSWorkspace.shared.existingApplicationURL(withBundleIdentifier: bundle) == nil
-        }
+                !windows.contains(where: {
+                    $0.applicationBundleURL?.validatedApplicationBundleURL(withBundleIdentifier: bundle) != nil
+                }) && registeredApplicationURL(bundle) == nil
+        }.keys)
     }
 }
 

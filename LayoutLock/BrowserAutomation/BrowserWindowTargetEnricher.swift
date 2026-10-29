@@ -57,6 +57,7 @@ struct BrowserWindowTargetEnricher {
 
             return DiscoveredApplication(
                 bundleIdentifier: application.bundleIdentifier,
+                applicationBundleURL: application.applicationBundleURL,
                 pid: application.pid,
                 localizedName: application.localizedName,
                 windows: windows
@@ -161,7 +162,7 @@ private extension DiscoveredWindow {
         let retainedDocumentURLs = documentURLs.filter {
             validator.webTarget(url: $0) == nil
         }
-        let targets = capturedWindow.tabs.compactMap { tab -> WindowOpenTarget? in
+        let targets = capturedWindow.tabs.enumerated().compactMap { index, tab -> WindowOpenTarget? in
             guard let target = validator.webTarget(url: tab.URL) else {
                 return nil
             }
@@ -169,7 +170,8 @@ private extension DiscoveredWindow {
                 id: target.id,
                 kind: target.kind,
                 url: target.url,
-                title: tab.title
+                title: tab.title,
+                isSelectedBrowserTab: capturedWindow.selectedTabIndex == index ? true : nil
             )
         }
         return DiscoveredWindow(

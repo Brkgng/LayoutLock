@@ -5,6 +5,9 @@ import Foundation
 enum BrowserAutomationBrowser: String, CaseIterable, Identifiable {
     case safari
     case chrome
+    case brave
+
+    var isChromium: Bool { self != .safari }
 
     var id: String { rawValue }
 
@@ -14,6 +17,8 @@ enum BrowserAutomationBrowser: String, CaseIterable, Identifiable {
             return "Safari"
         case .chrome:
             return "Google Chrome"
+        case .brave:
+            return "Brave Browser"
         }
     }
 
@@ -23,6 +28,8 @@ enum BrowserAutomationBrowser: String, CaseIterable, Identifiable {
             return "com.apple.Safari"
         case .chrome:
             return "com.google.Chrome"
+        case .brave:
+            return "com.brave.Browser"
         }
     }
 
@@ -30,7 +37,7 @@ enum BrowserAutomationBrowser: String, CaseIterable, Identifiable {
         switch self {
         case .safari:
             return "safari"
-        case .chrome:
+        case .chrome, .brave:
             return "globe"
         }
     }
@@ -86,6 +93,7 @@ struct CapturedBrowserWindow: Equatable {
     let frame: CGRect
     let frontToBackIndex: Int
     let tabs: [CapturedBrowserTab]
+    var selectedTabIndex: Int? = nil
 }
 
 struct CapturedBrowserTab: Equatable {

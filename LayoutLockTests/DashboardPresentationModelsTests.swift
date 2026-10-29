@@ -1233,6 +1233,32 @@ final class DashboardPresentationModelsTests: XCTestCase {
             identityResolver: identity).isEmpty)
     }
 
+    @MainActor
+    func testInactiveAppAvailabilityUsesCapturedInstallationAndRefreshesAfterSavedPathChanges() throws {
+        let directory = try TestTemporaryDirectory()
+        let bundle = TestFixtures.bundleIdentifier
+        let captured = try makeApplicationBundle(in: directory.url, named: "Captured.app")
+        let missing = directory.url.appendingPathComponent("Missing.app")
+        let oldSnapshot = makeSnapshot(windows: [makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: missing)])
+        let updatedSnapshot = makeSnapshot(windows: [makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: missing), makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: captured)])
+
+        XCTAssertEqual(DashboardInactiveAppsView.unavailableApplications(in: oldSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }), [bundle])
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }).isEmpty)
+        try FileManager.default.removeItem(at: captured)
+        XCTAssertEqual(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }), [bundle])
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [bundle], registeredApplicationURL: { _ in nil }).isEmpty)
+        let registered = try makeApplicationBundle(in: directory.url, named: "Registered.app")
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in registered }).isEmpty)
+    }
+
     func testIdentityFallbackCanUseBundleIdentifierAsName() {
         let snapshot = makeSnapshot(windows: [
             makeWindow(bundleIdentifier: "com.example.unresolved")

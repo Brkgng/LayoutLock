@@ -268,7 +268,7 @@ struct SettingsView: View {
     private var integrationsTab: some View {
         Form {
             Section {
-                Text("Save Safari and Chrome tabs with layouts.")
+                Text("Save Safari, Chrome, and Brave tabs with layouts.")
                     .foregroundStyle(.secondary)
             }
 
@@ -436,8 +436,8 @@ struct SettingsView: View {
         switch browser {
         case .safari:
             return "Safari may include private tabs because it cannot reliably identify private windows."
-        case .chrome:
-            return "Chrome incognito windows are not captured."
+        case .chrome, .brave:
+            return "Private and incognito windows are not captured."
         }
     }
 

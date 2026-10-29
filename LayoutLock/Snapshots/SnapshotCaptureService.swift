@@ -249,6 +249,7 @@ struct SnapshotCaptureService {
 
         return WindowRecord(
             bundleIdentifier: application.bundleIdentifier,
+            applicationBundleURL: application.applicationBundleURL,
             pidAtCapture: application.pid,
             windowTitle: window.title,
             role: window.role,

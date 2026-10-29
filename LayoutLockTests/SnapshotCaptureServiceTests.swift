@@ -150,6 +150,33 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertEqual(legacy.capturedFrame, original.capturedFrame)
     }
 
+    func testLegacyWindowRecordDecodesWithoutApplicationBundleURL() throws {
+        let original = makeWindowRecord(applicationBundleURL: URL(fileURLWithPath: "/Applications/Saved.app"))
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        fields.removeValue(forKey: "applicationBundleURL")
+
+        let decoded = try JSONDecoder().decode(WindowRecord.self,
+            from: JSONSerialization.data(withJSONObject: fields))
+
+        XCTAssertNil(decoded.applicationBundleURL)
+        XCTAssertEqual(decoded.id, original.id)
+        XCTAssertEqual(decoded.captureSignature, original.captureSignature)
+    }
+
+    func testWindowRecordCopiesAndUpdatesPreserveCapturedApplicationBundleURL() throws {
+        let previous = makeWindowRecord(applicationBundleURL: URL(fileURLWithPath: "/Applications/Old.app"))
+        let capturedURL = URL(fileURLWithPath: "/Custom Apps/Editor.app")
+        let captured = makeWindowRecord(applicationBundleURL: capturedURL)
+
+        XCTAssertEqual(captured.withZOrderHint(5).applicationBundleURL, capturedURL)
+        XCTAssertEqual(captured.withOpeningConfiguration(WindowOpeningConfiguration()).applicationBundleURL, capturedURL)
+        let updated = captured.preservingIdentityAndManualTargets(from: previous)
+        XCTAssertEqual(updated.id, previous.id)
+        XCTAssertEqual(updated.applicationBundleURL, capturedURL)
+        let decoded = try JSONDecoder().decode(WindowRecord.self, from: JSONEncoder().encode(updated))
+        XCTAssertEqual(decoded.applicationBundleURL, capturedURL)
+    }
+
     func testDefaultSnapshotNameUsesLayoutTimestampFallback() throws {
         let date = try makeNamingDate()
         let service = SnapshotCaptureService(
@@ -542,6 +569,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         )
         let application = DiscoveredApplication(
             bundleIdentifier: "com.example.app",
+            applicationBundleURL: URL(fileURLWithPath: "/Custom Apps/Captured.app"),
             pid: 88,
             localizedName: "App",
             windows: [window]
@@ -554,6 +582,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(record.bundleIdentifier, "com.example.app")
+        XCTAssertEqual(record.applicationBundleURL, application.applicationBundleURL)
         XCTAssertEqual(record.pidAtCapture, 88)
         XCTAssertEqual(record.windowTitle, "Window A")
         XCTAssertEqual(record.displayID, display.id)

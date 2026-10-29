@@ -11,6 +11,21 @@ extension NSWorkspace {
     }
 }
 
+extension URL {
+    func validatedApplicationBundleURL(withBundleIdentifier bundleIdentifier: String) -> URL? {
+        guard isFileURL, host == nil || host == "" || host == "localhost",
+              pathExtension.lowercased() == "app" else { return nil }
+        let applicationURL = standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: applicationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let bundle = Bundle(url: applicationURL), bundle.bundleIdentifier == bundleIdentifier,
+              let executableURL = bundle.executableURL,
+              FileManager.default.isExecutableFile(atPath: executableURL.path) else { return nil }
+        return applicationURL
+    }
+}
+
 extension Optional where Wrapped == String {
     var nonEmptyValue: String? {
         self?.nonEmptyValue

@@ -301,17 +301,18 @@ struct RestoreEngine {
         )
         var openLocalTargets = initialOpenLocalTargets
         var openWebTargets = OpenWebTargetIndex()
+        var automatedBrowserBundles: Set<String> = []
+        var reservedBrowserWindows: [String: Set<String>] = [:]
         if snapshot.hasWebOpeningTargets {
+            let browserCapture = browserTabCapturer.captureTabs(
+                runningApplications: discoveredApplications.map {
+                    RunningApplicationSnapshot(bundleIdentifier: $0.bundleIdentifier,
+                        applicationBundleURL: $0.applicationBundleURL,
+                        processIdentifier: $0.pid, localizedName: $0.localizedName)
+                })
+            automatedBrowserBundles = Set(browserCapture.windows.map { $0.browser.bundleIdentifier })
             openWebTargets = OpenWebTargetIndex(
-                captureResult: browserTabCapturer.captureTabs(
-                    runningApplications: discoveredApplications.map {
-                        RunningApplicationSnapshot(
-                            bundleIdentifier: $0.bundleIdentifier,
-                            processIdentifier: $0.pid,
-                            localizedName: $0.localizedName
-                        )
-                    }
-                ),
+                captureResult: browserCapture,
                 discoveredApplications: discoveredApplications
             )
         }
@@ -327,7 +328,7 @@ struct RestoreEngine {
             by: \.bundleIdentifier
         ).mapValues(\.count)
 
-        for savedWindow in snapshot.windows where !appInstances.handledBundles.contains(savedWindow.bundleIdentifier) && inspectionBlockedWindows[savedWindow.id] == nil {
+        for (savedIndex, savedWindow) in snapshot.windows.enumerated() where !appInstances.handledBundles.contains(savedWindow.bundleIdentifier) && inspectionBlockedWindows[savedWindow.id] == nil {
             var validTargets: [WindowOpenTarget] = []
 
             for target in savedWindow.openingConfiguration.effectiveTargets {
@@ -353,7 +354,7 @@ struct RestoreEngine {
             var targetsToOpen: [WindowOpenTarget] = []
             for target in validTargets {
                 if target.kind == .webURL {
-                    if !openWebTargets.consume(
+                    if automatedBrowserBundles.contains(bundleIdentifier) || !openWebTargets.consume(
                         target,
                         bundleIdentifier: bundleIdentifier
                     ) {
@@ -396,11 +397,25 @@ struct RestoreEngine {
                     unconfirmedLocalWindowIDs.insert(savedWindow.id)
                     continue
                 }
-                let openResult = await targetOpener.open(
-                    targets: request.targets,
-                    bundleIdentifier: bundleIdentifier,
-                    disposition: request.disposition
-                )
+                let openResult: RestoreTargetOpenResult
+                if request.disposition == .newBrowserWindow {
+                    let remainingWindowTargets = snapshot.windows.dropFirst(savedIndex + 1).filter {
+                        $0.bundleIdentifier == bundleIdentifier && inspectionBlockedWindows[$0.id] == nil
+                    }.map { window in
+                        window.openingConfiguration.effectiveTargets.filter {
+                            $0.kind == .webURL && webTargetValidationIssue(for: $0) == nil
+                        }
+                    }.filter { !$0.isEmpty }
+                    openResult = await targetOpener.openBrowserWindow(targets: request.targets,
+                        bundleIdentifier: bundleIdentifier,
+                        excludingWindowIdentifiers: reservedBrowserWindows[bundleIdentifier, default: []],
+                        preferredApplicationURL: savedWindow.applicationBundleURL,
+                        remainingWindowTargets: remainingWindowTargets)
+                } else {
+                    openResult = await targetOpener.open(targets: request.targets,
+                        bundleIdentifier: bundleIdentifier, disposition: request.disposition,
+                        preferredApplicationURL: savedWindow.applicationBundleURL)
+                }
                 if openResult.wasSubmitted {
                     if case let .openedNewBrowserWindow(_, _, openedTargetCount) = openResult {
                         requestedTargetCount += openedTargetCount ?? request.targets.count
@@ -443,6 +458,10 @@ struct RestoreEngine {
                         let openedWindow: CapturedBrowserWindow?
                         var submittedTargetCount = request.targets.count
                         if case let .openedNewBrowserWindow(evidence, startupWindows, openedTargetCount) = openResult {
+                            automatedBrowserBundles.insert(bundleIdentifier)
+                            if let identifier = evidence.scriptingIdentifier {
+                                reservedBrowserWindows[bundleIdentifier, default: []].insert(identifier)
+                            }
                             openedWindow = evidence
                             submittedTargetCount = openedTargetCount ?? request.targets.count
                             openedBrowserWindowsBySavedWindowID[savedWindow.id] = evidence
@@ -488,9 +507,10 @@ struct RestoreEngine {
         }
         var requestedLaunchBundleIdentifiers: Set<String> = []
         for bundle in missingBundleIdentifiers {
-            guard let pid = await applicationLauncher.requestLaunch(bundleIdentifier: bundle), pid > 0 else { continue }
-            requestedLaunchBundleIdentifiers.insert(bundle)
             let windows = snapshot.windows.filter { $0.bundleIdentifier == bundle }
+            guard let pid = await applicationLauncher.requestLaunch(bundleIdentifier: bundle,
+                preferredApplicationURL: windows.compactMap(\.applicationBundleURL).first), pid > 0 else { continue }
+            requestedLaunchBundleIdentifiers.insert(bundle)
             if windows.count == 1, let window = windows.first,
                 window.captureSignature.source == .coreGraphics, window.openingConfiguration.effectiveTargets.isEmpty {
                 appInstances.processIdentifiers[window.id] = pid
@@ -549,6 +569,8 @@ struct RestoreEngine {
                    !readinessBundleIdentifiers.contains(plan.savedWindow.bundleIdentifier),
                    !runningBundleIdentifiers(from: discoveredApplications).contains(plan.savedWindow.bundleIdentifier),
                    !discoveryResult.unexposedApplications.contains(where: { $0.bundleIdentifier == plan.savedWindow.bundleIdentifier }),
+                   plan.savedWindow.applicationBundleURL?.validatedApplicationBundleURL(
+                       withBundleIdentifier: plan.savedWindow.bundleIdentifier) == nil,
                    !applicationLauncher.isAvailable(bundleIdentifier: plan.savedWindow.bundleIdentifier) {
                     return RestoreWindowPlan(savedWindow: plan.savedWindow, candidate: nil, matchStrategy: nil,
                         skip: RestoreSkip(bundleIdentifier: plan.savedWindow.bundleIdentifier, windowTitle: plan.savedWindow.windowTitle,
@@ -1009,7 +1031,8 @@ struct RestoreEngine {
                 if !validTargets.isEmpty {
                     // One batch launches one captured process, including all its document windows.
                     let opened = await targetOpener.open(targets: validTargets.map(\.target),
-                        bundleIdentifier: bundle, disposition: .newApplicationInstance)
+                        bundleIdentifier: bundle, disposition: .newApplicationInstance,
+                        preferredApplicationURL: group.compactMap(\.applicationBundleURL).first)
                     if opened.wasSubmitted { result.requestedTargetCount += validTargets.count }
                     if case let .openedApplicationInstance(pid) = opened { launchedPID = pid }
                     if case let .failed(reason) = opened {
@@ -1019,7 +1042,8 @@ struct RestoreEngine {
                         }
                     }
                 } else if !hasTargets {
-                    launchedPID = await applicationLauncher.launchInstance(bundleIdentifier: bundle)
+                    launchedPID = await applicationLauncher.launchInstance(bundleIdentifier: bundle,
+                        preferredApplicationURL: group.compactMap(\.applicationBundleURL).first)
                 }
                 guard let pid = launchedPID, pid > 0, !initialPIDs.contains(pid), usedPIDs.insert(pid).inserted else {
                     for window in group { result.blockedWindows[window.id] = RestoreSkipReason.appInstanceUnconfirmed }
@@ -1606,12 +1630,12 @@ protocol RestoreApplicationActivating {
 protocol RestoreApplicationLaunching {
     func isAvailable(bundleIdentifier: String) -> Bool
     @discardableResult
-    func requestLaunch(bundleIdentifier: String) async -> pid_t?
-    func launchInstance(bundleIdentifier: String) async -> pid_t?
+    func requestLaunch(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t?
+    func launchInstance(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t?
 }
 
 extension RestoreApplicationLaunching {
-    func launchInstance(bundleIdentifier: String) async -> pid_t? { nil }
+    func launchInstance(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t? { nil }
 }
 
 enum RestoreTargetOpenResult {
@@ -1715,11 +1739,20 @@ struct RestoreTargetOpenRequestPlanner {
 }
 
 protocol RestoreTargetOpening {
-    func open(
-        targets: [WindowOpenTarget],
-        bundleIdentifier: String,
-        disposition: RestoreTargetOpenDisposition
-    ) async -> RestoreTargetOpenResult
+    func open(targets: [WindowOpenTarget], bundleIdentifier: String,
+        disposition: RestoreTargetOpenDisposition, preferredApplicationURL: URL?) async -> RestoreTargetOpenResult
+    func openBrowserWindow(targets: [WindowOpenTarget], bundleIdentifier: String,
+        excludingWindowIdentifiers: Set<String>, preferredApplicationURL: URL?,
+        remainingWindowTargets: [[WindowOpenTarget]]) async -> RestoreTargetOpenResult
+}
+
+extension RestoreTargetOpening {
+    func openBrowserWindow(targets: [WindowOpenTarget], bundleIdentifier: String,
+        excludingWindowIdentifiers: Set<String>, preferredApplicationURL: URL?,
+        remainingWindowTargets: [[WindowOpenTarget]]) async -> RestoreTargetOpenResult {
+        await open(targets: targets, bundleIdentifier: bundleIdentifier, disposition: .newBrowserWindow,
+            preferredApplicationURL: preferredApplicationURL)
+    }
 }
 
 struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
@@ -1785,15 +1818,30 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         }
     }
 
-    func open(
-        targets: [WindowOpenTarget],
-        bundleIdentifier: String,
-        disposition: RestoreTargetOpenDisposition
-    ) async -> RestoreTargetOpenResult {
+    func open(targets: [WindowOpenTarget], bundleIdentifier: String,
+        disposition: RestoreTargetOpenDisposition, preferredApplicationURL: URL? = nil) async -> RestoreTargetOpenResult {
+        await open(targets: targets, bundleIdentifier: bundleIdentifier, disposition: disposition,
+            excludingWindowIdentifiers: [], preferredApplicationURL: preferredApplicationURL)
+    }
+
+    func openBrowserWindow(targets: [WindowOpenTarget], bundleIdentifier: String,
+        excludingWindowIdentifiers: Set<String>, preferredApplicationURL: URL? = nil,
+        remainingWindowTargets: [[WindowOpenTarget]] = []) async -> RestoreTargetOpenResult {
+        await open(targets: targets, bundleIdentifier: bundleIdentifier, disposition: .newBrowserWindow,
+            excludingWindowIdentifiers: excludingWindowIdentifiers, preferredApplicationURL: preferredApplicationURL,
+            remainingWindowTargets: remainingWindowTargets)
+    }
+
+    private func open(targets: [WindowOpenTarget], bundleIdentifier: String,
+        disposition: RestoreTargetOpenDisposition, excludingWindowIdentifiers: Set<String>,
+        preferredApplicationURL: URL?, remainingWindowTargets: [[WindowOpenTarget]] = []) async -> RestoreTargetOpenResult {
+        let preferredInstallation = preferredApplicationURL?.validatedApplicationBundleURL(
+            withBundleIdentifier: bundleIdentifier)
+        let applicationURL = preferredInstallation ?? applicationURLProvider(bundleIdentifier)
         if UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) {
-            return await openUnityProject(targets: targets)
+            return await openUnityProject(targets: targets, preferredApplicationURL: applicationURL)
         }
-        guard let applicationURL = applicationURLProvider(bundleIdentifier) else {
+        guard let applicationURL else {
             return .failed(.applicationUnavailable)
         }
 
@@ -1821,7 +1869,10 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
            ) {
             let result = await browserWindowOpener.openNewWindow(
                 targets: targets,
-                browser: browser
+                browser: browser,
+                excludingWindowIdentifiers: excludingWindowIdentifiers,
+                preferredApplicationURL: preferredInstallation,
+                remainingWindowTargets: remainingWindowTargets
             )
             if case let .opened(openedWindow, startupWindows, openedTargetCount) = result {
                 return .openedNewBrowserWindow(
@@ -1849,7 +1900,7 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.createsNewApplicationInstance = disposition == .newApplicationInstance
-        configuration.allowsRunningApplicationSubstitution = true
+        configuration.allowsRunningApplicationSubstitution = preferredInstallation == nil && disposition != .newApplicationInstance
         configuration.promptsUserIfNeeded = true
 
         if disposition == .newApplicationInstance {
@@ -1860,7 +1911,7 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         }
 
         var deliveryURLs = targets.map(\.url)
-        if bundleIdentifier == BrowserAutomationBrowser.chrome.bundleIdentifier,
+        if BrowserAutomationBrowser.allCases.contains(where: { $0.bundleIdentifier == bundleIdentifier && $0.isChromium }),
            targets.allSatisfy({ $0.kind == .webURL }) {
             // Chrome renders macOS URL batches in reverse tab order.
             deliveryURLs.reverse()
@@ -1874,7 +1925,7 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         return didOpen ? .opened : .failed(.openRequestFailed)
     }
 
-    private func openUnityProject(targets: [WindowOpenTarget]) async -> RestoreTargetOpenResult {
+    private func openUnityProject(targets: [WindowOpenTarget], preferredApplicationURL: URL?) async -> RestoreTargetOpenResult {
         let resolver = UnityProjectResolver()
         let projects = targets.compactMap { resolver.projectURL(containing: $0.url) }
         guard !targets.isEmpty, projects.count == targets.count, let project = projects.first,
@@ -1890,7 +1941,8 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
         // its unsaved scene. Never deliver to an arbitrary existing Editor.
         guard !runningUnityProjectsProvider().contains(project) else { return .failed(.openingNotConfirmed) }
         guard let editor = resolver.editorURL(projectURL: project,
-            preferredApplicationURL: applicationURLProvider("com.unity3d.UnityEditor5.x")) else {
+            preferredApplicationURL: preferredApplicationURL) ?? resolver.editorURL(projectURL: project,
+                preferredApplicationURL: applicationURLProvider("com.unity3d.UnityEditor5.x")) else {
             return .failed(.applicationUnavailable)
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -1955,47 +2007,49 @@ struct NSWorkspaceRestoreTargetOpener: RestoreTargetOpening {
 }
 
 struct NSWorkspaceRestoreApplicationLauncher: RestoreApplicationLaunching {
-    private let workspace: NSWorkspace
+    private let applicationURLProvider: (String) -> URL?
+    private let applicationOpener: (URL, NSWorkspace.OpenConfiguration) async -> pid_t?
 
-    init(workspace: NSWorkspace = .shared) {
-        self.workspace = workspace
+    init(workspace: NSWorkspace = .shared,
+        applicationURLProvider: ((String) -> URL?)? = nil,
+        applicationOpener: ((URL, NSWorkspace.OpenConfiguration) async -> pid_t?)? = nil) {
+        self.applicationURLProvider = applicationURLProvider ?? {
+            workspace.urlForApplication(withBundleIdentifier: $0)
+        }
+        self.applicationOpener = applicationOpener ?? { applicationURL, configuration in
+            await withCheckedContinuation { continuation in
+                workspace.openApplication(at: applicationURL, configuration: configuration) { app, error in
+                    continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
+                }
+            }
+        }
     }
 
     func isAvailable(bundleIdentifier: String) -> Bool {
-        workspace.existingApplicationURL(withBundleIdentifier: bundleIdentifier) != nil
+        applicationURLProvider(bundleIdentifier).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
-    func requestLaunch(bundleIdentifier: String) async -> pid_t? {
-        guard let applicationURL = workspace.urlForApplication(
-            withBundleIdentifier: bundleIdentifier
-        ) else {
-            return nil
-        }
-
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        configuration.createsNewApplicationInstance = false
-        configuration.allowsRunningApplicationSubstitution = true
-        configuration.promptsUserIfNeeded = true
-
-        return await withCheckedContinuation { continuation in
-            workspace.openApplication(at: applicationURL, configuration: configuration) { app, error in
-                continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
-            }
-        }
+    func requestLaunch(bundleIdentifier: String, preferredApplicationURL: URL? = nil) async -> pid_t? {
+        await launch(bundleIdentifier: bundleIdentifier, preferredApplicationURL: preferredApplicationURL,
+            createsNewApplicationInstance: false)
     }
 
-    func launchInstance(bundleIdentifier: String) async -> pid_t? {
-        guard let applicationURL = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+    func launchInstance(bundleIdentifier: String, preferredApplicationURL: URL? = nil) async -> pid_t? {
+        await launch(bundleIdentifier: bundleIdentifier, preferredApplicationURL: preferredApplicationURL,
+            createsNewApplicationInstance: true)
+    }
+
+    private func launch(bundleIdentifier: String, preferredApplicationURL: URL?,
+        createsNewApplicationInstance: Bool) async -> pid_t? {
+        let preferredInstallation = preferredApplicationURL?.validatedApplicationBundleURL(
+            withBundleIdentifier: bundleIdentifier)
+        guard let applicationURL = preferredInstallation ?? applicationURLProvider(bundleIdentifier) else { return nil }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
-        configuration.createsNewApplicationInstance = true
+        configuration.createsNewApplicationInstance = createsNewApplicationInstance
+        configuration.allowsRunningApplicationSubstitution = preferredInstallation == nil && !createsNewApplicationInstance
         configuration.promptsUserIfNeeded = true
-        return await withCheckedContinuation { continuation in
-            workspace.openApplication(at: applicationURL, configuration: configuration) { app, error in
-                continuation.resume(returning: error == nil ? app?.processIdentifier : nil)
-            }
-        }
+        return await applicationOpener(applicationURL, configuration)
     }
 }
 

@@ -1410,7 +1410,7 @@ final class RestoreSpacesTests: XCTestCase {
 private struct SpaceTestLauncher: RestoreApplicationLaunching {
     func isAvailable(bundleIdentifier: String) -> Bool { true }
 
-    func requestLaunch(bundleIdentifier: String) async -> pid_t? {
+    func requestLaunch(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t? {
         XCTFail("Unexpected launch")
         return nil
     }
@@ -1443,7 +1443,8 @@ private final class SpaceTestTargetOpener: RestoreTargetOpening {
     var openedURLs: [URL] = []
     var onOpen: () -> Void = {}
     var result: RestoreTargetOpenResult = .opened
-    func open(targets: [WindowOpenTarget], bundleIdentifier: String, disposition: RestoreTargetOpenDisposition) async
+    func open(targets: [WindowOpenTarget], bundleIdentifier: String, disposition: RestoreTargetOpenDisposition,
+        preferredApplicationURL: URL?) async
         -> RestoreTargetOpenResult
     {
         onOpen()

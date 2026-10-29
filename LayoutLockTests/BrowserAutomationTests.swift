@@ -4,6 +4,30 @@ import XCTest
 @testable import LayoutLock
 
 final class BrowserScriptResultParserTests: XCTestCase {
+    func testSelectedBrowserTabPersistsAndOlderTargetsDecodeWithoutSelection() throws {
+        let target = WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com")!,
+            isSelectedBrowserTab: true)
+        let encoded = try JSONEncoder().encode(target)
+        XCTAssertEqual(try JSONDecoder().decode(WindowOpenTarget.self, from: encoded).isSelectedBrowserTab, true)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "isSelectedBrowserTab")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        XCTAssertNil(try JSONDecoder().decode(WindowOpenTarget.self, from: legacyData).isSelectedBrowserTab)
+    }
+
+    func testSelectedTabTracksItsOccurrenceAfterInternalTabsAreFiltered() throws {
+        let URL = "https://example.com/document"
+        for (sourceIndex, expectedIndex) in [(1, nil as Int?), (2, 0), (3, 1)] {
+            let descriptor = makeBrowserResultDescriptor(windows: [
+                ("window", "Tabs", CGRect(x: 0, y: 0, width: 800, height: 600), ["brave://newtab", URL, URL])
+            ])
+            descriptor.atIndex(1)?.insert(NSAppleEventDescriptor(int32: Int32(sourceIndex)), at: 5)
+            let window = try XCTUnwrap(BrowserScriptResultParser().parse(descriptor, browser: .brave).first)
+            XCTAssertEqual(window.tabs.map(\.URL.absoluteString), [URL, URL])
+            XCTAssertEqual(window.selectedTabIndex, expectedIndex)
+        }
+    }
+
     func testParserPreservesHTTPURLOrderAndDuplicates() throws {
         let descriptor = makeBrowserResultDescriptor(
             windows: [
@@ -261,6 +285,150 @@ final class BrowserTabCaptureServiceTests: XCTestCase {
 }
 
 final class BrowserAutomationWindowOpenerTests: XCTestCase {
+    func testCompleteMatchesAreReservedForLaterSavedGroups() async {
+        let firstURL = URL(string: "https://example.com/a")!
+        let otherURL = URL(string: "https://example.com/b")!
+        let extraURL = URL(string: "https://example.com/c")!
+        let cases = [
+            (windows: [[firstURL, firstURL], [firstURL]], remaining: [[firstURL, firstURL]]),
+            (windows: [[firstURL, otherURL], [firstURL, extraURL]], remaining: [[firstURL, otherURL]]),
+            (windows: [[firstURL, otherURL], [firstURL], [otherURL]], remaining: [[otherURL], [otherURL]])
+        ]
+        for browser in BrowserAutomationBrowser.allCases {
+            for cold in [false, true] {
+                for testCase in cases {
+                    for reversed in [false, true] {
+                        let defaults = makeBrowserUserDefaults()
+                        connect(browser, in: defaults)
+                        var windows = testCase.windows.enumerated().map { index, urls in
+                            (String(index), "Window \(index)", CGRect(x: index * 800, y: 0, width: 800, height: 600),
+                                urls.map(\.absoluteString))
+                        }
+                        if reversed { windows.reverse() }
+                        let inventory = makeBrowserResultDescriptor(windows: windows)
+                        let groups = ([[firstURL]] + testCase.remaining).map { urls in
+                            urls.map { WindowOpenTarget(kind: .webURL, url: $0) }
+                        }
+                        let evaluator = RecordingBrowserScriptEvaluator(
+                            results: groups.flatMap { _ in browser.isChromium ? [.list(), inventory] : [inventory] })
+                        var running = !cold
+                        let opener = BrowserAutomationWindowOpener(userDefaults: defaults,
+                            permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+                            scriptEvaluator: evaluator,
+                            applicationURLProvider: { _ in URL(fileURLWithPath: "/Applications/Browser.app") },
+                            runningApplicationProvider: { _ in running },
+                            applicationLauncher: { _ in running = true; return true }, launchPollSleeper: { _ in })
+
+                        var reserved: Set<String> = []
+                        for (index, targets) in groups.enumerated() {
+                            let result = await opener.openNewWindow(targets: targets, browser: browser,
+                                excludingWindowIdentifiers: reserved,
+                                remainingWindowTargets: Array(groups.dropFirst(index + 1)))
+
+                            guard case let .opened(window, _, openedCount) = result,
+                                  let identifier = window.scriptingIdentifier else {
+                                XCTFail("Expected reuse of an already-complete window.")
+                                continue
+                            }
+                            if index == 0 { XCTAssertEqual(identifier, "1") }
+                            XCTAssertTrue(reserved.insert(identifier).inserted)
+                            XCTAssertEqual(openedCount, 0)
+                        }
+                        XCTAssertEqual(reserved.count, groups.count)
+                    }
+                }
+            }
+        }
+    }
+
+    func testMissingTabsAreAddedWithoutTakingALaterCompleteWindow() async {
+        let first = WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com/a")!)
+        let missing = WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com/b")!)
+        let other = WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com/c")!)
+        let frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let inventory = makeBrowserResultDescriptor(windows: [
+            ("complete", "Complete", frame, [first.url.absoluteString, other.url.absoluteString]),
+            ("partial", "Partial", frame, [first.url.absoluteString])
+        ])
+        let opened = makeBrowserResultDescriptor(windows: [
+            ("partial", "Partial", frame, [first.url.absoluteString, missing.url.absoluteString])
+        ])
+        for browser in BrowserAutomationBrowser.allCases {
+            let defaults = makeBrowserUserDefaults()
+            connect(browser, in: defaults)
+            let evaluator = RecordingBrowserScriptEvaluator(
+                results: (browser.isChromium ? [.list()] : []) + [inventory, opened])
+            let opener = BrowserAutomationWindowOpener(userDefaults: defaults,
+                permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+                scriptEvaluator: evaluator, runningApplicationProvider: { _ in true })
+
+            let result = await opener.openNewWindow(targets: [first, missing], browser: browser,
+                remainingWindowTargets: [[first, other]])
+
+            guard case let .opened(window, _, openedCount) = result else {
+                XCTFail("Expected the missing tab to open in the partial window.")
+                continue
+            }
+            XCTAssertEqual(window.scriptingIdentifier, "partial")
+            XCTAssertEqual(openedCount, 1)
+            XCTAssertEqual(evaluator.lastSource, BrowserAutomationWindowOpener.script(
+                for: browser, targets: [missing], existingWindowIdentifier: "partial"))
+        }
+    }
+
+    func testColdBrowserPrefersCapturedInstallationWithMissingPathFallback() async throws {
+        let directory = try TestTemporaryDirectory()
+        let captured = try makeApplicationBundle(in: directory.url, named: "CapturedBrave.app",
+            bundleIdentifier: BrowserAutomationBrowser.brave.bundleIdentifier)
+        let fallback = directory.url.appendingPathComponent("RegisteredBrave.app")
+        let URL = URL(string: "https://example.com/document")!
+        let inventory = makeBrowserResultDescriptor(windows: [
+            ("window", "Tabs", CGRect(x: 0, y: 0, width: 800, height: 600), [URL.absoluteString])
+        ])
+        for preferred in [captured, directory.url.appendingPathComponent("Missing.app")] {
+            let defaults = makeBrowserUserDefaults()
+            connect(.brave, in: defaults)
+            var running = false
+            var launched: URL?
+            let opener = BrowserAutomationWindowOpener(userDefaults: defaults,
+                permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+                scriptEvaluator: RecordingBrowserScriptEvaluator(results: [.list(), inventory]),
+                applicationURLProvider: { _ in fallback }, runningApplicationProvider: { _ in running },
+                applicationLauncher: { launched = $0; running = true; return true }, launchPollSleeper: { _ in })
+            _ = await opener.openNewWindow(targets: [WindowOpenTarget(kind: .webURL, url: URL)],
+                browser: .brave, preferredApplicationURL: preferred)
+            XCTAssertEqual(launched, preferred == captured ? captured : fallback)
+        }
+    }
+
+    func testBraveReusesCompleteWindowAndSelectsTheSavedDuplicateTab() async {
+        let defaults = makeBrowserUserDefaults()
+        connect(.brave, in: defaults)
+        let URL = URL(string: "https://example.com/document")!
+        let inventory = makeBrowserResultDescriptor(windows: [
+            ("brave-window", "Tabs", CGRect(x: 0, y: 0, width: 800, height: 600),
+             [URL.absoluteString, URL.absoluteString])
+        ])
+        let evaluator = RecordingBrowserScriptEvaluator(results: [.list(), inventory, .list()])
+        let opener = BrowserAutomationWindowOpener(userDefaults: defaults,
+            permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+            scriptEvaluator: evaluator, runningApplicationProvider: { _ in true })
+
+        let result = await opener.openNewWindow(targets: [
+            WindowOpenTarget(kind: .webURL, url: URL),
+            WindowOpenTarget(kind: .webURL, url: URL, isSelectedBrowserTab: true)
+        ], browser: .brave)
+
+        guard case let .opened(window, _, count) = result else { return XCTFail("Expected Brave window reuse.") }
+        XCTAssertEqual(window.scriptingIdentifier, "brave-window")
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(evaluator.callCount, 3)
+        XCTAssertTrue(evaluator.sources.allSatisfy { $0.contains("com.brave.Browser") })
+        XCTAssertTrue(evaluator.lastSource?.contains("set remainingOccurrence to 2") == true)
+        XCTAssertTrue(evaluator.lastSource?.contains("set active tab index") == true)
+        XCTAssertTrue(evaluator.lastSource?.contains("considering case") == true)
+    }
+
     @MainActor
     func testRestoreScriptsCompileAndKeepURLOrder() {
         let targets = [
@@ -311,6 +479,14 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             )
         }
 
+        for browser in BrowserAutomationBrowser.allCases {
+            let source = BrowserAutomationWindowOpener.script(for: browser, targets: targets,
+                existingWindowIdentifier: "123")
+            var error: NSDictionary?
+            XCTAssertTrue(NSAppleScript(source: source)?.compileAndReturnError(&error) == true,
+                "\(browser.displayName) stable-window script failed to compile: \(String(describing: error))")
+        }
+
         let coldStartSafariSource = BrowserAutomationWindowOpener.script(
             for: .safari,
             targets: targets,
@@ -348,8 +524,8 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         XCTAssertTrue(runningChromeSource.contains("set targetWindow to make new window"))
 
         for source in [
-            BrowserAutomationWindowOpener.chromeStartupScript,
-            BrowserAutomationWindowOpener.chromeStartupCleanupScript(
+            BrowserAutomationWindowOpener.chromiumStartupScript(for: .chrome),
+            BrowserAutomationWindowOpener.chromiumStartupCleanupScript(
                 windowIdentifier: "startup-window", tabIdentifier: "startup-tab"
             ),
             BrowserAutomationWindowOpener.script(
@@ -369,7 +545,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
+        let evaluator = RecordingBrowserScriptEvaluator(results: [.list(), makeOpenedWindowDescriptor()])
         let target = WindowOpenTarget(
             kind: .webURL,
             url: URL(string: "https://example.com")!
@@ -401,7 +577,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             permissionChecker.calls,
             [.init(browser: .safari, askUserIfNeeded: false)]
         )
-        XCTAssertEqual(evaluator.callCount, 1)
+        XCTAssertEqual(evaluator.callCount, 2)
         XCTAssertTrue(evaluator.lastSource?.contains(target.url.absoluteString) == true)
         XCTAssertTrue(evaluator.lastSource?.contains("make new document") == true)
         XCTAssertFalse(evaluator.lastSource?.contains("candidateWindow") == true)
@@ -411,7 +587,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
         let permissionChecker = RecordingBrowserPermissionChecker(result: .authorized)
-        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
+        let evaluator = RecordingBrowserScriptEvaluator(results: [.list(), makeOpenedWindowDescriptor()])
         var isRunning = false
         var launchCount = 0
         let opener = BrowserAutomationWindowOpener(
@@ -444,7 +620,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             return XCTFail("Expected closed Safari restore to succeed.")
         }
         XCTAssertEqual(launchCount, 1)
-        XCTAssertEqual(evaluator.callCount, 1)
+        XCTAssertEqual(evaluator.callCount, 2)
         XCTAssertTrue(evaluator.lastSource?.contains("set candidateWindow to front window") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("(count tabs of candidateWindow) is 1") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("candidateURLText starts with \"favorites://\"") == true)
@@ -452,10 +628,12 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         XCTAssertFalse(evaluator.lastSource?.contains("close ") == true)
     }
 
-    func testOnlyFirstSafariRestoreAfterColdStartCanReuseStartupWindow() async {
+    func testReservedSafariWindowIsNotReusedForAnotherSavedWindow() async {
         let userDefaults = makeBrowserUserDefaults()
         connect(.safari, in: userDefaults)
-        let evaluator = RecordingBrowserScriptEvaluator(result: makeOpenedWindowDescriptor())
+        let evaluator = RecordingBrowserScriptEvaluator(results: [
+            .list(), makeOpenedWindowDescriptor(), makeOpenedWindowDescriptor(), makeOpenedWindowDescriptor()
+        ])
         var isRunning = false
         let opener = BrowserAutomationWindowOpener(
             userDefaults: userDefaults,
@@ -477,12 +655,13 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         )
 
         _ = await opener.openNewWindow(targets: [target], browser: .safari)
-        _ = await opener.openNewWindow(targets: [target], browser: .safari)
+        _ = await opener.openNewWindow(targets: [target], browser: .safari,
+            excludingWindowIdentifiers: ["opened-window"])
 
-        XCTAssertEqual(evaluator.sources.count, 2)
-        XCTAssertTrue(evaluator.sources[0].contains("candidateWindow"))
-        XCTAssertFalse(evaluator.sources[1].contains("candidateWindow"))
-        XCTAssertTrue(evaluator.sources[1].contains("make new document"))
+        XCTAssertEqual(evaluator.sources.count, 4)
+        XCTAssertTrue(evaluator.sources[1].contains("candidateWindow"))
+        XCTAssertFalse(evaluator.sources[3].contains("candidateWindow"))
+        XCTAssertTrue(evaluator.sources[3].contains("make new document"))
     }
 
     func testClosedConnectedBrowserLaunchesBeforePermissionCheck() async {
@@ -529,7 +708,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             [.init(browser: .chrome, askUserIfNeeded: false)]
         )
         XCTAssertEqual(evaluator.callCount, 52)
-        XCTAssertEqual(evaluator.sources.first, BrowserAutomationWindowOpener.chromeStartupScript)
+        XCTAssertEqual(evaluator.sources.first, BrowserAutomationWindowOpener.chromiumStartupScript(for: .chrome))
         XCTAssertTrue(evaluator.lastSource?.contains("(count windows) is 1") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("chrome://newtab") == true)
         XCTAssertTrue(evaluator.lastSource?.contains("set targetWindow to candidateWindow") == true)
@@ -576,7 +755,7 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
         XCTAssertEqual(startupWindows, [window])
         XCTAssertEqual(openedTargetCount, 0)
         XCTAssertEqual(sleepCount, 2)
-        XCTAssertEqual(evaluator.sources, [BrowserAutomationWindowOpener.chromeStartupScript] + Array(
+        XCTAssertEqual(evaluator.sources, [BrowserAutomationWindowOpener.chromiumStartupScript(for: .chrome)] + Array(
             repeating: BrowserTabCaptureService.script(for: .chrome), count: 3
         ))
     }
@@ -622,14 +801,47 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
             XCTAssertEqual(window.scriptingIdentifier, "session-window")
             XCTAssertEqual(openedTargetCount, 0)
             XCTAssertEqual(evaluator.sources, [
-                BrowserAutomationWindowOpener.chromeStartupScript,
+                BrowserAutomationWindowOpener.chromiumStartupScript(for: .chrome),
                 BrowserTabCaptureService.script(for: .chrome),
                 BrowserTabCaptureService.script(for: .chrome),
-                BrowserAutomationWindowOpener.chromeStartupCleanupScript(
+                BrowserAutomationWindowOpener.chromiumStartupCleanupScript(
                     windowIdentifier: "startup-window", tabIdentifier: "startup-tab"
                 )
             ])
         }
+    }
+
+    func testColdChromeDoesNotTreatTabsInDifferentWindowsAsOneSavedWindow() async {
+        let userDefaults = makeBrowserUserDefaults()
+        connect(.chrome, in: userDefaults)
+        let URLs = ["https://example.com/first", "https://example.com/second"]
+        let startup = makeBrowserResultDescriptor(windows: [
+            ("first-window", "First", CGRect(x: 0, y: 0, width: 800, height: 600), [URLs[0]]),
+            ("second-window", "Second", CGRect(x: 800, y: 0, width: 800, height: 600), [URLs[1]])
+        ])
+        let complete = makeBrowserResultDescriptor(windows: [
+            ("first-window", "Restored", CGRect(x: 0, y: 0, width: 800, height: 600), URLs)
+        ])
+        let evaluator = RecordingBrowserScriptEvaluator(
+            results: [.list()] + Array(repeating: startup, count: 50) + [complete])
+        var isRunning = false
+        let opener = BrowserAutomationWindowOpener(
+            userDefaults: userDefaults,
+            permissionChecker: RecordingBrowserPermissionChecker(result: .authorized),
+            scriptEvaluator: evaluator,
+            applicationURLProvider: { _ in URL(fileURLWithPath: "/Applications/Google Chrome.app") },
+            runningApplicationProvider: { _ in isRunning },
+            applicationLauncher: { _ in isRunning = true; return true },
+            launchPollSleeper: { _ in })
+
+        let result = await opener.openNewWindow(
+            targets: URLs.map { WindowOpenTarget(kind: .webURL, url: URL(string: $0)!) }, browser: .chrome)
+
+        guard case let .opened(window, _, openedTargetCount) = result else {
+            return XCTFail("Expected one window containing the saved tab group.")
+        }
+        XCTAssertEqual(window.tabs.map(\.URL.absoluteString), URLs)
+        XCTAssertEqual(openedTargetCount, 1)
     }
 
     func testColdChromeOpensOnlyMissingStartupTabOccurrencesAfterBoundedWait() async {
@@ -687,7 +899,8 @@ final class BrowserAutomationWindowOpenerTests: XCTestCase {
                 targets: testCase.missing.map {
                     WindowOpenTarget(kind: .webURL, url: URL(string: $0)!)
                 },
-                reuseDisposableStartupWindow: true
+                reuseDisposableStartupWindow: true,
+                existingWindowIdentifier: testCase.missing.count < testCase.saved.count ? "session-window" : nil
             ))
         }
     }
@@ -769,12 +982,14 @@ final class BrowserWindowTargetEnricherTests: XCTestCase {
     func testMatchesMultipleWindowsAndPreservesDuplicateTabs() {
         let frontFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
         let backFrame = CGRect(x: 850, y: 20, width: 800, height: 600)
+        let applicationURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
         let discoveryResult = makeBrowserDiscoveryResult(
             browser: .chrome,
             windows: [
                 makeDiscoveredWindow(title: "Front", frame: frontFrame, zOrderHint: 0),
                 makeDiscoveredWindow(title: "Back", frame: backFrame, zOrderHint: 1)
-            ]
+            ],
+            applicationBundleURL: applicationURL
         )
         let firstURL = URL(string: "https://front.example")!
         let secondURL = URL(string: "https://back.example")!
@@ -786,7 +1001,8 @@ final class BrowserWindowTargetEnricherTests: XCTestCase {
                     title: "Front",
                     frame: frontFrame,
                     frontToBackIndex: 0,
-                    tabs: makeCapturedBrowserTabs([firstURL, firstURL])
+                    tabs: makeCapturedBrowserTabs([firstURL, firstURL]),
+                    selectedTabIndex: 1
                 ),
                 CapturedBrowserWindow(
                     browser: .chrome,
@@ -806,8 +1022,10 @@ final class BrowserWindowTargetEnricherTests: XCTestCase {
         )
         let windows = result.discoveryResult.applications[0].windows
 
+        XCTAssertEqual(result.discoveryResult.applications[0].applicationBundleURL, applicationURL)
         XCTAssertEqual(windows.map(\.browserScriptingIdentifier), ["front", "back"])
         XCTAssertEqual(windows[0].capturedOpeningTargets.map(\.url), [firstURL, firstURL])
+        XCTAssertEqual(windows[0].capturedOpeningTargets.map(\.isSelectedBrowserTab), [nil, true])
         XCTAssertEqual(windows[1].capturedOpeningTargets.map(\.url), [secondURL])
         XCTAssertTrue(result.issues.isEmpty)
     }
@@ -1233,12 +1451,14 @@ private func makeRunningBrowser(
 
 private func makeBrowserDiscoveryResult(
     browser: BrowserAutomationBrowser,
-    windows: [DiscoveredWindow]
+    windows: [DiscoveredWindow],
+    applicationBundleURL: URL? = nil
 ) -> WindowDiscoveryResult {
     WindowDiscoveryResult(
         applications: [
             DiscoveredApplication(
                 bundleIdentifier: browser.bundleIdentifier,
+                applicationBundleURL: applicationBundleURL,
                 pid: 42,
                 localizedName: browser.displayName,
                 windows: windows

@@ -672,7 +672,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             appElement: appElement,
             attributeReader: fixture.reader,
             metadata: [101: [metadata]],
-            windowIDProvider: { _ in 900 }
+            windowIDProvider: { _ in 900 },
+            applicationBundleURL: URL(fileURLWithPath: "/Custom Apps/Editor.app")
         )
 
         let result = try engine.discoverRunningWindowsWithDiagnostics()
@@ -680,6 +681,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         let window = try XCTUnwrap(application.windows.first)
 
         XCTAssertEqual(application.bundleIdentifier, "com.example.editor")
+        XCTAssertEqual(application.applicationBundleURL, URL(fileURLWithPath: "/Custom Apps/Editor.app"))
         XCTAssertEqual(application.pid, 101)
         XCTAssertEqual(application.localizedName, "Editor")
         XCTAssertEqual(window.title, "Document")
@@ -1359,7 +1361,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver =
             ApplicationWindowDocumentURLResolver(),
         unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil },
-        unrealProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil }
+        unrealProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil },
+        applicationBundleURL: URL? = nil
     ) -> WindowDiscoveryEngine {
         WindowDiscoveryEngine(
             trustChecker: AccessibilityTrustChecker { true },
@@ -1370,6 +1373,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
                 [
                     RunningApplicationSnapshot(
                         bundleIdentifier: bundleIdentifier,
+                        applicationBundleURL: applicationBundleURL,
                         processIdentifier: 101,
                         localizedName: "Editor"
                     )

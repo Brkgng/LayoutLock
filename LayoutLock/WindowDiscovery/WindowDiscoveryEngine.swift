@@ -17,9 +17,19 @@ private let transientWindowSubroles: Set<String> = [
 
 struct DiscoveredApplication {
     let bundleIdentifier: String
+    let applicationBundleURL: URL?
     let pid: pid_t
     let localizedName: String?
     let windows: [DiscoveredWindow]
+
+    init(bundleIdentifier: String, applicationBundleURL: URL? = nil, pid: pid_t,
+        localizedName: String?, windows: [DiscoveredWindow]) {
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationBundleURL = applicationBundleURL
+        self.pid = pid
+        self.localizedName = localizedName
+        self.windows = windows
+    }
 }
 
 struct DiscoveredWindow {
@@ -119,6 +129,7 @@ struct WindowDiscoveryDiagnostic: Equatable {
 
 struct RunningApplicationSnapshot {
     let bundleIdentifier: String?
+    let applicationBundleURL: URL?
     let processIdentifier: pid_t
     let localizedName: String?
     let isTerminated: Bool
@@ -126,12 +137,14 @@ struct RunningApplicationSnapshot {
 
     init(
         bundleIdentifier: String?,
+        applicationBundleURL: URL? = nil,
         processIdentifier: pid_t,
         localizedName: String?,
         isTerminated: Bool = false,
         activationPolicy: NSApplication.ActivationPolicy = .regular
     ) {
         self.bundleIdentifier = bundleIdentifier
+        self.applicationBundleURL = applicationBundleURL
         self.processIdentifier = processIdentifier
         self.localizedName = localizedName
         self.isTerminated = isTerminated
@@ -141,6 +154,7 @@ struct RunningApplicationSnapshot {
     init(application: NSRunningApplication) {
         self.init(
             bundleIdentifier: application.bundleIdentifier,
+            applicationBundleURL: application.bundleURL,
             processIdentifier: application.processIdentifier,
             localizedName: application.localizedName,
             isTerminated: application.isTerminated,
@@ -333,6 +347,7 @@ struct WindowDiscoveryEngine {
 
         return DiscoveredApplication(
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: application.applicationBundleURL,
             pid: application.processIdentifier,
             localizedName: application.localizedName,
             windows: windows

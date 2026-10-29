@@ -1508,9 +1508,10 @@ final class RestoreEngineTests: XCTestCase {
 
     func testMissingInstalledAppRequestsLaunchBeforePlanning() async throws {
         let bundleIdentifier = "com.example.editor"
+        let application = temporaryDirectoryURL.appendingPathComponent("Captured.app")
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         let snapshot = makeSnapshot(windows: [
-            makeWindowRecord(bundleIdentifier: bundleIdentifier)
+            makeWindowRecord(bundleIdentifier: bundleIdentifier, applicationBundleURL: application)
         ])
         try store.save(snapshot)
         let launcher = RecordingApplicationLauncher(results: [bundleIdentifier: true])
@@ -1524,6 +1525,7 @@ final class RestoreEngineTests: XCTestCase {
         ).restoreSnapshot(id: snapshot.id)
 
         XCTAssertEqual(launcher.requestedBundleIdentifiers, [bundleIdentifier])
+        XCTAssertEqual(launcher.preferredLaunchApplications, [application])
         XCTAssertEqual(result.skippedItems.first?.reason, RestoreSkipReason.appNotRunning)
     }
 
@@ -2504,10 +2506,12 @@ final class RestoreEngineTests: XCTestCase {
 
     func testSuccessfulTargetOpeningCanLaunchClosedApplication() async throws {
         let bundleIdentifier = "com.example.editor"
+        let application = temporaryDirectoryURL.appendingPathComponent("Captured.app")
         let targetURL = try makeFile(named: "Project.txt")
         let target = WindowOpenTarget(kind: .file, url: targetURL)
         let savedWindow = makeWindowRecord(
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: application,
             windowTitle: "Project",
             openingConfiguration: WindowOpeningConfiguration(manualTargets: [target])
         )
@@ -2542,6 +2546,7 @@ final class RestoreEngineTests: XCTestCase {
 
         XCTAssertEqual(result.restoredWindows, 1)
         XCTAssertEqual(result.requestedTargetCount, 1)
+        XCTAssertEqual(targetOpener.preferredApplications, [application])
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
         XCTAssertEqual(discovery.callCount, 2)
     }
@@ -3166,6 +3171,89 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(workspaceOpener.requests.count, 1)
     }
 
+    func testWorkspaceOpenerPrefersValidatedCapturedInstallationForResourcesAndInstances() async throws {
+        let captured = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Captured.app")
+        let fallback = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Registered.app")
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "Captured.txt"))
+        var openedApplications: [URL] = []
+        let opener = NSWorkspaceRestoreTargetOpener(applicationURLProvider: { _ in
+            XCTFail("A valid captured installation should be preferred before registration lookup")
+            return fallback
+        }, workspaceOpener: { urls, application, configuration in
+            XCTAssertEqual(urls, [target.url])
+            XCTAssertFalse(configuration.createsNewApplicationInstance)
+            XCTAssertFalse(configuration.allowsRunningApplicationSubstitution)
+            openedApplications.append(application)
+            return true
+        }, instanceWorkspaceOpener: { urls, application, configuration in
+            XCTAssertEqual(urls, [target.url])
+            XCTAssertTrue(configuration.createsNewApplicationInstance)
+            XCTAssertFalse(configuration.allowsRunningApplicationSubstitution)
+            openedApplications.append(application)
+            return 1234
+        })
+
+        let resourceResult = await opener.open(targets: [target], bundleIdentifier: TestFixtures.bundleIdentifier,
+            disposition: .applicationDefault, preferredApplicationURL: captured)
+        let instanceResult = await opener.open(targets: [target], bundleIdentifier: TestFixtures.bundleIdentifier,
+            disposition: .newApplicationInstance, preferredApplicationURL: captured)
+
+        XCTAssertTrue(resourceResult.wasSubmitted)
+        guard case .openedApplicationInstance(1234) = instanceResult else { return XCTFail("Expected instance PID") }
+        XCTAssertEqual(openedApplications, [captured, captured])
+    }
+
+    func testInvalidCapturedInstallationsFallBackToRegisteredApplication() async throws {
+        let fallback = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Registered.app")
+        let wrongBundle = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Different.app",
+            bundleIdentifier: "com.example.different")
+        let noExecutable = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Incomplete.app", executable: false)
+        let notApplication = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Folder")
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "Fallback.txt"))
+        let invalid: [URL?] = [nil, temporaryDirectoryURL.appendingPathComponent("Missing.app"),
+            wrongBundle, noExecutable, notApplication, URL(string: "https://example.com/Remote.app")!]
+        var openedApplications: [URL] = []
+        let opener = NSWorkspaceRestoreTargetOpener(applicationURLProvider: { _ in fallback },
+            workspaceOpener: { _, application, _ in openedApplications.append(application); return true })
+
+        for preferred in invalid {
+            let result = await opener.open(targets: [target], bundleIdentifier: TestFixtures.bundleIdentifier,
+                disposition: .applicationDefault, preferredApplicationURL: preferred)
+            XCTAssertTrue(result.wasSubmitted)
+        }
+
+        XCTAssertEqual(openedApplications, Array(repeating: fallback, count: invalid.count))
+    }
+
+    func testApplicationLauncherPrefersCapturedInstallationAndFallsBackWhenUnavailable() async throws {
+        let captured = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Captured.app")
+        let fallback = try makeApplicationBundle(in: temporaryDirectoryURL, named: "Registered.app")
+        var openedApplications: [URL] = []
+        var createsInstances: [Bool] = []
+        let launcher = NSWorkspaceRestoreApplicationLauncher(applicationURLProvider: { _ in fallback },
+            applicationOpener: { application, configuration in
+                XCTAssertFalse(configuration.activates)
+                if application == captured { XCTAssertFalse(configuration.allowsRunningApplicationSubstitution) }
+                openedApplications.append(application)
+                createsInstances.append(configuration.createsNewApplicationInstance)
+                return 1234
+            })
+
+        let launched = await launcher.requestLaunch(bundleIdentifier: TestFixtures.bundleIdentifier,
+            preferredApplicationURL: captured)
+        let instance = await launcher.launchInstance(bundleIdentifier: TestFixtures.bundleIdentifier,
+            preferredApplicationURL: captured)
+        try FileManager.default.removeItem(at: captured)
+        let fallbackLaunch = await launcher.requestLaunch(bundleIdentifier: TestFixtures.bundleIdentifier,
+            preferredApplicationURL: captured)
+        let fallbackInstance = await launcher.launchInstance(bundleIdentifier: TestFixtures.bundleIdentifier,
+            preferredApplicationURL: captured)
+
+        XCTAssertEqual([launched, instance, fallbackLaunch, fallbackInstance], [1234, 1234, 1234, 1234])
+        XCTAssertEqual(openedApplications, [captured, captured, fallback, fallback])
+        XCTAssertEqual(createsInstances, [false, true, false, true])
+    }
+
     func testWorkspaceOpenerReversesChromeWebBatchForRenderedTabOrder() async throws {
         let applicationURL = temporaryDirectoryURL
             .appendingPathComponent("Google Chrome.app", isDirectory: true)
@@ -3204,7 +3292,7 @@ final class RestoreEngineTests: XCTestCase {
         )
     }
 
-    func testConnectedBrowserUsesAutomationWindowOpenerBeforeWorkspace() async {
+    func testConnectedBrowserUsesAutomationWindowOpenerBeforeWorkspace() async throws {
         let applicationURL = temporaryDirectoryURL
             .appendingPathComponent("Safari.app", isDirectory: true)
         let targets = [
@@ -3220,6 +3308,8 @@ final class RestoreEngineTests: XCTestCase {
         let browserWindowOpener = RecordingBrowserWindowOpener(
             results: [.opened(makeCapturedBrowserWindow(browser: .safari))]
         )
+        let capturedInstallation = try makeApplicationBundle(in: temporaryDirectoryURL, named: "CapturedSafari.app",
+            bundleIdentifier: BrowserAutomationBrowser.safari.bundleIdentifier)
         let workspaceOpener = RecordingWorkspaceOpener()
         let opener = NSWorkspaceRestoreTargetOpener(
             applicationURLProvider: { _ in applicationURL },
@@ -3227,10 +3317,11 @@ final class RestoreEngineTests: XCTestCase {
             workspaceOpener: workspaceOpener.open
         )
 
-        let result = await opener.open(
+        let result = await opener.openBrowserWindow(
             targets: targets,
             bundleIdentifier: BrowserAutomationBrowser.safari.bundleIdentifier,
-            disposition: .newBrowserWindow
+            excludingWindowIdentifiers: ["reserved-window"], preferredApplicationURL: capturedInstallation,
+            remainingWindowTargets: [targets]
         )
 
         guard case .openedNewBrowserWindow = result else {
@@ -3242,6 +3333,9 @@ final class RestoreEngineTests: XCTestCase {
             targets.map(\.url)
         )
         XCTAssertEqual(browserWindowOpener.requests.first?.browser, .safari)
+        XCTAssertEqual(browserWindowOpener.requests.first?.excludingWindowIdentifiers, ["reserved-window"])
+        XCTAssertEqual(browserWindowOpener.requests.first?.preferredApplicationURL, capturedInstallation)
+        XCTAssertEqual(browserWindowOpener.requests.first?.remainingWindowTargets, [targets])
         XCTAssertTrue(workspaceOpener.requests.isEmpty)
     }
 
@@ -3786,11 +3880,12 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .singleton)
     }
 
-    func testConnectedBrowserSkipsWebTargetThatIsAlreadyOpenOnRepeatedRestores() async throws {
+    func testConnectedBrowserReconcilesAlreadyOpenSelectedTabOnEveryRestore() async throws {
         for browser in BrowserAutomationBrowser.allCases {
             let target = WindowOpenTarget(
                 kind: .webURL,
-                url: URL(string: "https://example.com/open")!
+                url: URL(string: "https://example.com/open")!,
+                isSelectedBrowserTab: true
             )
             let savedWindow = makeWindowRecord(
                 bundleIdentifier: browser.bundleIdentifier,
@@ -3799,7 +3894,18 @@ final class RestoreEngineTests: XCTestCase {
             let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
             let snapshot = makeSnapshot(windows: [savedWindow])
             try store.save(snapshot)
-            let targetOpener = RecordingTargetOpener()
+            let capturedWindow = CapturedBrowserWindow(
+                browser: browser,
+                scriptingIdentifier: "1",
+                title: savedWindow.windowTitle,
+                frame: savedWindow.frame.cgRect,
+                frontToBackIndex: 0,
+                tabs: [CapturedBrowserTab(title: "Open", URL: target.url)]
+            )
+            let targetOpener = RecordingTargetOpener(results: Array(
+                repeating: .openedNewBrowserWindow(capturedWindow, openedTargetCount: 0),
+                count: 2
+            ))
             let application = makeApplication(
                 bundleIdentifier: browser.bundleIdentifier,
                 windows: [
@@ -3818,25 +3924,18 @@ final class RestoreEngineTests: XCTestCase {
                 targetOpener: targetOpener,
                 browserTabCapturer: StubRestoreBrowserTabCapturer(
                     result: BrowserTabCaptureResult(
-                        windows: [
-                            CapturedBrowserWindow(
-                                browser: browser,
-                                scriptingIdentifier: "1",
-                                title: savedWindow.windowTitle,
-                                frame: savedWindow.frame.cgRect,
-                                frontToBackIndex: 0,
-                                tabs: [CapturedBrowserTab(title: "Open", URL: target.url)]
-                            )
-                        ],
+                        windows: [capturedWindow],
                         issues: []
                     )
                 )
             )
 
-            for _ in 0..<2 {
+            for restoreIndex in 0..<2 {
                 let result = try await engine.restoreSnapshot(id: snapshot.id)
 
-                XCTAssertTrue(targetOpener.requests.isEmpty)
+                XCTAssertEqual(targetOpener.requests.count, restoreIndex + 1)
+                XCTAssertEqual(targetOpener.requests.last?.targets, [target])
+                XCTAssertEqual(targetOpener.excludedBrowserWindowIdentifiers.last, Set<String>())
                 XCTAssertEqual(result.requestedTargetCount, 0)
                 XCTAssertEqual(result.restoredWindows, 1)
                 XCTAssertTrue(result.targetIssues.isEmpty)
@@ -3844,7 +3943,66 @@ final class RestoreEngineTests: XCTestCase {
         }
     }
 
-    func testChromeStartupInventoryIsSharedAcrossSavedWindowsAndPreservesOccurrences() async throws {
+    func testConnectedBrowserReconcilesSavedGroupWhenWarmTabsAreSplitAcrossWindows() async throws {
+        for browser in BrowserAutomationBrowser.allCases {
+            let targets = ["first", "second"].map {
+                WindowOpenTarget(kind: .webURL, url: URL(string: "https://example.com/\($0)")!)
+            }
+            let firstFrame = CGRect(x: 10, y: 20, width: 600, height: 500)
+            let secondFrame = CGRect(x: 800, y: 20, width: 600, height: 500)
+            let savedWindow = makeWindowRecord(
+                bundleIdentifier: browser.bundleIdentifier,
+                windowTitle: "Saved group",
+                frame: firstFrame,
+                openingConfiguration: WindowOpeningConfiguration(manualTargets: targets)
+            )
+            let splitWindows = [firstFrame, secondFrame].enumerated().map { index, frame in
+                CapturedBrowserWindow(
+                    browser: browser, scriptingIdentifier: "window-\(index)",
+                    title: "Window \(index)", frame: frame, frontToBackIndex: index,
+                    tabs: [CapturedBrowserTab(title: nil, URL: targets[index].url)]
+                )
+            }
+            let reconciledWindow = CapturedBrowserWindow(
+                browser: browser, scriptingIdentifier: "window-0", title: "Window 0",
+                frame: firstFrame, frontToBackIndex: 0,
+                tabs: targets.map { CapturedBrowserTab(title: nil, URL: $0.url) }
+            )
+            let targetOpener = RecordingTargetOpener(results: [
+                .openedNewBrowserWindow(reconciledWindow, openedTargetCount: 1)
+            ])
+            let application = makeApplication(
+                bundleIdentifier: browser.bundleIdentifier,
+                windows: splitWindows.enumerated().map { index, window in
+                    makeDiscoveredWindow(documentURL: targets[index].url,
+                        title: window.title, frame: window.frame)
+                }
+            )
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            let snapshot = makeSnapshot(windows: [savedWindow])
+            try store.save(snapshot)
+
+            let result = try await makeEngine(
+                store: store,
+                launcher: RecordingApplicationLauncher(results: [:]),
+                discovery: DiscoverySequence([[application]]),
+                targetOpener: targetOpener,
+                browserTabCapturer: StubRestoreBrowserTabCapturer(
+                    result: BrowserTabCaptureResult(windows: splitWindows, issues: [])
+                )
+            ).restoreSnapshot(id: snapshot.id)
+
+            XCTAssertEqual(targetOpener.requests.count, 1)
+            XCTAssertEqual(targetOpener.requests.first?.targets, targets)
+            XCTAssertEqual(targetOpener.excludedBrowserWindowIdentifiers, [[]])
+            XCTAssertEqual(result.requestedTargetCount, 1)
+            XCTAssertEqual(result.restoredWindows, 1)
+            XCTAssertTrue(result.targetIssues.isEmpty)
+            XCTAssertTrue(result.skippedItems.isEmpty)
+        }
+    }
+
+    func testChromeStartupWindowsAreReservedAcrossSavedWindowsAndPreserveOccurrences() async throws {
         let browser = BrowserAutomationBrowser.chrome
         let inboxURL = URL(string: "https://mail.google.com/mail/u/0/#inbox")!
         let otherURL = URL(string: "https://example.com/other")!
@@ -3879,15 +4037,19 @@ final class RestoreEngineTests: XCTestCase {
                     tabs: [CapturedBrowserTab(title: "Other", URL: otherURL)]
                 )
             ]
+            let expectsSecondInbox = secondURL == inboxURL
+            let secondBrowserWindow = expectsSecondInbox
+                ? CapturedBrowserWindow(
+                    browser: browser, scriptingIdentifier: "new-inbox", title: "Second",
+                    frame: secondFrame, frontToBackIndex: 0,
+                    tabs: [CapturedBrowserTab(title: "Inbox", URL: inboxURL)]
+                )
+                : startupWindows[1]
             let targetOpener = RecordingTargetOpener(results: [
                 .openedNewBrowserWindow(
                     startupWindows[0], startupWindows: startupWindows, openedTargetCount: 0
                 ),
-                .openedNewBrowserWindow(CapturedBrowserWindow(
-                    browser: browser, scriptingIdentifier: "new-inbox", title: "Second",
-                    frame: secondFrame, frontToBackIndex: 0,
-                    tabs: [CapturedBrowserTab(title: "Inbox", URL: inboxURL)]
-                ))
+                .openedNewBrowserWindow(secondBrowserWindow, openedTargetCount: expectsSecondInbox ? 1 : 0)
             ])
             let application = makeApplication(
                 bundleIdentifier: browser.bundleIdentifier,
@@ -3907,8 +4069,10 @@ final class RestoreEngineTests: XCTestCase {
                 targetOpener: targetOpener
             ).restoreSnapshot(id: snapshot.id)
 
-            let expectsSecondInbox = secondURL == inboxURL
-            XCTAssertEqual(targetOpener.requests.count, expectsSecondInbox ? 2 : 1)
+            XCTAssertEqual(targetOpener.requests.map { $0.targets.map(\.url) }, [[inboxURL], [secondURL]])
+            XCTAssertEqual(targetOpener.excludedBrowserWindowIdentifiers, [[], ["session-inbox"]])
+            XCTAssertEqual(targetOpener.remainingBrowserWindowTargets.map { $0.map { $0.map(\.url) } },
+                [[[secondURL]], []])
             XCTAssertEqual(result.requestedTargetCount, expectsSecondInbox ? 1 : 0)
             XCTAssertEqual(result.restoredWindows, 2)
             XCTAssertTrue(result.targetIssues.isEmpty)
@@ -4032,7 +4196,7 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.restoredWindows, 1)
     }
 
-    func testConnectedBrowserSubtractsOpenTabsByOccurrenceAndPreservesOrder() async throws {
+    func testConnectedBrowserRetainsFullGroupOrderAndDuplicatesWhenSomeTabsExist() async throws {
         let browser = BrowserAutomationBrowser.chrome
         let repeatedTarget = WindowOpenTarget(
             kind: .webURL,
@@ -4077,7 +4241,8 @@ final class RestoreEngineTests: XCTestCase {
                     makeCapturedBrowserWindow(
                         browser: browser,
                         frame: CGRect(x: 700, y: 100, width: 600, height: 500)
-                    )
+                    ),
+                    openedTargetCount: 2
                 )
             ]
         )
@@ -4111,7 +4276,7 @@ final class RestoreEngineTests: XCTestCase {
 
         XCTAssertEqual(
             targetOpener.requests.first?.targets.map(\.url),
-            [repeatedTarget.url, otherTarget.url]
+            [repeatedTarget.url, repeatedTarget.url, otherTarget.url]
         )
         XCTAssertEqual(result.requestedTargetCount, 2)
         XCTAssertEqual(result.restoredWindows, 1)
@@ -4775,11 +4940,14 @@ final class RestoreEngineTests: XCTestCase {
 
     func testSeparateInstancesLaunchOneBatchPerCaptureGroupAndReuseCompleteGroups() async throws {
         let bundle = "com.example.editor"
+        let capturedApplications = [temporaryDirectoryURL.appendingPathComponent("First.app"),
+            temporaryDirectoryURL.appendingPathComponent("Second.app")]
         let targets = try ["First.txt", "Second.txt", "Third.txt"].map {
             WindowOpenTarget(kind: .file, url: try makeFile(named: $0))
         }
         let windows = targets.enumerated().map { index, target in
-            makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: index < 2 ? 42 : 43,
+            makeWindowRecord(bundleIdentifier: bundle, applicationBundleURL: capturedApplications[index < 2 ? 0 : 1],
+                             pidAtCapture: index < 2 ? 42 : 43,
                              windowTitle: "Saved \(index)",
                              openingConfiguration: WindowOpeningConfiguration(manualTargets: [target]))
         }
@@ -4805,6 +4973,7 @@ final class RestoreEngineTests: XCTestCase {
 
         XCTAssertEqual(opener.requests.map { $0.targets.map(\.url) }, [Array(targets.prefix(2)).map(\.url), [targets[2].url]])
         XCTAssertEqual(opener.requests.map(\.disposition), [.newApplicationInstance, .newApplicationInstance])
+        XCTAssertEqual(opener.preferredApplications, capturedApplications)
         XCTAssertEqual(first.requestedTargetCount, 3)
         XCTAssertEqual(first.restoredWindows, 3)
         XCTAssertTrue(first.targetIssues.isEmpty)
@@ -4978,7 +5147,10 @@ final class RestoreEngineTests: XCTestCase {
 
     func testSeparateInstancesWithoutTargetsUseLaunchInstancePID() async throws {
         let bundle = "com.example.editor"
-        let windows = [42, 43].map { makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: Int32($0)) }
+        let application = temporaryDirectoryURL.appendingPathComponent("Captured.app")
+        let windows = [42, 43].map {
+            makeWindowRecord(bundleIdentifier: bundle, applicationBundleURL: application, pidAtCapture: Int32($0))
+        }
         let snapshot = makeSnapshot(windows: windows)
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
         try store.save(snapshot)
@@ -4994,6 +5166,7 @@ final class RestoreEngineTests: XCTestCase {
                                           targetOpener: opener, launchTimeout: 0).restoreSnapshot(id: snapshot.id)
 
         XCTAssertEqual(launcher.requestedInstanceBundleIdentifiers, [bundle, bundle])
+        XCTAssertEqual(launcher.preferredInstanceApplications, [application, application])
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
         XCTAssertTrue(opener.requests.isEmpty)
         XCTAssertEqual(result.restoredWindows, 2)
@@ -6607,6 +6780,7 @@ final class RestoreEngineTests: XCTestCase {
 
     private func makeWindowRecord(
         bundleIdentifier: String,
+        applicationBundleURL: URL? = nil,
         pidAtCapture: Int32 = 42,
         windowTitle: String? = "Window",
         role: String = "AXWindow",
@@ -6620,6 +6794,7 @@ final class RestoreEngineTests: XCTestCase {
     ) -> WindowRecord {
         WindowRecord(
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: applicationBundleURL,
             pidAtCapture: pidAtCapture,
             windowTitle: windowTitle,
             role: role,
@@ -6716,6 +6891,8 @@ private final class RecordingApplicationLauncher: RestoreApplicationLaunching {
     private let launchPID: pid_t?
     private(set) var requestedBundleIdentifiers: [String] = []
     private(set) var requestedInstanceBundleIdentifiers: [String] = []
+    private(set) var preferredLaunchApplications: [URL?] = []
+    private(set) var preferredInstanceApplications: [URL?] = []
     private var instanceResults: [pid_t?]
 
     init(results: [String: Bool], instanceResults: [pid_t?] = [], launchPID: pid_t? = 200,
@@ -6730,14 +6907,16 @@ private final class RecordingApplicationLauncher: RestoreApplicationLaunching {
         !unavailableBundleIdentifiers.contains(bundleIdentifier)
     }
 
-    func launchInstance(bundleIdentifier: String) async -> pid_t? {
-        requestedInstanceBundleIdentifiers.append(bundleIdentifier)
-        return instanceResults.isEmpty ? nil : instanceResults.removeFirst()
-    }
-
-    func requestLaunch(bundleIdentifier: String) async -> pid_t? {
+    func requestLaunch(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t? {
+        preferredLaunchApplications.append(preferredApplicationURL)
         requestedBundleIdentifiers.append(bundleIdentifier)
         return results[bundleIdentifier] == true ? launchPID : nil
+    }
+
+    func launchInstance(bundleIdentifier: String, preferredApplicationURL: URL?) async -> pid_t? {
+        preferredInstanceApplications.append(preferredApplicationURL)
+        requestedInstanceBundleIdentifiers.append(bundleIdentifier)
+        return instanceResults.isEmpty ? nil : instanceResults.removeFirst()
     }
 }
 
@@ -6751,17 +6930,18 @@ private final class RecordingTargetOpener: RestoreTargetOpening {
     private var results: [RestoreTargetOpenResult]
     private let onOpen: ((Request) -> Void)?
     private(set) var requests: [Request] = []
+    private(set) var excludedBrowserWindowIdentifiers: [Set<String>] = []
+    private(set) var remainingBrowserWindowTargets: [[[WindowOpenTarget]]] = []
+    private(set) var preferredApplications: [URL?] = []
 
     init(results: [RestoreTargetOpenResult] = [], onOpen: ((Request) -> Void)? = nil) {
         self.results = results
         self.onOpen = onOpen
     }
 
-    func open(
-        targets: [WindowOpenTarget],
-        bundleIdentifier: String,
-        disposition: RestoreTargetOpenDisposition
-    ) async -> RestoreTargetOpenResult {
+    func open(targets: [WindowOpenTarget], bundleIdentifier: String,
+        disposition: RestoreTargetOpenDisposition, preferredApplicationURL: URL?) async -> RestoreTargetOpenResult {
+        preferredApplications.append(preferredApplicationURL)
         requests.append(
             Request(
                 targets: targets,
@@ -6776,6 +6956,19 @@ private final class RecordingTargetOpener: RestoreTargetOpening {
         return disposition == .newBrowserWindow
             ? .openedNewBrowserWindow(makeCapturedBrowserWindow())
             : .opened
+    }
+
+    func openBrowserWindow(
+        targets: [WindowOpenTarget],
+        bundleIdentifier: String,
+        excludingWindowIdentifiers: Set<String>,
+        preferredApplicationURL: URL?,
+        remainingWindowTargets: [[WindowOpenTarget]]
+    ) async -> RestoreTargetOpenResult {
+        excludedBrowserWindowIdentifiers.append(excludingWindowIdentifiers)
+        remainingBrowserWindowTargets.append(remainingWindowTargets)
+        return await open(targets: targets, bundleIdentifier: bundleIdentifier, disposition: .newBrowserWindow,
+            preferredApplicationURL: preferredApplicationURL)
     }
 }
 
@@ -6803,6 +6996,9 @@ private final class RecordingBrowserWindowOpener: BrowserWindowOpening {
     struct Request {
         let targets: [WindowOpenTarget]
         let browser: BrowserAutomationBrowser
+        let excludingWindowIdentifiers: Set<String>
+        let preferredApplicationURL: URL?
+        let remainingWindowTargets: [[WindowOpenTarget]]
     }
 
     private var results: [BrowserWindowOpenResult]
@@ -6814,9 +7010,14 @@ private final class RecordingBrowserWindowOpener: BrowserWindowOpening {
 
     func openNewWindow(
         targets: [WindowOpenTarget],
-        browser: BrowserAutomationBrowser
+        browser: BrowserAutomationBrowser,
+        excludingWindowIdentifiers: Set<String>,
+        preferredApplicationURL: URL?,
+        remainingWindowTargets: [[WindowOpenTarget]]
     ) async -> BrowserWindowOpenResult {
-        requests.append(Request(targets: targets, browser: browser))
+        requests.append(Request(targets: targets, browser: browser,
+            excludingWindowIdentifiers: excludingWindowIdentifiers, preferredApplicationURL: preferredApplicationURL,
+            remainingWindowTargets: remainingWindowTargets))
         return results.removeFirst()
     }
 }
