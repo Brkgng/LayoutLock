@@ -119,7 +119,8 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
 
         let capturedGeneration = generation
         let windows = NSScreen.screens.map { screen in
-            OperationOverlayWindow(screen: screen, message: kind.message)
+            // Saving can request access to a document's folder. Leave system prompts visible.
+            OperationOverlayWindow(screen: screen, message: kind.message, compact: kind == .save)
         }
         overlayWindows = windows
 

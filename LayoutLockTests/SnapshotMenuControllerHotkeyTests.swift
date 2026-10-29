@@ -2646,6 +2646,38 @@ private final class RestoringWindowApplier: RestoreWindowApplying {
 
 @MainActor
 final class OperationCompletionToastTests: XCTestCase {
+    func testSaveOverlayLeavesScreenCenterUncoveredForPermissionPrompts() async throws {
+        let existingWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = OperationOverlayController(
+            minimumVisibleDuration: 0,
+            fadeInDuration: 0,
+            fadeOutDuration: 0,
+            presentationBarrier: {}
+        )
+        await controller.showOverlay(kind: .save)
+        let windows = NSApp.windows.compactMap { $0 as? OperationOverlayWindow }
+            .filter { !existingWindows.contains($0.windowNumber) }
+        defer {
+            controller.hideOverlay()
+            windows.forEach { $0.close() }
+        }
+
+        XCTAssertEqual(windows.count, NSScreen.screens.count)
+        for window in windows {
+            window.isReleasedWhenClosed = false
+            let screen = try XCTUnwrap(window.screen)
+            let center = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
+            XCTAssertFalse(window.frame.contains(center))
+            XCTAssertLessThan(window.frame.height, screen.visibleFrame.height)
+            XCTAssertTrue(window.ignoresMouseEvents)
+            XCTAssertFalse(window.canBecomeKey)
+            let content = try XCTUnwrap(window.contentView)
+            content.layoutSubtreeIfNeeded()
+            let labels = descendants(of: content).compactMap { $0 as? NSTextField }
+            XCTAssertTrue(labels.contains { $0.stringValue == OperationOverlayKind.save.message })
+        }
+    }
+
     func testDetailsActionsStayInsideCardsAndWaitForModalDismissal() throws {
         var performed = 0
         let fileActions = ["Locate File…", "Edit Saved Resources…"].map { title in
