@@ -83,8 +83,8 @@ final class AppUpdateWindowController: NSWindowController, NSWindowDelegate,
         let window = NSWindow(contentViewController: hostingController)
         window.title = "LayoutLock Update"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 680, height: 520))
-        window.contentMinSize = NSSize(width: 580, height: 420)
+        window.setContentSize(NSSize(width: 680, height: 400))
+        window.contentMinSize = NSSize(width: 580, height: 380)
         window.isReleasedWhenClosed = false
         window.center()
         window.delegate = self
@@ -170,7 +170,7 @@ struct AppUpdateView: View {
                 }
             }
         }
-        .frame(minWidth: 580, minHeight: 420)
+        .frame(minWidth: 580, minHeight: 380)
         .tint(.accentColor)
         .defaultFocus($focusedAction, model.phase.preferredFocusAction)
         .onChange(of: model.phase.preferredFocusAction) { _, action in
@@ -183,77 +183,61 @@ struct AppUpdateView: View {
         details: AppUpdateDetails,
         @ViewBuilder footer: () -> Footer
     ) -> some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 20) {
             updateHeader(details)
-                .padding(.horizontal, 28)
-                .padding(.top, 26)
-                .padding(.bottom, 20)
-
-            releaseNotesCard(details)
-                .padding(.horizontal, 28)
-
-            Spacer(minLength: 18)
-
-            Divider()
-
+            releaseNotes(details)
             footer()
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
         }
+        .padding(24)
     }
 
     private func updateHeader(_ details: AppUpdateDetails) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle")
-                .font(.system(size: 30))
-                .symbolRenderingMode(.hierarchical)
+                .font(.system(size: 20))
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(headerTitle)
-                    .font(.title2.bold())
+            Text(headerTitle)
+                .font(.system(size: 18, weight: .semibold))
+                .accessibilityAddTraits(.isHeader)
 
-                HStack(spacing: 8) {
-                    Text(details.currentVersion)
-                    Image(systemName: "arrow.right")
-                        .font(.caption.weight(.semibold))
-                        .accessibilityLabel("to")
-                    Text(details.displayVersion)
-                        .foregroundStyle(.tint)
-                }
-                .font(.callout.monospacedDigit().weight(.medium))
-                .foregroundStyle(.secondary)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(
-                    "Current version \(details.currentVersion), new version \(details.displayVersion)"
-                )
+            HStack(spacing: 8) {
+                Text(details.currentVersion)
+                Image(systemName: "arrow.right")
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
+                Text(details.displayVersion)
+                    .foregroundStyle(.tint)
             }
+            .font(.callout.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.leading, 6)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Current version \(details.currentVersion), new version \(details.displayVersion)"
+            )
 
             Spacer()
         }
     }
 
-    private func releaseNotesCard(_ details: AppUpdateDetails) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
+    private func releaseNotes(_ details: AppUpdateDetails) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
                 Text("v\(details.displayVersion)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.callout.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.tint)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                    .foregroundStyle(.tint)
+                    .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
 
                 if let releaseDate = details.formattedReleaseDate {
                     Text(releaseDate)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-
-                Spacer()
             }
-
-            Divider()
 
             ScrollView {
                 releaseNotesText(details)
@@ -262,12 +246,12 @@ struct AppUpdateView: View {
             }
             .defaultScrollAnchor(.top)
         }
-        .padding(16)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.separator.opacity(0.7), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.separator.opacity(0.5), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Release notes for version \(details.displayVersion)")
@@ -289,6 +273,8 @@ struct AppUpdateView: View {
 
     private func availableFooter(_ details: AppUpdateDetails) -> some View {
         HStack(spacing: 10) {
+            actionButton("Later", action: .dismiss, isCancelAction: true)
+
             if details.shouldOfferExternalReleaseNotes {
                 actionButton(
                     "Open Release Notes in Browser",
@@ -313,6 +299,7 @@ struct AppUpdateView: View {
                 )
             }
         }
+        .controlSize(.large)
     }
 
     private func downloadingFooter(_ progress: AppUpdateProgress) -> some View {
@@ -628,16 +615,17 @@ private struct AppUpdateMarkdownView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(blocks) { block in
                 switch block.kind {
                 case let .heading(level):
                     Text(block.content)
-                        .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                        .font(.system(size: level <= 2 ? 18 : 16, weight: .semibold))
+                        .accessibilityAddTraits(.isHeader)
                 case .paragraph:
                     Text(block.content)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
+                        .lineSpacing(3)
                 case .unorderedListItem:
                     listItem(marker: "•", content: block.content)
                 case let .orderedListItem(ordinal):
@@ -645,14 +633,14 @@ private struct AppUpdateMarkdownView: View {
                 case let .feature(systemImage, title):
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: systemImage)
-                            .font(.system(size: 28))
-                            .foregroundStyle(.tint)
-                            .frame(width: 32, height: 32)
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
                             .accessibilityHidden(true)
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(title)
-                                .font(.headline)
+                                .font(.system(size: 16, weight: .semibold))
                                 .accessibilityAddTraits(.isHeader)
                             Text(block.content)
                                 .font(.body)
@@ -672,7 +660,8 @@ private struct AppUpdateMarkdownView: View {
                 .accessibilityHidden(true)
 
             Text(content)
-                .font(.body)
+                .font(.system(size: 14))
+                .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
