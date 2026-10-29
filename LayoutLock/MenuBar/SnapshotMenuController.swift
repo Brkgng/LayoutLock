@@ -298,6 +298,7 @@ final class SnapshotMenuController: ObservableObject {
             return nil
         }
 
+        let readinessDeadline = restoreEngine.makeReadinessDeadline()
         isOperating = true
         activeRestoreName = snapshotName
         let initialProgress = "Restoring \"\(snapshotName)\" · \(RestoreProgress.discovering.message)"
@@ -331,7 +332,7 @@ final class SnapshotMenuController: ObservableObject {
             do {
                 try Task.checkCancellation()
                 let result = try await withTaskCancellationHandler {
-                    try await restoreEngine.restoreSnapshot(id: id) { progress in
+                    try await restoreEngine.restoreSnapshot(id: id, readinessDeadline: readinessDeadline) { progress in
                         let message = "Restoring \"\(snapshotName)\" · \(progress.message)"
                         restoreProgressMessage = message
                         status = Status(message: message, kind: .info)
@@ -916,7 +917,17 @@ final class SnapshotMenuController: ObservableObject {
         result: RestoreResult
     ) -> RestoreCompletionMessage {
         let restoredLabel = result.restoredWindows == 1 ? "window" : "windows"
-        let details = restoreSummaryDetails(for: result)
+        let resourceWindowIDs = Set(result.targetIssues.map(\.windowID))
+        let explainedSkips = result.skippedItems.filter { skip in
+            guard let windowID = skip.windowID, resourceWindowIDs.contains(windowID) else { return false }
+            return [RestoreSkipReason.windowNotFound, RestoreSkipReason.appNotRunning,
+                RestoreSkipReason.appInstanceUnconfirmed].contains(skip.reason)
+        }
+        let explainedSkipIDs = Set(explainedSkips.map(\.id))
+        let explainedWindowIDs = Set(explainedSkips.compactMap(\.windowID))
+        let separateResourceIssueCount = result.targetIssues.filter { !explainedWindowIDs.contains($0.windowID) }.count
+        let timedOutWindowIDs = Set(result.windowDiagnostics.filter(\.readinessTimedOut).map(\.windowID))
+        let details = restoreSummaryDetails(for: result, resourceIssueCount: separateResourceIssueCount)
         let hasIssues = !details.isEmpty
         let isFailure = result.restoredWindows == 0
         let title: String
@@ -936,8 +947,9 @@ final class SnapshotMenuController: ObservableObject {
         return RestoreCompletionMessage(
             title: title,
             summary: summary,
-            issues: result.targetIssues.map { targetIssueDetail(for: $0, snapshotID: snapshotID) }
-                + result.skippedItems.map(skippedWindowDetail)
+            issues: result.targetIssues.map {
+                    targetIssueDetail(for: $0, snapshotID: snapshotID, readinessTimedOut: timedOutWindowIDs.contains($0.windowID))
+                } + result.skippedItems.filter { !explainedSkipIDs.contains($0.id) }.map(skippedWindowDetail)
                 + result.downgradedItems.map {
                     skippedWindowDetail(for: RestoreSkip(
                         bundleIdentifier: $0.bundleIdentifier, windowTitle: $0.windowTitle, reason: $0.reason))
@@ -959,13 +971,13 @@ final class SnapshotMenuController: ObservableObject {
         )
     }
 
-    private func restoreSummaryDetails(for result: RestoreResult) -> [String] {
+    private func restoreSummaryDetails(for result: RestoreResult, resourceIssueCount: Int) -> [String] {
         let fallbackLabel = result.displayFallbacks.count == 1 ? "display fallback" : "display fallbacks"
-        let targetIssueLabel = result.targetIssues.count == 1 ? "resource issue" : "resource issues"
+        let targetIssueLabel = resourceIssueCount == 1 ? "resource issue" : "resource issues"
         let adjustedCount = result.downgradedItems.filter { $0.reason != RestoreDowngradeReason.windowIdentityUnconfirmed }.count
         return [
             result.skippedItems.isEmpty ? nil : "\(result.skippedItems.count) skipped",
-            result.targetIssues.isEmpty ? nil : "\(result.targetIssues.count) \(targetIssueLabel)",
+            resourceIssueCount == 0 ? nil : "\(resourceIssueCount) \(targetIssueLabel)",
             result.downgradedItems.contains { $0.reason == RestoreDowngradeReason.windowIdentityUnconfirmed }
                 ? "desktop placement unconfirmed" : nil,
             adjustedCount == 0 ? nil : "\(adjustedCount) \(adjustedCount == 1 ? "window adjusted" : "windows adjusted")",
@@ -990,7 +1002,8 @@ final class SnapshotMenuController: ObservableObject {
         return RestoreCompletionIssue(appName: appName, context: fallback.savedDisplayName, reason: reason)
     }
 
-    private func targetIssueDetail(for issue: RestoreTargetIssue, snapshotID: UUID) -> RestoreCompletionIssue {
+    private func targetIssueDetail(for issue: RestoreTargetIssue, snapshotID: UUID, readinessTimedOut: Bool) -> RestoreCompletionIssue {
+        let isWaitingForWindow = issue.reason == .openingNotConfirmed && readinessTimedOut
         let appName = appNameResolver(issue.bundleIdentifier)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = appName.isEmpty ? issue.bundleIdentifier : appName
@@ -1004,13 +1017,16 @@ final class SnapshotMenuController: ObservableObject {
                 self?.locateSavedResource(issue, snapshotID: snapshotID)
             })
         }
-        if issue.reason != .applicationUnavailable {
+        if issue.reason != .applicationUnavailable && !isWaitingForWindow {
             actions.append(RestoreCompletionAction(title: "Edit Saved Resources…") { [weak self] in
                 self?.editSavedResources(windowID: issue.windowID, snapshotID: snapshotID)
             })
         }
-        return RestoreCompletionIssue(appName: displayName, context: targetDescription,
-            reason: issue.reason.userFacingDescription, actions: actions)
+        return RestoreCompletionIssue(appName: displayName,
+            context: isWaitingForWindow ? issue.target.compactDisplayName : targetDescription,
+            reason: isWaitingForWindow
+                ? "This window wasn’t ready in time. Restore the layout again after the app finishes loading."
+                : issue.reason.userFacingDescription, actions: actions)
     }
 
     private static func chooseResourceLocation(_ target: WindowOpenTarget) -> URL? {

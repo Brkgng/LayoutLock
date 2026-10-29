@@ -1279,6 +1279,79 @@ private final class RecordingApplicationActivator: RestoreApplicationActivating 
 }
 
 final class RestoreEngineTests: XCTestCase {
+    func testCapturedUnknownDocumentWindowIsNotTreatedAsALoadingPanel() async throws {
+        let bundle = "com.example.customEditor"
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "Custom.document"))
+        let saved = makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 200,
+            windowTitle: "Custom document", subrole: "AXUnknown",
+            openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        let snapshot = makeSnapshot(windows: [saved])
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let applier = RecordingEngineWindowApplier()
+        let opener = RecordingTargetOpener()
+        let application = makeApplication(bundleIdentifier: bundle, windows: [
+            makeDiscoveredWindow(documentURL: target.url, title: saved.windowTitle, subrole: "AXUnknown",
+                frame: saved.frame.cgRect, cgWindowID: 900)
+        ])
+        let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+            windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+            targetOpener: opener, browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+            applicationActivator: RecordingApplicationActivator { _ in },
+            discoveredApplicationsProvider: { [application] }, runningApplicationBundleProvider: { [bundle] })
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertTrue(result.skippedItems.isEmpty)
+        XCTAssertEqual(applier.appliedSavedWindowIDs, [saved.id])
+        XCTAssertTrue(opener.requests.isEmpty)
+    }
+
+    func testLoadingProjectContextDoesNotOpenDuplicatesBeforeAnyWindowExists() async throws {
+        for scenario in [(1, false), (2, false), (1, true), (2, true)] {
+            let (count, hasSplash) = scenario
+            let bundle = "com.example.projectEditor"
+            let targets = try (0..<count).map {
+                WindowOpenTarget(kind: .file, url: try makeFile(named: "Loading-\($0).uproject"))
+            }
+            let saved = targets.enumerated().map { index, target in
+                makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: Int32(42 + index),
+                    openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+            }
+            let snapshot = makeSnapshot(windows: saved)
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let opener = RecordingTargetOpener()
+            let launcher = RecordingApplicationLauncher(results: [:])
+            let applier = RecordingEngineWindowApplier()
+            let loadingApplications = hasSplash ? targets.enumerated().map { index, target in
+                makeApplication(bundleIdentifier: bundle, pid: Int32(900 + index), windows: [
+                    makeDiscoveredWindow(documentURL: target.url, title: "", subrole: "AXUnknown",
+                        frame: saved[index].frame.cgRect, cgWindowID: CGWindowID(9001 + index))
+                ])
+            } : []
+            let discovery = WindowDiscoveryResult(applications: loadingApplications, diagnostics: [],
+                unexposedApplications: hasSplash ? [] : targets.enumerated().map { index, target in
+                    UnexposedApplicationWindows(bundleIdentifier: bundle, pid: Int32(900 + index),
+                        windows: [], documentURLs: [target.url])
+                })
+            let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+                windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }), applicationLauncher: launcher,
+                targetOpener: opener, browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+                discoveryResultProvider: { discovery }, runningApplicationBundleProvider: { [bundle] })
+
+            let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+            XCTAssertTrue(opener.requests.isEmpty)
+            XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+            XCTAssertTrue(launcher.requestedInstanceBundleIdentifiers.isEmpty)
+            XCTAssertEqual(result.restoredWindows, 0)
+            XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+            XCTAssertEqual(result.skippedItems.map(\.reason), Array(repeating: RestoreSkipReason.desktopUnconfirmed, count: count))
+        }
+    }
+
     private var temporaryDirectoryURL: URL!
 
     override func setUpWithError() throws {
@@ -1985,8 +2058,8 @@ final class RestoreEngineTests: XCTestCase {
             XCTAssertEqual(result.restoredWindows, 2)
             XCTAssertEqual(result.skippedItems.count, 1)
             XCTAssertEqual(result.windowDiagnostics.filter(\.readinessTimedOut).map(\.windowID), [pendingWindow.id])
-            XCTAssertEqual(clock.now().timeIntervalSince(start), 15)
-            XCTAssertEqual(sleeps, applyDuration == 0 ? 3 : 1)
+            XCTAssertEqual(clock.now().timeIntervalSince(start), 30)
+            XCTAssertEqual(sleeps, applyDuration == 0 ? 6 : 4)
             XCTAssertEqual(opener.requests.map(\.bundleIdentifier), [pendingBundle])
             XCTAssertEqual(applier.appliedCGWindowIDs.compactMap { $0 }.sorted(), [9001, 9002])
         }
@@ -2035,7 +2108,7 @@ final class RestoreEngineTests: XCTestCase {
 
     func testDefaultReadinessBudgetRestoresFastAndSlowAppInstancesWithoutReopening() async throws {
         let bundle = "com.example.editor"
-        for readyAfter: TimeInterval in [0, 10, 15] {
+        for readyAfter: TimeInterval in [0, 10, 15, 25, 30] {
             let targets = try ["Slow-A.txt", "Slow-B.txt"].map {
                 WindowOpenTarget(kind: .file, url: try makeFile(named: $0))
             }
@@ -2104,13 +2177,55 @@ final class RestoreEngineTests: XCTestCase {
 
         let result = try await engine.restoreSnapshot(id: snapshot.id)
 
-        XCTAssertEqual(clock.now().timeIntervalSince(start), 15)
+        XCTAssertEqual(clock.now().timeIntervalSince(start), 30)
         XCTAssertEqual(result.restoredWindows, 0)
         XCTAssertEqual(result.skippedItems.count, 1)
         XCTAssertEqual(result.targetIssues.map(\.reason), [.openingNotConfirmed])
         XCTAssertEqual(result.windowDiagnostics.map(\.readinessTimedOut), [true])
         XCTAssertEqual(opener.requests.count, 1)
         XCTAssertTrue(applier.appliedCGWindowIDs.isEmpty)
+    }
+
+    func testSharedReadinessDeadlineIncludesDiscoveryAndOpeningTime() async throws {
+        for delay in [(discovery: 7.0, opening: 6.0), (discovery: 25.0, opening: 10.0)] {
+            let windows = try ["First", "Second"].map { name in
+                makeWindowRecord(bundleIdentifier: "com.example.\(name)",
+                    openingConfiguration: WindowOpeningConfiguration(manualTargets: [
+                        WindowOpenTarget(kind: .file, url: try makeFile(named: "\(name).txt"))
+                    ]))
+            }
+            let snapshot = makeSnapshot(windows: windows)
+            let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+            try store.save(snapshot)
+            let clock = TestClock()
+            let start = clock.now()
+            var isInitialDiscovery = true
+            var waits: [TimeInterval] = []
+            let opener = RecordingTargetOpener(onOpen: { _ in clock.advance(by: delay.opening / 2) })
+            let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+                windowApplier: RecordingEngineWindowApplier(), displayResolver: DisplayResolver(screenProvider: { [] }),
+                applicationLauncher: RecordingApplicationLauncher(results: [:]), targetOpener: opener,
+                browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+                applicationActivator: RecordingApplicationActivator { _ in }, discoveredApplicationsProvider: {
+                    if isInitialDiscovery {
+                        clock.advance(by: delay.discovery)
+                        isInitialDiscovery = false
+                    }
+                    return []
+                }, runningApplicationBundleProvider: { [] }, launchPollInterval: 5, launchClock: clock.now,
+                launchPollSleeper: { interval in
+                    waits.append(interval)
+                    await clock.sleep(interval: interval)
+                })
+
+            let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+            let setupTime = delay.discovery + delay.opening
+            XCTAssertEqual(clock.now().timeIntervalSince(start), max(30, setupTime))
+            XCTAssertEqual(waits.reduce(0, +), max(0, 30 - setupTime))
+            XCTAssertEqual(opener.requests.count, 2)
+            XCTAssertEqual(result.windowDiagnostics.map(\.readinessTimedOut), [true, true])
+        }
     }
 
     func testCancelledReadinessStopsPollingWithoutReopeningTargets() async throws {
@@ -4725,6 +4840,88 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertTrue(launcher.requestedInstanceBundleIdentifiers.isEmpty)
     }
 
+    func testUnrealSiblingWindowsLaunchOneProjectAndReuseItWhenAToolWindowCloses() async throws {
+        let bundle = "com.epicgames.UnrealEditor"
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "SharedProject.uproject"))
+        let windows = ["AXStandardWindow", "AXUnknown"].enumerated().map { index, subrole in
+            makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 42,
+                windowTitle: index == 0 ? "SharedProject - Unreal Editor" : "Output Log", subrole: subrole,
+                frame: CGRect(x: 10, y: 20, width: 1200, height: 800),
+                openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        }
+        let snapshot = makeSnapshot(windows: windows)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let live = windows.enumerated().map { index, saved in
+            makeDiscoveredWindow(documentURL: target.url, title: saved.windowTitle, subrole: saved.subrole,
+                frame: saved.frame.cgRect, cgWindowID: CGWindowID(9001 + index))
+        }
+        let helper = makeDiscoveredWindow(documentURL: target.url, title: " \n ", subrole: "AXUnknown",
+            frame: CGRect(x: 40, y: 60, width: 352, height: 153), cgWindowID: 9003)
+        var didOpen = false
+        var toolWindowOpen = true
+        let opener = RecordingTargetOpener(results: [.openedApplicationInstance(900), .openedApplicationInstance(901)],
+            onOpen: { _ in didOpen = true })
+        let launcher = RecordingApplicationLauncher(results: [:])
+        let applier = RecordingEngineWindowApplier()
+        let engine = RestoreEngine(snapshotStore: store, trustChecker: AccessibilityTrustChecker { true },
+            windowApplier: applier, displayResolver: DisplayResolver(screenProvider: { [] }),
+            applicationLauncher: launcher, targetOpener: opener,
+            browserTabCapturer: StubRestoreBrowserTabCapturer(result: .empty),
+            applicationActivator: RecordingApplicationActivator { _ in },
+            discoveredApplicationsProvider: {
+                didOpen ? [self.makeApplication(bundleIdentifier: bundle, pid: 900,
+                    windows: (toolWindowOpen ? live : [live[0]]) + [helper])] : []
+            }, runningApplicationBundleProvider: { [] }, launchTimeout: 0)
+
+        for _ in 0..<2 {
+            let result = try await engine.restoreSnapshot(id: snapshot.id)
+            XCTAssertEqual(result.restoredWindows, 2)
+            XCTAssertTrue(result.skippedItems.isEmpty)
+            XCTAssertEqual(opener.requests.count, 1)
+        }
+        toolWindowOpen = false
+        let partial = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(partial.restoredWindows, 1)
+        XCTAssertEqual(partial.skippedItems.map(\.windowID), [windows[1].id])
+        XCTAssertEqual(opener.requests.map { $0.targets.map(\.url) }, [[target.url, target.url]])
+        XCTAssertEqual(opener.requests.map(\.disposition), [.newApplicationInstance])
+        XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
+        XCTAssertTrue(launcher.requestedInstanceBundleIdentifiers.isEmpty)
+        XCTAssertFalse(applier.appliedCGWindowIDs.contains(9003))
+    }
+
+    func testUnrealSiblingWindowsDoNotMatchALoadingPanel() async throws {
+        let bundle = "com.epicgames.UnrealEditor"
+        let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "LoadingProject.uproject"))
+        let windows = ["AXStandardWindow", "AXUnknown"].enumerated().map { index, subrole in
+            makeWindowRecord(bundleIdentifier: bundle, pidAtCapture: 42,
+                windowTitle: index == 0 ? "LoadingProject - Unreal Editor" : "Output Log", subrole: subrole,
+                openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))
+        }
+        let snapshot = makeSnapshot(windows: windows)
+        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
+        try store.save(snapshot)
+        let applier = RecordingEngineWindowApplier()
+        let opener = RecordingTargetOpener()
+        let launcher = RecordingApplicationLauncher(results: [:])
+        let loading = makeApplication(bundleIdentifier: bundle, pid: 900, windows: [
+            makeDiscoveredWindow(documentURL: target.url, title: "", subrole: "AXUnknown",
+                frame: windows[1].frame.cgRect, cgWindowID: 9001)
+        ])
+        let engine = makeEngine(store: store, launcher: launcher, discovery: DiscoverySequence([[loading]]),
+            windowApplier: applier, targetOpener: opener, runningBundleIdentifiers: [bundle], launchTimeout: 0)
+
+        let result = try await engine.restoreSnapshot(id: snapshot.id)
+
+        XCTAssertEqual(result.restoredWindows, 0)
+        XCTAssertEqual(result.skippedItems.map(\.reason), Array(repeating: RestoreSkipReason.desktopUnconfirmed, count: 2))
+        XCTAssertTrue(applier.appliedSavedWindowIDs.isEmpty)
+        XCTAssertTrue(opener.requests.isEmpty)
+        XCTAssertTrue(launcher.requestedInstanceBundleIdentifiers.isEmpty)
+    }
+
     func testSeparateInstanceReturnedPIDDisappearsWithoutMovingSiblingContent() async throws {
         let bundle = "com.example.editor"
         let target = WindowOpenTarget(kind: .file, url: try makeFile(named: "Shared.txt"))
@@ -6791,6 +6988,10 @@ private final class TestClock {
     }
 
     func sleep(interval: TimeInterval) async {
+        advance(by: interval)
+    }
+
+    func advance(by interval: TimeInterval) {
         currentDate = currentDate.addingTimeInterval(interval)
     }
 }

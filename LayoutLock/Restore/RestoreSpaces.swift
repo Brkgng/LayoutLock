@@ -265,10 +265,15 @@ struct RestoreCGWindowRecovery {
         else { return nil }
         let savedForBundle = savedWindows.filter { $0.bundleIdentifier == saved.bundleIdentifier }
         let owners = applications.filter { $0.bundleIdentifier == saved.bundleIdentifier }
+        let resources = Set(targets.filter { $0.kind != .webURL }.map { $0.url.standardizedFileURL })
         let folders = Set(targets.filter { $0.kind == .folder }.map { $0.url.standardizedFileURL })
+        let files = Set(targets.filter { $0.kind == .file }.map { $0.url.standardizedFileURL })
         let eligible = owners.flatMap { owner in owner.windows.compactMap { window -> (pid: pid_t, window: CGWindowMetadata)? in
             let ownerFolders = Set(owner.documentURLs.filter { $0.isFileURL && $0.hasDirectoryPath }.map(\.standardizedFileURL))
-            guard folders.isEmpty || ownerFolders.isEmpty || !folders.isDisjoint(with: ownerFolders) else { return nil }
+            let ownerFiles = Set(owner.documentURLs.filter { $0.isFileURL && !$0.hasDirectoryPath }.map(\.standardizedFileURL))
+            // A known project folder cannot rule out a scene-only snapshot inside that project.
+            guard folders.isEmpty || ownerFolders.isEmpty || !folders.isDisjoint(with: ownerFolders),
+                files.isEmpty || ownerFiles.isEmpty || !files.isDisjoint(with: ownerFiles) else { return nil }
             guard window.processIdentifier == owner.pid, window.windowID != 0, window.layer == 0,
                 !excludingWindowIDs.contains(window.windowID),
                 window.bounds.origin.x.isFinite, window.bounds.origin.y.isFinite,
@@ -286,14 +291,14 @@ struct RestoreCGWindowRecovery {
         }
         // A process resource (for example a project folder) is useful only when it
         // identifies one saved window and one current owner/window unambiguously.
-        if !folders.isEmpty {
+        if !resources.isEmpty {
             let matchingSaved = savedForBundle.filter { window in
                 window.openingConfiguration.effectiveTargets.contains {
-                    $0.kind == .folder && folders.contains($0.url.standardizedFileURL)
+                    $0.kind != .webURL && resources.contains($0.url.standardizedFileURL)
                 }
             }
             let matchingOwners = Set(owners.filter { owner in
-                owner.documentURLs.contains { $0.isFileURL && folders.contains($0.standardizedFileURL) }
+                owner.documentURLs.contains { $0.isFileURL && resources.contains($0.standardizedFileURL) }
             }.map(\.pid))
             let matching = eligible.filter { matchingOwners.contains($0.pid) }
             if matchingSaved.count == 1, matching.count == 1 { return matching.first }

@@ -129,17 +129,20 @@ struct RestoreTargetIssue: Identifiable {
 
 struct RestoreSkip: Identifiable {
     let id: UUID
+    let windowID: UUID?
     let bundleIdentifier: String
     let windowTitle: String?
     let reason: String
 
     init(
         id: UUID = UUID(),
+        windowID: UUID? = nil,
         bundleIdentifier: String,
         windowTitle: String? = nil,
         reason: String
     ) {
         self.id = id
+        self.windowID = windowID
         self.bundleIdentifier = bundleIdentifier
         self.windowTitle = windowTitle
         self.reason = reason

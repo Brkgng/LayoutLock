@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E902668BC27940C4A7F801D1 /* UnrealProjectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */; };
+		7042E87767044A4C950135E7 /* UnrealProjectResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */; };
+		92D8A3635F734D04AA70D002 /* ProjectProcessInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */; };
 		D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */; };
 		F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */; };
 		CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */; };
@@ -138,6 +141,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnrealProjectTests.swift; sourceTree = "<group>"; };
+		439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnrealProjectResolver.swift; sourceTree = "<group>"; };
+		EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectProcessInfo.swift; sourceTree = "<group>"; };
 		04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectOpeningTests.swift; sourceTree = "<group>"; };
 		060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolverTests.swift; sourceTree = "<group>"; };
 		57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolver.swift; sourceTree = "<group>"; };
@@ -343,6 +349,7 @@
 				A00000000000000000000094 /* TestSupport.swift */,
 				A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */,
 				060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */,
+				35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */,
 				04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */,
 			);
 			path = LayoutLockTests;
@@ -409,6 +416,8 @@
 				A00000000000000000000037 /* CGWindowMetadataReader.swift */,
 				A00000000000000000000035 /* WindowDiscoveryEngine.swift */,
 				57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */,
+				439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */,
+				EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */,
 			);
 			path = WindowDiscovery;
 			sourceTree = "<group>";
@@ -749,6 +758,8 @@
 				A00000000000000000000091 /* ValueExtensions.swift in Sources */,
 				A00000000000000000000034 /* WindowDiscoveryEngine.swift in Sources */,
 				CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */,
+				7042E87767044A4C950135E7 /* UnrealProjectResolver.swift in Sources */,
+				92D8A3635F734D04AA70D002 /* ProjectProcessInfo.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -786,6 +797,7 @@
 				A00000000000000000000093 /* TestSupport.swift in Sources */,
 				A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */,
 				F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */,
+				E902668BC27940C4A7F801D1 /* UnrealProjectTests.swift in Sources */,
 				D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -374,6 +374,40 @@ final class RestoreSpacesTests: XCTestCase {
         }
     }
 
+    func testSameNamedProjectFilesRecoverOnlyTheirExactOwner() {
+        let targets = ["Alpha", "Beta"].map {
+            WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/\($0)/Shared.uproject"))
+        }
+        let saved = targets.map {
+            makeWindowRecord(windowTitle: "Shared - Unreal Editor",
+                openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [$0]))
+        }
+        let owners = targets.enumerated().map { index, target in
+            UnexposedApplicationWindows(bundleIdentifier: saved[index].bundleIdentifier, pid: Int32(50 + index),
+                windows: [metadata(id: UInt32(7 + index), title: "Shared - Unreal Editor", pid: Int32(50 + index))],
+                documentURLs: [target.url])
+        }
+        for index in saved.indices {
+            let candidate = recovery().candidate(for: saved[index], savedWindows: saved, applications: owners)
+            XCTAssertEqual(candidate?.pid, Int32(50 + index))
+            XCTAssertEqual(candidate?.window.windowID, UInt32(7 + index))
+        }
+    }
+
+    func testSceneOnlySnapshotCanInspectAnOwnerKnownOnlyByItsProjectFolder() {
+        let project = URL(fileURLWithPath: "/Projects/Existing", isDirectory: true)
+        let scene = WindowOpenTarget(kind: .file, url: project.appendingPathComponent("Assets/Scene.unity"))
+        let saved = makeWindowRecord(windowTitle: "Scene",
+            openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [scene]))
+        let owner = UnexposedApplicationWindows(bundleIdentifier: saved.bundleIdentifier, pid: 42,
+            windows: [metadata(id: 7, title: "Scene")], documentURLs: [project])
+
+        let candidate = recovery().candidate(for: saved, savedWindows: [saved], applications: [owner])
+
+        XCTAssertEqual(candidate?.pid, 42)
+        XCTAssertEqual(candidate?.window.windowID, 7)
+    }
+
     func testKnownProjectContextExcludesAnotherProjectsTitleAndSoleWindow() {
         let target = WindowOpenTarget(kind: .folder, url: URL(fileURLWithPath: "/Projects/Expected", isDirectory: true))
         let saved = makeWindowRecord(openingConfiguration: WindowOpeningConfiguration(automaticallyCapturedTargets: [target]))

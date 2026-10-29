@@ -1016,6 +1016,21 @@ final class DashboardPresentationModelsTests: XCTestCase {
             [titled.id: "Project — zsh"])
     }
 
+    func testWindowListUsesSavedResourceNamesInsteadOfAdditionalWindowTitles() {
+        let projects = ["FirstProject", "MySecondProject"].map { name in
+            makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "\(name) - Editor")
+                .withOpeningConfiguration(WindowOpeningConfiguration(automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/\(name).uproject"))
+                ]))
+        }
+        let appOnly = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "No saved resource")
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: projects + [appOnly])),
+            [appOnly.id: "No saved resource"])
+        XCTAssertEqual(projects.map { DashboardSnapshotPresentation.openingTargetDescriptions(for: $0) },
+            [["FirstProject"], ["MySecondProject"]])
+    }
+
     func testWindowListTitlesDisappearWhenOnlyOneAppWindowRemains() {
         let first = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "First")
         let second = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Second")
@@ -1026,11 +1041,21 @@ final class DashboardPresentationModelsTests: XCTestCase {
 
     @MainActor
     func testRepeatedAppWindowTitlePreviewRenders() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let projects = try ["FirstProject", "MySecondProject"].map { name in
+            let file = directory.appendingPathComponent("\(name).uproject")
+            try Data("{}".utf8).write(to: file)
+            return makeWindow(bundleIdentifier: "com.epicgames.UnrealEditor", windowTitle: "\(name) - Unreal Editor")
+                .withOpeningConfiguration(WindowOpeningConfiguration(automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: file)
+                ]))
+        }
         let snapshot = makeSnapshot(displays: [makeDisplay(id: 1, name: "Built-in Display", x: 0)], windows: [
             makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "LayoutLock — zsh", zOrderHint: 0),
             makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "ZapPDF — zsh", zOrderHint: 1),
             makeWindow(bundleIdentifier: "com.apple.Safari", windowTitle: "Documentation", zOrderHint: 2)
-        ])
+        ] + projects)
         for scheme in [ColorScheme.light, .dark] {
             let preview = DashboardSnapshotPreviewView(
                 snapshot: snapshot, appIdentityResolver: .shared,

@@ -351,6 +351,11 @@ struct SnapshotCaptureService {
             .map { Set($0.activeByDisplay.values) }
         let windows = try discoveryResult.applications.flatMap { application in
             try application.windows.filter { window in
+                // Unreal exposes loading/helper panels as untitled AXUnknown windows.
+                // Keep discovery intact so restore can still recognize an Editor that is loading.
+                if UnrealProjectResolver.isUntitledHelperWindow(window, bundleIdentifier: application.bundleIdentifier) {
+                    return false
+                }
                 guard let windowID = window.cgWindowID else { return false }
                 if let activeSpaces, !activeSpaces.isEmpty,
                    let membership = restoreSpaceAccess.membership(windowID), !membership.isEmpty {

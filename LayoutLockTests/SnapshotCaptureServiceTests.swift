@@ -4,6 +4,29 @@ import XCTest
 @testable import LayoutLock
 
 final class SnapshotCaptureServiceTests: XCTestCase {
+    func testCaptureExcludesUnrealUntitledUnknownPanels() throws {
+        let windows = [
+            makeDiscoveredWindow(title: "Project - Unreal Editor", cgWindowID: 100),
+            makeDiscoveredWindow(title: "", subrole: "AXUnknown", cgWindowID: 101),
+            makeDiscoveredWindow(title: "Output Log", subrole: "AXUnknown", cgWindowID: 102)
+        ]
+        let snapshot = try captureActiveWindows(windows, bundleIdentifier: "com.epicgames.UnrealEditor")
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100, 102])
+        XCTAssertEqual(try captureActiveWindows(windows).windows.count, 3,
+            "Other apps can use AXUnknown for real windows.")
+    }
+
+    func testCaptureDoesNotSaveOnlyAnUnrealLoadingPanel() throws {
+        XCTAssertThrowsError(try captureActiveWindows(
+            [makeDiscoveredWindow(title: nil, subrole: "AXUnknown", cgWindowID: 100)],
+            bundleIdentifier: "com.epicgames.UnrealEditor")) {
+            guard case SnapshotCaptureServiceError.noWindowsAvailable = $0 else {
+                return XCTFail("Expected no project windows, got \($0)")
+            }
+        }
+    }
+
     func testCaptureExcludesWindowsOnInactiveSpaces() throws {
         let snapshot = try captureActiveWindows(
             [makeDiscoveredWindow(cgWindowID: 100),
@@ -1145,6 +1168,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
 
     private func captureActiveWindows(
         _ windows: [DiscoveredWindow],
+        bundleIdentifier: String = TestFixtures.bundleIdentifier,
         memberships: [CGWindowID: Set<UInt64>] = [:],
         inventory: RestoreSpaceInventory? = RestoreSpaceInventory(
             activeByDisplay: [1: 1, 2: 3], ordinarySpaceIDs: [1, 2, 3, 4]),
@@ -1153,7 +1177,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         let directory = try TestTemporaryDirectory()
         return try activeSpaceCaptureService(
             store: SnapshotStore(snapshotsDirectoryURL: directory.url),
-            windows: windows, memberships: memberships, inventory: inventory,
+            windows: windows, bundleIdentifier: bundleIdentifier, memberships: memberships, inventory: inventory,
             unexposedWindows: unexposedWindows
         ).captureSnapshot(named: "Active Spaces")
     }
@@ -1161,6 +1185,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
     private func activeSpaceCaptureService(
         store: SnapshotStore,
         windows: [DiscoveredWindow],
+        bundleIdentifier: String = TestFixtures.bundleIdentifier,
         memberships: [CGWindowID: Set<UInt64>],
         inventory: RestoreSpaceInventory? = RestoreSpaceInventory(
             activeByDisplay: [1: 1, 2: 3], ordinarySpaceIDs: [1, 2, 3, 4]),
@@ -1174,11 +1199,11 @@ final class SnapshotCaptureServiceTests: XCTestCase {
             discoveryResultProvider: {
                 WindowDiscoveryResult(
                     applications: [DiscoveredApplication(
-                        bundleIdentifier: TestFixtures.bundleIdentifier, pid: 42,
+                        bundleIdentifier: bundleIdentifier, pid: 42,
                         localizedName: "Editor", windows: windows)],
                     diagnostics: [],
                     unexposedApplications: [UnexposedApplicationWindows(
-                        bundleIdentifier: TestFixtures.bundleIdentifier, pid: 42, windows: unexposedWindows)]
+                        bundleIdentifier: bundleIdentifier, pid: 42, windows: unexposedWindows)]
                 )
             },
             restoreSpaceAccess: RestoreSpaceAccess(

@@ -171,6 +171,7 @@ struct WindowDiscoveryEngine {
     private let windowIDProvider: (AXUIElement) -> CGWindowID?
     private let applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
     private let unityProjectURLProvider: (pid_t, URL?) -> URL?
+    private let unrealProjectURLProvider: (pid_t, URL?) -> URL?
     private let currentProcessIdentifier: pid_t
 
     init(
@@ -187,6 +188,9 @@ struct WindowDiscoveryEngine {
         windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = AXAttributeReader.windowID,
         unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = {
             UnityProjectResolver().resolve(processIdentifier: $0, documentURL: $1)
+        },
+        unrealProjectURLProvider: @escaping (pid_t, URL?) -> URL? = {
+            UnrealProjectResolver().resolve(processIdentifier: $0, documentURL: $1)
         }
     ) {
         self.trustChecker = trustChecker
@@ -201,6 +205,7 @@ struct WindowDiscoveryEngine {
         }
         self.currentProcessIdentifier = currentProcessIdentifier
         self.unityProjectURLProvider = unityProjectURLProvider
+        self.unrealProjectURLProvider = unrealProjectURLProvider
         self.windowIDProvider = windowIDProvider
     }
 
@@ -259,9 +264,13 @@ struct WindowDiscoveryEngine {
             guard !exposed.contains(where: { $0.cgWindowID == nil }) else { return nil }
             let remaining = unexposedCGWindows[application.processIdentifier] ?? []
             guard exposed.isEmpty || !remaining.isEmpty else { return nil }
-            let project = UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) &&
+            var project = UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) &&
                 remaining.contains(where: { $0.layer == 0 && $0.bounds.width > 0 && $0.bounds.height > 0 })
                 ? unityProjectURLProvider(application.processIdentifier, nil) : nil
+            if UnrealProjectResolver.isUnreal(bundleIdentifier: bundleIdentifier) {
+                // A starting Editor may have its project argument before it has any windows.
+                project = unrealProjectURLProvider(application.processIdentifier, nil)
+            }
             return UnexposedApplicationWindows(
                 bundleIdentifier: bundleIdentifier,
                 pid: application.processIdentifier,
@@ -475,6 +484,11 @@ struct WindowDiscoveryEngine {
         var documentURLs = applicationDocumentURL.map { [$0] } ?? documentMetadata.urls
         if UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier),
             let project = unityProjectURLProvider(processIdentifier, documentURLs.first),
+            !documentURLs.contains(project) {
+            documentURLs.append(project)
+        }
+        if UnrealProjectResolver.isUnreal(bundleIdentifier: bundleIdentifier),
+            let project = unrealProjectURLProvider(processIdentifier, documentURLs.first),
             !documentURLs.contains(project) {
             documentURLs.append(project)
         }

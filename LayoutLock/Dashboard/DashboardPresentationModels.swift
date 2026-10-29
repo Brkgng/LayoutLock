@@ -147,7 +147,7 @@ enum DashboardSnapshotPresentation {
         let windowsByApp = Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier)
         var titles: [UUID: String] = [:]
         for windows in windowsByApp.values where windows.count > 1 {
-            for window in windows {
+            for window in windows where window.openingConfiguration.effectiveTargets.isEmpty {
                 titles[window.id] = window.windowTitle?.nonEmptyValue
             }
         }

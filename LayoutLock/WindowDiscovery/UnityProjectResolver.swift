@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 /// Unity's document is a scene; its independently launched Editor belongs to a project.
 struct UnityProjectResolver {
@@ -18,8 +17,8 @@ struct UnityProjectResolver {
             return project
         }
         return resolve(
-            projectPaths: Self.processProjectPaths(processIdentifier),
-            currentDirectoryURL: Self.currentDirectoryURL(processIdentifier)
+            projectPaths: ProjectProcessInfo.projectPaths(processIdentifier, selecting: Self.projectPaths),
+            currentDirectoryURL: ProjectProcessInfo.currentDirectoryURL(processIdentifier)
         )
     }
 
@@ -130,50 +129,4 @@ struct UnityProjectResolver {
             && isDirectory.boolValue
     }
 
-    private static func currentDirectoryURL(_ pid: pid_t) -> URL? {
-        var info = proc_vnodepathinfo()
-        let size = MemoryLayout<proc_vnodepathinfo>.size
-        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, Int32(size)) == size else {
-            return nil
-        }
-        let path = withUnsafeBytes(of: info.pvi_cdir.vip_path) { bytes in
-            String(decoding: bytes.prefix(while: { $0 != 0 }), as: UTF8.self)
-        }
-        return path.isEmpty ? nil : URL(fileURLWithPath: path, isDirectory: true)
-    }
-
-    private static func processProjectPaths(_ pid: pid_t) -> [String] {
-        var query = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size = 0
-        guard sysctl(&query, UInt32(query.count), nil, &size, nil, 0) == 0,
-              size >= MemoryLayout<Int32>.size, size <= 2 * 1024 * 1024 else {
-            return []
-        }
-        var bytes = [UInt8](repeating: 0, count: size)
-        guard sysctl(&query, UInt32(query.count), &bytes, &size, nil, 0) == 0 else {
-            return []
-        }
-        // KERN_PROCARGS2 also contains environment values. Read only argc arguments,
-        // retain only the project flags' values, and never log the raw buffer.
-        let count = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
-        guard count > 0, count <= 4096 else { return [] }
-        var offset = MemoryLayout<Int32>.size
-        while offset < size, bytes[offset] != 0 { offset += 1 } // executable path
-        while offset < size, bytes[offset] == 0 { offset += 1 }
-        var paths: [String] = []
-        var expectsProjectPath = false
-        for _ in 0..<count {
-            guard offset < size else { return [] }
-            let start = offset
-            while offset < size, bytes[offset] != 0 { offset += 1 }
-            guard offset < size else { return [] }
-            let argument = String(decoding: bytes[start..<offset], as: UTF8.self)
-            if expectsProjectPath, !argument.isEmpty, !argument.hasPrefix("-") {
-                paths.append(argument)
-            }
-            expectsProjectPath = ["-projectpath", "-createproject"].contains(argument.lowercased())
-            offset += 1
-        }
-        return paths
-    }
 }

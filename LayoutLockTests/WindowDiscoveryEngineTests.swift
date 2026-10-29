@@ -5,6 +5,43 @@ import XCTest
 @testable import LayoutLock
 
 final class WindowDiscoveryEngineTests: XCTestCase {
+    func testUnrealProjectIdentityIsAvailableForVisibleAndStartingEditors() throws {
+        let project = URL(fileURLWithPath: "/Projects/A/SharedProject.uproject")
+        for visible in [true, false] {
+            let app = AXUIElementCreateApplication(101)
+            let window = AXUIElementCreateApplication(201)
+            let fixture = AXAttributeFixture()
+            fixture.set((visible ? [window] : []) as CFArray, for: app, attribute: kAXWindowsAttribute)
+            fixture.setWindow(window, title: "SharedProject - Unreal Editor", role: "AXWindow",
+                frame: CGRect(x: 20, y: 30, width: 400, height: 300))
+            let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+                bundleIdentifier: "com.epicgames.UnrealEditor", unrealProjectURLProvider: { pid, document in
+                    XCTAssertEqual(pid, 101)
+                    XCTAssertNil(document)
+                    return project
+                })
+
+            let result = try engine.discoverRunningWindowsWithDiagnostics()
+
+            if visible {
+                XCTAssertEqual(result.applications.first?.windows.first?.documentURLs, [project])
+            } else {
+                XCTAssertTrue(result.applications.isEmpty)
+                XCTAssertEqual(result.unexposedApplications.first?.documentURLs, [project])
+                XCTAssertTrue(result.unexposedApplications.first?.windows.isEmpty == true)
+            }
+        }
+    }
+
+    func testOtherOwnersNeverInvokeUnrealProjectProvider() throws {
+        let app = AXUIElementCreateApplication(101)
+        let fixture = AXAttributeFixture()
+        fixture.set([] as CFArray, for: app, attribute: kAXWindowsAttribute)
+        let engine = makeEngine(appElement: app, attributeReader: fixture.reader,
+            unrealProjectURLProvider: { _, _ in XCTFail("Only Unreal owns this project context"); return nil })
+        XCTAssertTrue(try engine.discoverRunningWindowsWithDiagnostics().applications.isEmpty)
+    }
+
     func testDiscoveryRetainsModalStateForMinimizedDialogWindows() throws {
         for modal: Bool? in [false, true, nil] {
             let app = AXUIElementCreateApplication(101)
@@ -1321,7 +1358,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         bundleIdentifier: String = "com.example.editor",
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver =
             ApplicationWindowDocumentURLResolver(),
-        unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil }
+        unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil },
+        unrealProjectURLProvider: @escaping (pid_t, URL?) -> URL? = { _, _ in nil }
     ) -> WindowDiscoveryEngine {
         WindowDiscoveryEngine(
             trustChecker: AccessibilityTrustChecker { true },
@@ -1340,7 +1378,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             appElementProvider: { _ in appElement },
             cgWindowMetadataProvider: { _ in metadata },
             windowIDProvider: windowIDProvider,
-            unityProjectURLProvider: unityProjectURLProvider
+            unityProjectURLProvider: unityProjectURLProvider,
+            unrealProjectURLProvider: unrealProjectURLProvider
         )
     }
 
