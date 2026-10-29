@@ -776,20 +776,35 @@ final class RestoreSpacesTests: XCTestCase {
     func testEngineConfirmsMoveAndRediscoversAXBeforeGeometry() async throws {
         var membership: Set<UInt64> = [10]
         let applier = SpaceTestApplier()
+        let initialElement = AXUIElementCreateApplication(42001)
+        let freshElement = AXUIElementCreateApplication(42002)
+        var events: [String] = []
         var scans = 0
+        applier.onApply = {
+            events.append("apply")
+            XCTAssertEqual(membership, [22])
+            XCTAssertEqual(scans, 2)
+        }
         let coordinator = coordinator(
             membership: { _ in membership },
             move: { _, _ in
+                events.append("move")
                 membership = [22]
                 return true
             })
         let result = try await restore(saved: makeWindowRecord(displayID: 2), spaces: coordinator, applier: applier) {
             scans += 1
-            return self.discovery(window: self.window(onScreen: scans > 1))
+            events.append(scans == 1 ? "discover" : "rediscover")
+            return self.discovery(window: self.window(onScreen: scans > 1,
+                axElement: scans == 1 ? initialElement : freshElement))
         }
         XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertEqual(events, ["discover", "move", "rediscover", "apply"])
         XCTAssertEqual(scans, 2)
         XCTAssertEqual(applier.appliedCount, 1)
+        let appliedElement = try XCTUnwrap(applier.appliedElements.first)
+        XCTAssertTrue(CFEqual(appliedElement, freshElement))
+        XCTAssertFalse(CFEqual(appliedElement, initialElement))
         XCTAssertEqual(applier.focusCount, 0)
     }
 
@@ -1387,10 +1402,11 @@ final class RestoreSpacesTests: XCTestCase {
     private func window(
         onScreen: Bool? = true, id: CGWindowID? = 7,
         role: String = "AXWindow", subrole: String? = "AXStandardWindow", documentURLs: [URL] = [],
-        title: String? = "Window", frame: CGRect = TestFixtures.windowFrame
+        title: String? = "Window", frame: CGRect = TestFixtures.windowFrame,
+        axElement: AXUIElement = AXUIElementCreateSystemWide()
     ) -> DiscoveredWindow {
         DiscoveredWindow(
-            axElement: AXUIElementCreateSystemWide(), documentURLs: documentURLs, title: title, role: role, subrole: subrole,
+            axElement: axElement, documentURLs: documentURLs, title: title, role: role, subrole: subrole,
             frame: frame, isMinimized: false, isFullscreen: false, isMain: false, isVisible: true,
             cgWindowID: id, ownerName: nil, cgLayer: 0, zOrderHint: nil, isOnScreen: onScreen)
     }
@@ -1461,10 +1477,12 @@ private final class SpaceTestApplier: RestoreWindowApplying {
     var raisedWindowIDs: [CGWindowID] = []
     var focusCount = 0
     var raiseCount = 0
+    var onApply: () -> Void = {}
     var onFocus: () -> Void = {}
     func apply(savedWindow: WindowRecord, targetFrame: CGRect, to discoveredWindow: DiscoveredWindow) async throws
         -> RestoreWindowApplyResult
     {
+        onApply()
         appliedCount += 1
         appliedElements.append(discoveredWindow.axElement)
         if let windowID = discoveredWindow.cgWindowID { appliedWindowIDs.append(windowID) }

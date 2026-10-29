@@ -5,19 +5,26 @@ import XCTest
 @MainActor
 final class PermissionInterventionRouterTests: XCTestCase {
     func testAuthorizedRequestReturnsTrueAndClearsStaleInterventions() {
+        var isTrusted = false
         let presenter = RecordingStatusNoticePresenter()
-        let router = makeRouter(isTrusted: false, presenter: presenter)
+        let router = PermissionInterventionRouter(
+            permissionCoordinator: PermissionCoordinator(
+                trustChecker: AccessibilityTrustChecker { isTrusted }
+            ),
+            statusNoticePresenter: presenter
+        )
 
+        XCTAssertFalse(router.requestAuthorization(kind: .saveLayout, source: .dashboard))
         XCTAssertFalse(router.requestAuthorization(kind: .restoreLayout, source: .hotkey))
+        XCTAssertTrue(router.showsDashboardPermissionEducation)
         XCTAssertNotNil(router.lastPassivePermissionNotice)
 
-        let authorizedRouter = makeRouter(isTrusted: true, presenter: presenter)
-        authorizedRouter.updateDashboardWindowVisibility(.visibleOnActiveSpace)
-        _ = authorizedRouter.requestAuthorization(kind: .saveLayout, source: .dashboard)
+        isTrusted = true
 
-        XCTAssertTrue(authorizedRouter.requestAuthorization(kind: .saveLayout, source: .dashboard))
-        XCTAssertFalse(authorizedRouter.showsDashboardPermissionEducation)
-        XCTAssertNil(authorizedRouter.lastPassivePermissionNotice)
+        XCTAssertTrue(router.requestAuthorization(kind: .saveLayout, source: .dashboard))
+        XCTAssertFalse(router.showsDashboardPermissionEducation)
+        XCTAssertNil(router.lastPassivePermissionNotice)
+        XCTAssertEqual(presenter.hideCount, 1)
     }
 
     func testUnauthorizedDashboardRequestShowsInlineEducation() {

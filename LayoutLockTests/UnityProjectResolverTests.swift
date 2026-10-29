@@ -89,9 +89,15 @@ final class UnityProjectResolverTests: XCTestCase {
         let hub = directory.appendingPathComponent("Hub/Editor", isDirectory: true)
         let wrongVersion = try makeEditor(in: hub, version: "6000.5.0f1")
         let matching = try makeEditor(in: hub, version: "6000.6.7f1")
+        let foreignApplication = try makeEditor(
+            in: directory.appendingPathComponent("Foreign/Editor"),
+            version: "6000.6.7f1",
+            bundleIdentifier: "com.example.editor"
+        )
 
         XCTAssertEqual(resolver.editorURL(projectURL: project, preferredApplicationURL: wrongVersion), matching)
         XCTAssertEqual(resolver.editorURL(projectURL: project, preferredApplicationURL: matching), matching)
+        XCTAssertNotEqual(resolver.editorURL(projectURL: project, preferredApplicationURL: foreignApplication), foreignApplication)
         XCTAssertTrue(UnityProjectResolver.isUnity(bundleIdentifier: "com.unity3d.UnityEditor5.x"))
         XCTAssertFalse(UnityProjectResolver.isUnity(bundleIdentifier: "com.unity3d.unityhub"))
     }
@@ -113,7 +119,11 @@ final class UnityProjectResolverTests: XCTestCase {
         return project
     }
 
-    private func makeEditor(in hub: URL, version: String) throws -> URL {
+    private func makeEditor(
+        in hub: URL,
+        version: String,
+        bundleIdentifier: String = "com.unity3d.UnityEditor5.x"
+    ) throws -> URL {
         let application = hub.appendingPathComponent("\(version)/Unity.app", isDirectory: true)
         let contents = application.appendingPathComponent("Contents", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -121,7 +131,7 @@ final class UnityProjectResolverTests: XCTestCase {
             withIntermediateDirectories: true
         )
         let info: [String: Any] = [
-            "CFBundleIdentifier": "com.unity3d.UnityEditor5.x",
+            "CFBundleIdentifier": bundleIdentifier,
             "CFBundleVersion": version,
             "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "Unity"

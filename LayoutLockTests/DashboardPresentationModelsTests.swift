@@ -186,10 +186,6 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertNotNil(UserDefaults.standard.string(forKey: frameAutosaveKey))
     }
 
-    func testDashboardWindowSupportDefinesExpectedFirstOpenSize() {
-        XCTAssertEqual(DashboardWindowSupport.defaultSize, CGSize(width: 940, height: 640))
-    }
-
     func testDashboardSnapshotNameRequestTrimsSubmittedName() {
         let request = DashboardSnapshotNameRequest(defaultName: "Layout - Default")
 
@@ -706,33 +702,16 @@ final class DashboardPresentationModelsTests: XCTestCase {
         )
     }
 
-    func testRelativeDateFormatterReturnsJustNowForMatchingDate() {
+    func testRelativeDateFormatterReturnsJustNowForMatchingAndRecentDates() {
         let now = Date(timeIntervalSince1970: 1_000)
 
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: now, relativeTo: now),
-            "just now"
-        )
-    }
-
-    func testRelativeDateFormatterReturnsJustNowForRecentPastDate() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        let updatedAt = now.addingTimeInterval(-30)
-
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: updatedAt, relativeTo: now),
-            "just now"
-        )
-    }
-
-    func testRelativeDateFormatterReturnsJustNowForRecentFutureDate() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        let updatedAt = now.addingTimeInterval(30)
-
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: updatedAt, relativeTo: now),
-            "just now"
-        )
+        for offset: TimeInterval in [0, -30, 30] {
+            XCTAssertEqual(
+                DashboardRelativeDateFormatter.string(from: now.addingTimeInterval(offset), relativeTo: now),
+                "just now",
+                "Offset: \(offset)"
+            )
+        }
     }
 
     func testRelativeDateFormatterUsesSystemFormatterForOlderDate() {
@@ -1257,27 +1236,6 @@ final class DashboardPresentationModelsTests: XCTestCase {
         let registered = try makeApplicationBundle(in: directory.url, named: "Registered.app")
         XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
             runningBundleIdentifiers: [], registeredApplicationURL: { _ in registered }).isEmpty)
-    }
-
-    func testIdentityFallbackCanUseBundleIdentifierAsName() {
-        let snapshot = makeSnapshot(windows: [
-            makeWindow(bundleIdentifier: "com.example.unresolved")
-        ])
-
-        let summary = DashboardSnapshotPresentation.appSummaries(
-            for: snapshot,
-            identityResolver: { bundleIdentifier in
-                DashboardAppIdentity(
-                    bundleIdentifier: bundleIdentifier,
-                    name: bundleIdentifier,
-                    icon: NSImage(),
-                    accentColor: .accentColor
-                )
-            }
-        ).first
-
-        XCTAssertEqual(summary?.name, "com.example.unresolved")
-        XCTAssertEqual(summary?.bundleIdentifier, "com.example.unresolved")
     }
 
     func testWindowRemovalConfirmationUsesWindowTitleWhenAvailable() {

@@ -214,6 +214,8 @@ final class SnapshotMenuControllerMonetizationTests: XCTestCase {
         XCTAssertEqual(try store.listSummaries().count, 4)
 
         let restoreTask = controller.restoreSnapshot(id: snapshotID)
+        XCTAssertNotNil(restoreTask)
+        XCTAssertTrue(controller.isOperating)
         await restoreTask?.value
 
         controller.deleteSnapshot(id: snapshotID)

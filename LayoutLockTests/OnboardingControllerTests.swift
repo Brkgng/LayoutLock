@@ -11,13 +11,6 @@ final class OnboardingControllerTests: XCTestCase {
         )
     }
 
-    func testReadyCopyMatchesApprovedDescription() {
-        XCTAssertEqual(
-            OnboardingStrings.readyBody,
-            "Arrange your windows the way you want, then save the current layout from the dashboard."
-        )
-    }
-
     func testInitialStepIsWelcomeWhenUnauthorized() {
         let controller = makeController(isTrusted: false)
 

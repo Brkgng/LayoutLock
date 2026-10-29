@@ -567,6 +567,9 @@ final class DiagnosticLogControllerTests: XCTestCase {
 
         try controller.clear()
         XCTAssertFalse(controller.hasLog)
+
+        try controller.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logURL.path))
     }
 
     func testComposeSupportEmailUsesExistingLogAsAttachment() throws {
@@ -701,13 +704,20 @@ final class DiagnosticLogControllerTests: XCTestCase {
     func testExportReturnsCancelledWithoutWritingWhenDestinationSelectionIsCancelled() throws {
         let temporaryDirectory = try TestTemporaryDirectory()
         let logURL = temporaryDirectory.url.appendingPathComponent("events.log")
-        try Data("log".utf8).write(to: logURL)
+        let rawLog = Data("log".utf8)
+        try rawLog.write(to: logURL)
+        let originalContents = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.url.path).sorted()
         let controller = DiagnosticLogController(
             eventsLogURL: logURL,
             exportDestinationProvider: { _ in nil }
         )
 
         XCTAssertEqual(try controller.export(), .cancelled)
+        XCTAssertEqual(try Data(contentsOf: logURL), rawLog)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.url.path).sorted(),
+            originalContents
+        )
     }
 
     func testExportReturnsNoLogWithoutRequestingDestinationWhenLogIsMissing() throws {
@@ -740,18 +750,6 @@ final class DiagnosticLogControllerTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try controller.export())
-    }
-
-    func testClearRemovesExistingLogAndSucceedsWhenRepeated() throws {
-        let temporaryDirectory = try TestTemporaryDirectory()
-        let logURL = temporaryDirectory.url.appendingPathComponent("events.log")
-        try Data("log".utf8).write(to: logURL)
-        let controller = DiagnosticLogController(eventsLogURL: logURL)
-
-        try controller.clear()
-        try controller.clear()
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: logURL.path))
     }
 
     func testRevealSelectsExistingLogFile() throws {

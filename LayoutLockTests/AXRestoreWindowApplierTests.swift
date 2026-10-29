@@ -156,49 +156,30 @@ final class AXRestoreWindowApplierTests: XCTestCase {
         XCTAssertEqual(result.finalObservedFrame, accessor.frame)
     }
 
-    func testFrameExactlyTwoPointsFromTargetIsAccepted() async throws {
+    func testFrameVerificationAcceptsTwoPointBoundaryAndRejectsLargerDifference() async throws {
         let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
-        let observedFrame = CGRect(x: 12, y: 18, width: 802, height: 598)
-        let accessor = RecordingGeometryAccessor(
-            frame: observedFrame,
-            commitsWritesImmediately: false
-        )
-        var sleepCount = 0
-        let applier = AXRestoreWindowApplier(
-            geometryAccessor: accessor,
-            sleeper: { _ in sleepCount += 1 }
-        )
+        let cases: [(name: String, frame: CGRect, didRestore: Bool)] = [
+            ("exactly two points", CGRect(x: 12, y: 18, width: 802, height: 598), true),
+            ("more than two points", CGRect(x: 12.01, y: 20, width: 800, height: 600), false)
+        ]
+        for item in cases {
+            let accessor = RecordingGeometryAccessor(frame: item.frame, commitsWritesImmediately: false)
+            var sleepCount = 0
+            let applier = AXRestoreWindowApplier(
+                geometryAccessor: accessor,
+                sleeper: { _ in sleepCount += 1 }
+            )
 
-        let result = try await applier.apply(
-            savedWindow: makeWindowRecord(frame: targetFrame),
-            targetFrame: targetFrame,
-            to: makeDiscoveredWindow()
-        )
+            let result = try await applier.apply(
+                savedWindow: makeWindowRecord(frame: targetFrame),
+                targetFrame: targetFrame,
+                to: makeDiscoveredWindow()
+            )
 
-        XCTAssertTrue(result.didRestore)
-        XCTAssertEqual(sleepCount, 1)
-    }
-
-    func testFrameMoreThanTwoPointsFromTargetIsRejected() async throws {
-        let targetFrame = CGRect(x: 10, y: 20, width: 800, height: 600)
-        let observedFrame = CGRect(x: 12.01, y: 20, width: 800, height: 600)
-        let accessor = RecordingGeometryAccessor(
-            frame: observedFrame,
-            commitsWritesImmediately: false
-        )
-        let applier = AXRestoreWindowApplier(
-            geometryAccessor: accessor,
-            sleeper: { _ in }
-        )
-
-        let result = try await applier.apply(
-            savedWindow: makeWindowRecord(frame: targetFrame),
-            targetFrame: targetFrame,
-            to: makeDiscoveredWindow()
-        )
-
-        XCTAssertFalse(result.didRestore)
-        XCTAssertEqual(result.failureReason, RestoreSkipReason.windowGeometryDidNotSettle)
+            XCTAssertEqual(result.didRestore, item.didRestore, item.name)
+            XCTAssertEqual(sleepCount, item.didRestore ? 1 : 4, item.name)
+            XCTAssertEqual(result.failureReason, item.didRestore ? nil : RestoreSkipReason.windowGeometryDidNotSettle, item.name)
+        }
     }
 
     func testCancellationDuringSettlingPropagates() async {

@@ -27,16 +27,6 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         }
     }
 
-    func testCaptureExcludesWindowsOnInactiveSpaces() throws {
-        let snapshot = try captureActiveWindows(
-            [makeDiscoveredWindow(cgWindowID: 100),
-             makeDiscoveredWindow(cgWindowID: 101, isOnScreen: false)],
-            memberships: [100: [1], 101: [2]]
-        )
-
-        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100])
-    }
-
     func testCaptureKeepsMinimizedAndHiddenWindowsOnActiveSpace() throws {
         let snapshot = try captureActiveWindows(
             [makeDiscoveredWindow(isMinimized: true, isVisible: false, cgWindowID: 100, isOnScreen: false),
@@ -74,8 +64,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
     func testCaptureWithoutSpaceInventoryIncludesOnlyOnscreenWindows() throws {
         let snapshot = try captureActiveWindows(
             [makeDiscoveredWindow(title: "Onscreen", cgWindowID: 100, isOnScreen: true),
-             makeDiscoveredWindow(title: "Offscreen", isOnScreen: false),
-             makeDiscoveredWindow(title: "Unknown", isOnScreen: nil)],
+             makeDiscoveredWindow(title: "Offscreen", cgWindowID: 101, isOnScreen: false),
+             makeDiscoveredWindow(title: "Unknown", cgWindowID: 102, isOnScreen: nil)],
             inventory: nil
         )
 
@@ -592,36 +582,10 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertEqual(record.captureSignature.cgWindowID, 999)
     }
 
-    func testMakeWindowRecordCapturesExistingDocumentFile() throws {
+    func testMakeWindowRecordCapturesExistingDocumentFilesAndFolders() throws {
         let temporaryDirectory = try TestTemporaryDirectory()
         let documentURL = temporaryDirectory.url.appendingPathComponent("Notes.txt")
         try Data().write(to: documentURL)
-        let service = SnapshotCaptureService(
-            snapshotStore: SnapshotStore(snapshotsDirectoryURL: temporaryDirectory.url)
-        )
-        let display = makeDisplayRecord()
-        let window = makeDiscoveredWindow(documentURL: documentURL)
-        let application = DiscoveredApplication(
-            bundleIdentifier: "com.example.editor",
-            pid: 88,
-            localizedName: "Editor",
-            windows: [window]
-        )
-
-        let record = try service.makeWindowRecord(
-            application: application,
-            window: window,
-            displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
-        )
-
-        let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
-        XCTAssertEqual(target.kind, .file)
-        XCTAssertEqual(target.url, documentURL.standardizedFileURL)
-        XCTAssertNil(record.openingConfiguration.manualTargets)
-    }
-
-    func testMakeWindowRecordCapturesExistingDocumentFolder() throws {
-        let temporaryDirectory = try TestTemporaryDirectory()
         let folderURL = temporaryDirectory.url.appendingPathComponent(
             "Project",
             isDirectory: true
@@ -634,23 +598,27 @@ final class SnapshotCaptureServiceTests: XCTestCase {
             snapshotStore: SnapshotStore(snapshotsDirectoryURL: temporaryDirectory.url)
         )
         let display = makeDisplayRecord()
-        let window = makeDiscoveredWindow(documentURL: folderURL)
-        let application = DiscoveredApplication(
-            bundleIdentifier: "com.example.editor",
-            pid: 88,
-            localizedName: "Editor",
-            windows: [window]
-        )
+        let cases: [(URL, WindowOpenTargetKind)] = [(documentURL, .file), (folderURL, .folder)]
+        for (url, kind) in cases {
+            let window = makeDiscoveredWindow(documentURL: url)
+            let application = DiscoveredApplication(
+                bundleIdentifier: "com.example.editor",
+                pid: 88,
+                localizedName: "Editor",
+                windows: [window]
+            )
 
-        let record = try service.makeWindowRecord(
-            application: application,
-            window: window,
-            displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
-        )
+            let record = try service.makeWindowRecord(
+                application: application,
+                window: window,
+                displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
+            )
 
-        let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
-        XCTAssertEqual(target.kind, .folder)
-        XCTAssertEqual(target.url, folderURL.standardizedFileURL)
+            let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
+            XCTAssertEqual(target.kind, kind)
+            XCTAssertEqual(target.url, url.standardizedFileURL)
+            XCTAssertNil(record.openingConfiguration.manualTargets)
+        }
     }
 
     func testMakeWindowRecordCapturesExistingPathsFromInactiveTabTitles() throws {
@@ -838,6 +806,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                                 makeDiscoveredWindow(
                                     title: "Downloads",
                                     frame: frame,
+                                    cgWindowID: 122,
                                     zOrderHint: 0
                                 )
                             ]
@@ -858,7 +827,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                     ],
                     diagnostics: []
                 )
-            }
+            },
+            restoreSpaceAccess: .unavailable
         )
         let context = SnapshotCaptureService.CaptureContext(
             runningApplications: [

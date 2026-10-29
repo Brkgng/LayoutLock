@@ -252,6 +252,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.message, "Saving...")
 
         await task?.value
+        XCTAssertFalse(controller.isOperating)
     }
 
     func testCaptureCurrentSnapshotReturnsNilWhenAlreadyOperating() async throws {
@@ -274,17 +275,6 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(overlayPresenter.hideCount, 1)
         XCTAssertTrue(overlayPresenter.restoreCompletionSummaries.isEmpty)
-    }
-
-    func testCaptureCurrentSnapshotClearsOperatingAfterSuccess() async throws {
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        let controller = makeCaptureController(store: store)
-        controller.setSnapshotSummariesDidChange { _ in nil }
-
-        let task = controller.captureCurrentSnapshot()
-        await task?.value
-
-        XCTAssertFalse(controller.isOperating)
     }
 
     func testNamedCaptureClearsOperatingAfterCaptureError() async throws {
@@ -311,25 +301,6 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.message, "Capture failed.")
         XCTAssertEqual(controller.status?.isError, true)
         XCTAssertEqual(overlayPresenter.shownKinds, [.save])
-        XCTAssertEqual(overlayPresenter.hideCount, 1)
-    }
-
-    func testCaptureCurrentSnapshotShowsAndHidesSaveOverlayAfterSuccess() async throws {
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        let overlayPresenter = RecordingOperationOverlayPresenter()
-        let controller = makeCaptureController(
-            store: store,
-            overlayPresenter: overlayPresenter
-        )
-        controller.setSnapshotSummariesDidChange { _ in nil }
-
-        let task = controller.captureCurrentSnapshot()
-
-        await Task.yield()
-        XCTAssertEqual(overlayPresenter.shownKinds, [.save])
-
-        await task?.value
-
         XCTAssertEqual(overlayPresenter.hideCount, 1)
     }
 
@@ -419,6 +390,7 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(controller.status?.message, "Saving...")
         await task?.value
 
+        XCTAssertFalse(controller.isOperating)
         XCTAssertEqual(controller.snapshotSummaries.first?.windowCount, 1)
         XCTAssertEqual(controller.status?.message, "Updated \"Coding\" with 1 window.")
         XCTAssertEqual(controller.status?.isError, false)
@@ -482,28 +454,6 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             "Updated \"Coding\" with 2 windows. Saved resources for 1 window could not be carried over. Review this layout."
         )
         XCTAssertEqual(controller.status?.isError, true)
-    }
-
-    func testUpdateSnapshotShowsSaveOverlayImmediately() async throws {
-        let snapshotID = UUID()
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let overlayPresenter = RecordingOperationOverlayPresenter()
-        let controller = SnapshotMenuController(
-            snapshotStore: store,
-            snapshotCaptureService: makeSnapshotCaptureService(store: store),
-            operationOverlayPresenter: overlayPresenter
-        )
-        controller.setSnapshotSummariesDidChange { _ in nil }
-
-        let task = controller.updateSnapshot(id: snapshotID)
-
-        await Task.yield()
-        XCTAssertEqual(overlayPresenter.shownKinds, [.save])
-
-        await task?.value
-
-        XCTAssertEqual(overlayPresenter.hideCount, 1)
     }
 
     func testUpdateSnapshotWaitsForSaveOverlayBeforeCapturing() async throws {
@@ -651,22 +601,6 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
 
         XCTAssertEqual(controller.status?.message, "Hotkey registration failed.")
         XCTAssertEqual(controller.status?.isError, true)
-    }
-
-    func testUpdateSnapshotClearsOperatingAfterSuccess() async throws {
-        let snapshotID = UUID()
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let controller = SnapshotMenuController(
-            snapshotStore: store,
-            snapshotCaptureService: makeSnapshotCaptureService(store: store)
-        )
-        controller.setSnapshotSummariesDidChange { _ in nil }
-
-        let task = controller.updateSnapshot(id: snapshotID)
-        await task?.value
-
-        XCTAssertFalse(controller.isOperating)
     }
 
     func testUpdateSnapshotClearsOperatingAfterCaptureError() async throws {
@@ -1035,9 +969,12 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertFalse(controller.isOperating)
         XCTAssertEqual(controller.status?.message, "Accessibility access is required to restore layouts.")
         XCTAssertEqual(controller.status?.isError, true)
+        XCTAssertEqual(overlayPresenter.shownKinds, [.restore])
         XCTAssertEqual(overlayPresenter.hideCount, 0)
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Coding\"")
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.summary, "Accessibility access is required to restore layouts.")
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["Accessibility access is required to restore layouts."])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
         XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
         XCTAssertTrue(overlayPresenter.backgroundProgressMessages.isEmpty)
         XCTAssertNil(controller.restoreCompletionID)
@@ -1239,31 +1176,6 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
             ["1 window restored"]
         )
         XCTAssertEqual(overlayPresenter.restoreCompletionDetails, [nil])
-    }
-
-    func testRestoreSnapshotShowsFailureCompletion() async throws {
-        let snapshotID = UUID()
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let overlayPresenter = RecordingOperationOverlayPresenter()
-        let controller = makeRestoreController(
-            store: store,
-            isTrusted: false,
-            overlayPresenter: overlayPresenter
-        )
-
-        let task = controller.restoreSnapshot(id: snapshotID)
-
-        await Task.yield()
-        XCTAssertEqual(overlayPresenter.shownKinds, [.restore])
-
-        await task?.value
-
-        XCTAssertEqual(overlayPresenter.hideCount, 0)
-        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.title, "Couldn't restore \"Coding\"")
-        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["Accessibility access is required to restore layouts."])
-        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.hasIssues, true)
-        XCTAssertEqual(overlayPresenter.restoreCompletions.first?.isFailure, true)
     }
 
     func testRestoreSnapshotCompletionIncludesSkippedWindowDetails() async throws {
@@ -1675,39 +1587,19 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertEqual(overlay.shownKinds, [.save])
     }
 
-    func testRestoreSnapshotPublishesCompletionIDAfterSuccess() async throws {
-        let snapshotID = UUID()
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let controller = makeRestoreController(store: store)
-
-        XCTAssertNil(controller.restoreCompletionID)
-
-        let task = controller.restoreSnapshot(id: snapshotID)
-        await task?.value
-
-        XCTAssertNotNil(controller.restoreCompletionID)
-    }
-
-    func testRestoreSnapshotDoesNotPublishCompletionIDAfterFailure() async throws {
-        let snapshotID = UUID()
-        let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let controller = makeRestoreController(store: store, isTrusted: false)
-
-        XCTAssertNil(controller.restoreCompletionID)
-
-        let task = controller.restoreSnapshot(id: snapshotID)
-        await task?.value
-
-        XCTAssertNil(controller.restoreCompletionID)
-    }
-
     func testRestoreSnapshotPublishesDistinctCompletionIDsForRepeatedRestores() async throws {
         let snapshotID = UUID()
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Coding"))
-        let controller = makeRestoreController(store: store)
+        let overlayPresenter = RecordingOperationOverlayPresenter()
+        let controller = try makeWaitingRestoreController(
+            store: store,
+            snapshotID: snapshotID,
+            overlayPresenter: overlayPresenter,
+            uiSleep: { _ in throw CancellationError() },
+            beforeApply: {}
+        )
+
+        XCTAssertNil(controller.restoreCompletionID)
 
         let firstTask = controller.restoreSnapshot(id: snapshotID)
         await firstTask?.value
@@ -1720,6 +1612,8 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         XCTAssertNotNil(firstID)
         XCTAssertNotNil(secondID)
         XCTAssertNotEqual(firstID, secondID)
+        XCTAssertEqual(overlayPresenter.restoreCompletionSummaries, ["1 window restored", "1 window restored"])
+        XCTAssertEqual(overlayPresenter.restoreCompletions.map(\.isFailure), [false, false])
     }
 
     func testRenameSnapshotUpdatesSummaryAndReportsSuccess() throws {
@@ -2280,8 +2174,13 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         let updatedTarget = WindowOpenTarget(kind: .webURL, url: try XCTUnwrap(URL(string: "https://example.com/new")))
         let window = makeWindow(bundleIdentifier: "com.example.browser", openingConfiguration:
             WindowOpeningConfiguration(manualTargets: [unsupported]))
+        let sibling = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Sibling", openingConfiguration:
+            WindowOpeningConfiguration(manualTargets: [updatedTarget]))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let originalSibling = try encoder.encode([sibling])
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectoryURL)
-        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window]))
+        try store.save(makeSnapshot(id: snapshotID, name: "Work", windows: [window, sibling]))
         let overlay = RecordingOperationOverlayPresenter()
         var editedWindow: WindowRecord?
         var saveChanges = false
@@ -2296,11 +2195,15 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
         let action = try XCTUnwrap(issue.actions.first)
         action.perform()
         XCTAssertEqual(editedWindow?.openingConfiguration.effectiveTargets, [updatedTarget])
-        XCTAssertEqual(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets, [updatedTarget])
+        let cancelled = try store.loadSnapshot(id: snapshotID)
+        XCTAssertEqual(cancelled.windows[0].openingConfiguration.effectiveTargets, [updatedTarget])
+        XCTAssertEqual(try encoder.encode(Array(cancelled.windows.dropFirst())), originalSibling)
 
         saveChanges = true
         action.perform()
-        XCTAssertTrue(try store.loadSnapshot(id: snapshotID).windows[0].openingConfiguration.effectiveTargets.isEmpty)
+        let saved = try store.loadSnapshot(id: snapshotID)
+        XCTAssertTrue(saved.windows[0].openingConfiguration.effectiveTargets.isEmpty)
+        XCTAssertEqual(try encoder.encode(Array(saved.windows.dropFirst())), originalSibling)
         XCTAssertEqual(overlay.restoreCompletions.last?.title, "Saved resources updated")
     }
 
@@ -2578,12 +2481,26 @@ final class SnapshotMenuControllerHotkeyTests: XCTestCase {
     }
 
     func testStatusAutoClearsAfterDelay() async throws {
-        let controller = SnapshotMenuController(statusAutoClearDelay: 0.1)
+        let uiSleeper = ControlledMenuUISleeper()
+        defer { uiSleeper.resumeAll() }
+        let delayStarted = expectation(description: "status clear delay started")
+        uiSleeper.didSleep = { _ in delayStarted.fulfill() }
+        let controller = SnapshotMenuController(statusAutoClearDelay: 0.1, uiSleep: uiSleeper.sleep)
 
         controller.deleteSnapshot(id: UUID())
         XCTAssertNotNil(controller.status)
 
-        try await Task.sleep(nanoseconds: 300_000_000)
+        await fulfillment(of: [delayStarted], timeout: 1)
+        XCTAssertEqual(uiSleeper.intervals, [0.1])
+        XCTAssertNotNil(controller.status)
+
+        let statusCleared = expectation(description: "status cleared after delay")
+        let observer = controller.$status.sink { status in
+            if status == nil { statusCleared.fulfill() }
+        }
+        defer { observer.cancel() }
+        uiSleeper.resumeFirst(interval: 0.1)
+        await fulfillment(of: [statusCleared], timeout: 1)
 
         XCTAssertNil(controller.status)
     }

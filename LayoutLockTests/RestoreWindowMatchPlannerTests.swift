@@ -45,12 +45,20 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
                 pid: 200,
                 title: "Project Notes",
                 frame: CGRect(x: 200, y: 200, width: 500, height: 300)
+            ),
+            makeCandidate(
+                id: 2,
+                bundleIdentifier: "com.example.editor",
+                pid: 200,
+                title: "Other Project",
+                frame: savedWindow.frame.cgRect
             )
         ]
 
         let plans = planner.plans(for: [savedWindow], candidates: candidates)
 
         XCTAssertEqual(plans.first?.candidate?.id, 1)
+        XCTAssertEqual(plans.first?.matchStrategy, .scored)
         XCTAssertNil(plans.first?.skip)
     }
 
@@ -407,21 +415,25 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
             windowTitle: "Saved Tab",
             frame: CGRect(x: 20, y: 30, width: 600, height: 400)
         )
-        let candidates = [
-            makeCandidate(
+        let candidateFrames = [
+            CGRect(x: 900, y: 700, width: 600, height: 400),
+            CGRect(x: 900, y: 700, width: 300, height: 200)
+        ]
+        for frame in candidateFrames {
+            let candidate = makeCandidate(
                 id: 1,
                 bundleIdentifier: "com.example.browser",
                 pid: 200,
                 title: "Different Tab",
-                frame: CGRect(x: 900, y: 700, width: 600, height: 400)
+                frame: frame
             )
-        ]
 
-        let plans = planner.plans(for: [savedWindow], candidates: candidates)
+            let plan = planner.plans(for: [savedWindow], candidates: [candidate]).first
 
-        XCTAssertEqual(plans.first?.candidate?.id, 1)
-        XCTAssertEqual(plans.first?.matchStrategy, .singleton)
-        XCTAssertNil(plans.first?.skip)
+            XCTAssertEqual(plan?.candidate?.id, 1, "Candidate frame: \(frame)")
+            XCTAssertEqual(plan?.matchStrategy, .singleton, "Candidate frame: \(frame)")
+            XCTAssertNil(plan?.skip, "Candidate frame: \(frame)")
+        }
     }
 
     func testPlansMatchNearbyRoleMatchWhenTitleDoesNotMatch() {
@@ -445,32 +457,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         let plans = planner.plans(for: [savedWindow], candidates: candidates)
 
         XCTAssertEqual(plans.first?.candidate?.id, 1)
-        XCTAssertNil(plans.first?.skip)
-    }
-
-    func testPlansMatchSingletonRoleWhenTitleAndFrameChanged() {
-        let planner = RestoreWindowMatchPlanner()
-        let bundleIdentifier = "com.example.browser"
-        let savedWindow = makeWindowRecord(
-            bundleIdentifier: bundleIdentifier,
-            pidAtCapture: 100,
-            windowTitle: "Saved Tab",
-            frame: CGRect(x: 20, y: 30, width: 600, height: 400)
-        )
-        let candidates = [
-            makeCandidate(
-                id: 1,
-                bundleIdentifier: bundleIdentifier,
-                pid: 200,
-                title: "Different Tab",
-                frame: CGRect(x: 900, y: 700, width: 300, height: 200)
-            )
-        ]
-
-        let plans = planner.plans(for: [savedWindow], candidates: candidates)
-
-        XCTAssertEqual(plans.first?.candidate?.id, 1)
-        XCTAssertEqual(plans.first?.matchStrategy, .singleton)
+        XCTAssertEqual(plans.first?.matchStrategy, .scored)
         XCTAssertNil(plans.first?.skip)
     }
 
@@ -1077,7 +1064,7 @@ final class RestoreWindowMatchPlannerTests: XCTestCase {
         XCTAssertEqual(result.events.filter { $0 == "raise:com.example.front" }.count, 21)
     }
 
-    func testZOrderRestorerDoesNotWaitForWindowsOnSeparateDisplays() async {
+    func testZOrderRestorerDoesNotWaitForNonOverlappingWindows() async {
         let result = await runZOrderSettleTest(frontWindowOrder: [2], overlapping: false)
 
         XCTAssertEqual(result.backWaits, 0)
@@ -4306,13 +4293,21 @@ final class RestoreEngineTests: XCTestCase {
         try store.save(snapshot)
         let launcher = RecordingApplicationLauncher(results: [bundleIdentifier: true])
         let targetOpener = RecordingTargetOpener()
+        let applier = RecordingEngineWindowApplier()
         let readyApplication = makeApplication(
             bundleIdentifier: bundleIdentifier,
             windows: [
                 makeDiscoveredWindow(
+                    documentURL: URL(string: "https://unrelated.example")!,
+                    title: savedWindow.windowTitle,
+                    frame: savedWindow.frame.cgRect,
+                    cgWindowID: 9001
+                ),
+                makeDiscoveredWindow(
                     documentURL: targets[1].url,
                     title: "Changed Browser Tab",
-                    frame: CGRect(x: 900, y: 700, width: 300, height: 200)
+                    frame: CGRect(x: 900, y: 700, width: 300, height: 200),
+                    cgWindowID: 9002
                 )
             ]
         )
@@ -4321,6 +4316,7 @@ final class RestoreEngineTests: XCTestCase {
             store: store,
             launcher: launcher,
             discovery: DiscoverySequence([[], [readyApplication]]),
+            windowApplier: applier,
             targetOpener: targetOpener
         ).restoreSnapshot(id: snapshot.id)
 
@@ -4331,6 +4327,8 @@ final class RestoreEngineTests: XCTestCase {
         XCTAssertEqual(result.requestedTargetCount, 2)
         XCTAssertTrue(result.targetIssues.isEmpty)
         XCTAssertEqual(result.restoredWindows, 1)
+        XCTAssertEqual(result.windowDiagnostics.first?.matchStrategy, .scored)
+        XCTAssertEqual(applier.appliedCGWindowIDs, [9002])
         XCTAssertTrue(result.skippedItems.isEmpty)
         XCTAssertTrue(launcher.requestedBundleIdentifiers.isEmpty)
     }

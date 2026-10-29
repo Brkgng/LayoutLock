@@ -1034,7 +1034,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
         XCTAssertNil(resolver.resolveLocalPathReference(in: "hx NOTES.md"))
     }
 
-    func testApplicationDocumentURLResolverFindsVSCodeWorkspaceFromWindowTitle() throws {
+    func testApplicationDocumentURLResolverFindsSupportedEditorWorkspacesFromWindowTitles() throws {
         let temporaryDirectory = try TestTemporaryDirectory()
         let workspaceURL = temporaryDirectory.url.appendingPathComponent(
             "ScrollSnap",
@@ -1057,51 +1057,20 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             workspaceStorageDirectoryProvider: { _ in storageURL }
         )
 
-        XCTAssertEqual(
-            resolver.resolve(
-                bundleIdentifier: "com.microsoft.VSCode",
-                windowTitle: ".gitignore — ScrollSnap — work"
-            ),
-            workspaceURL.standardizedFileURL
-        )
-    }
-
-    func testApplicationDocumentURLResolverFindsAntigravityWorkspaceFromWindowTitle() throws {
-        let temporaryDirectory = try TestTemporaryDirectory()
-        let workspaceURL = temporaryDirectory.url.appendingPathComponent(
-            "ZapPDF",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: workspaceURL,
-            withIntermediateDirectories: false
-        )
-        let storageURL = temporaryDirectory.url.appendingPathComponent(
-            "workspaceStorage",
-            isDirectory: true
-        )
-        try writeVSCodeWorkspaceMetadata(
-            folderURL: workspaceURL,
-            identifier: "zappdf",
-            storageURL: storageURL
-        )
-        let resolver = ApplicationWindowDocumentURLResolver(
-            workspaceStorageDirectoryProvider: { _ in storageURL }
-        )
-
-        XCTAssertEqual(
-            ApplicationWindowDocumentURLResolver.applicationSupportName(
-                bundleIdentifier: "com.google.antigravity-ide"
-            ),
-            "Antigravity IDE"
-        )
-        XCTAssertEqual(
-            resolver.resolve(
-                bundleIdentifier: "com.google.antigravity-ide",
-                windowTitle: "Package.swift — ZapPDF — Antigravity IDE"
-            ),
-            workspaceURL.standardizedFileURL
-        )
+        let cases = [
+            (bundleIdentifier: "com.microsoft.VSCode", supportName: "Code", title: ".gitignore — ScrollSnap — work"),
+            (bundleIdentifier: "com.google.antigravity-ide", supportName: "Antigravity IDE", title: "Package.swift — ScrollSnap — Antigravity IDE")
+        ]
+        for item in cases {
+            XCTAssertEqual(
+                ApplicationWindowDocumentURLResolver.applicationSupportName(bundleIdentifier: item.bundleIdentifier),
+                item.supportName
+            )
+            XCTAssertEqual(
+                resolver.resolve(bundleIdentifier: item.bundleIdentifier, windowTitle: item.title),
+                workspaceURL.standardizedFileURL
+            )
+        }
     }
 
     func testApplicationDocumentURLResolverIndexesWorkspaceMetadataOncePerDiscoveryCycle() throws {
@@ -1195,6 +1164,8 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             at: workspaceURL,
             withIntermediateDirectories: false
         )
+        let documentURL = workspaceURL.appendingPathComponent(".gitignore")
+        try Data().write(to: documentURL)
         let appElement = AXUIElementCreateApplication(101)
         let windowElement = AXUIElementCreateApplication(201)
         let fixture = AXAttributeFixture()
@@ -1205,6 +1176,7 @@ final class WindowDiscoveryEngineTests: XCTestCase {
             role: kAXWindowRole as String,
             frame: CGRect(x: 20, y: 30, width: 400, height: 300)
         )
+        fixture.set(documentURL.absoluteString as CFString, for: windowElement, attribute: kAXDocumentAttribute)
         let resolver = ApplicationWindowDocumentURLResolver(
             workspaceStorageDirectoryProvider: { _ in temporaryDirectory.url }
         )
