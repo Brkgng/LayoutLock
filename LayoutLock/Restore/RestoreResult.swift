@@ -1,5 +1,31 @@
 import Foundation
 
+enum RestoreProgress: Sendable {
+    case discovering
+    case recoveringWindows
+    case opening
+    case waiting
+    case positioning
+    case stacking
+
+    var message: String {
+        switch self {
+        case .discovering:
+            return "Finding saved windows…"
+        case .recoveringWindows:
+            return "Bringing windows to the current desktop…"
+        case .opening:
+            return "Opening apps and saved resources…"
+        case .waiting:
+            return "Waiting for apps and windows…"
+        case .positioning:
+            return "Positioning windows…"
+        case .stacking:
+            return "Restoring window order…"
+        }
+    }
+}
+
 struct RestoreResult {
     let restoredWindows: Int
     let skippedItems: [RestoreSkip]
@@ -53,19 +79,25 @@ enum RestoreTargetIssueReason: String {
     case unsupportedURL
     case applicationUnavailable
     case openRequestFailed
+    case openingNotConfirmed
+    case unsupportedTarget
 
     var userFacingDescription: String {
         switch self {
         case .missingTarget:
-            return "Target no longer exists."
+            return "Saved file or folder no longer exists."
         case .targetKindMismatch:
-            return "Target type has changed."
+            return "Saved file or folder type has changed."
         case .unsupportedURL:
             return "Only HTTP and HTTPS URLs can be opened."
         case .applicationUnavailable:
             return "Saved application is unavailable."
         case .openRequestFailed:
-            return "Target could not be opened."
+            return "Saved resource could not be opened."
+        case .openingNotConfirmed:
+            return "The file or folder could not be confirmed in the restored window."
+        case .unsupportedTarget:
+            return "This file or folder cannot be reopened automatically."
         }
     }
 }
@@ -97,17 +129,20 @@ struct RestoreTargetIssue: Identifiable {
 
 struct RestoreSkip: Identifiable {
     let id: UUID
+    let windowID: UUID?
     let bundleIdentifier: String
     let windowTitle: String?
     let reason: String
 
     init(
         id: UUID = UUID(),
+        windowID: UUID? = nil,
         bundleIdentifier: String,
         windowTitle: String? = nil,
         reason: String
     ) {
         self.id = id
+        self.windowID = windowID
         self.bundleIdentifier = bundleIdentifier
         self.windowTitle = windowTitle
         self.reason = reason
@@ -140,6 +175,8 @@ struct DisplayFallbackEvent: Identifiable {
     let outcome: RestoreDisplayOutcome
     let savedDisplayID: UInt32?
     let resolvedDisplayID: UInt32?
+    let savedDisplayName: String?
+    let resolvedDisplayName: String?
     let reason: String
 
     init(
@@ -149,6 +186,8 @@ struct DisplayFallbackEvent: Identifiable {
         outcome: RestoreDisplayOutcome = .primaryFallback,
         savedDisplayID: UInt32?,
         resolvedDisplayID: UInt32?,
+        savedDisplayName: String? = nil,
+        resolvedDisplayName: String? = nil,
         reason: String
     ) {
         self.id = id
@@ -157,6 +196,8 @@ struct DisplayFallbackEvent: Identifiable {
         self.outcome = outcome
         self.savedDisplayID = savedDisplayID
         self.resolvedDisplayID = resolvedDisplayID
+        self.savedDisplayName = savedDisplayName
+        self.resolvedDisplayName = resolvedDisplayName
         self.reason = reason
     }
 }

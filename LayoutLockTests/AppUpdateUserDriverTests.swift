@@ -478,6 +478,38 @@ final class AppUpdateUserDriverTests: XCTestCase {
         XCTAssertEqual(Set(blocks.map(\.id)).count, blocks.count)
     }
 
+    func testMarkdownRelease13SummaryPreservesBulletLabelsAndDescriptions() {
+        let blocks = AppUpdateMarkdown.blocks(from: """
+        ### More reliable layout restores
+
+        - **Spaces:** Restore windows to active desktops on macOS 26+.
+        - **Browsers:** Reopen each window with its saved tabs.
+        - **Menu bar:** Save your current setup over an existing layout.
+
+        Also improved: minimized windows, app matching, and restore progress.
+        """)
+
+        XCTAssertEqual(blocks.map(\.kind), [
+            .heading(level: 3),
+            .unorderedListItem,
+            .unorderedListItem,
+            .unorderedListItem,
+            .paragraph,
+        ])
+        XCTAssertEqual(blocks.map(\.plainText), [
+            "More reliable layout restores",
+            "Spaces: Restore windows to active desktops on macOS 26+.",
+            "Browsers: Reopen each window with its saved tabs.",
+            "Menu bar: Save your current setup over an existing layout.",
+            "Also improved: minimized windows, app matching, and restore progress.",
+        ])
+        for block in blocks where block.kind == .unorderedListItem {
+            XCTAssertTrue(block.content.runs.contains {
+                $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+            })
+        }
+    }
+
     func testMarkdownFeatureDescriptionsPreserveEmphasisAndLinks() throws {
         let blocks = AppUpdateMarkdown.blocks(
             from: """

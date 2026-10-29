@@ -110,6 +110,7 @@ struct DashboardView: View {
     @Environment(\.openURL) private var openURL
 
     let bootstrapErrorMessage: String?
+    let diagnosticLogController: DiagnosticLogController?
     @ObservedObject var permissionCoordinator: PermissionCoordinator
     @ObservedObject var permissionRouter: PermissionInterventionRouter
     @ObservedObject var snapshotMenuController: SnapshotMenuController
@@ -242,11 +243,23 @@ struct DashboardView: View {
                 }
 
                 SidebarActionButton(
+                    title: "Send Feedback",
+                    systemImage: "bubble.left",
+                    isPrimary: false,
+                    isDisabled: false,
+                    topPadding: updateController.availableUpdate == nil ? 8 : 0,
+                    bottomPadding: 0,
+                    action: {
+                        LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+                    }
+                )
+
+                SidebarActionButton(
                     title: "Settings",
                     systemImage: "gearshape",
                     isPrimary: false,
                     isDisabled: false,
-                    topPadding: updateController.availableUpdate == nil ? 8 : 0,
+                    topPadding: 0,
                     bottomPadding: 12,
                     action: openSettingsWindow
                 )
@@ -889,6 +902,49 @@ private struct DashboardSnapshotNamePromptView: View {
     }
 }
 
+@MainActor
+enum SavedResourcesEditorPrompt {
+    static func prompt(window: WindowRecord) -> [WindowOpenTarget]? {
+        let panel = SavedResourcesEditorWindow(savedWindow: window)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        let response = NSApp.runModal(for: panel)
+        panel.close()
+        return response == .OK ? panel.savedTargets : nil
+    }
+}
+
+private final class SavedResourcesEditorWindow: NSPanel, NSWindowDelegate {
+    var savedTargets: [WindowOpenTarget]?
+
+    init(savedWindow: WindowRecord) {
+        super.init(contentRect: CGRect(x: 0, y: 0, width: 680, height: 640),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        title = "Edit Saved Resources"
+        isReleasedWhenClosed = false
+        delegate = self
+        contentViewController = NSHostingController(rootView: DashboardOpeningTargetsEditorView(
+            window: savedWindow,
+            appIdentity: DashboardAppIdentityResolver.shared.identity(for: savedWindow.bundleIdentifier),
+            cancel: { NSApp.stopModal(withCode: .cancel) },
+            save: { [weak self] targets in
+                self?.savedTargets = targets
+                NSApp.stopModal(withCode: .OK)
+            }
+        ))
+    }
+
+    func windowShouldClose(_: NSWindow) -> Bool {
+        NSApp.stopModal(withCode: .cancel)
+        return false
+    }
+
+    override func cancelOperation(_: Any?) {
+        NSApp.stopModal(withCode: .cancel)
+    }
+}
+
 private struct DashboardOpeningTargetsEditorView: View {
     let window: WindowRecord
     let appIdentity: DashboardAppIdentity
@@ -949,10 +1005,10 @@ private struct DashboardOpeningTargetsEditorView: View {
                     }
                 }
 
-                Section("Opening Targets") {
+                Section {
                     if draftTargets.isEmpty {
                         ContentUnavailableView(
-                            "No Opening Targets",
+                            "No Saved Resources",
                             systemImage: "app"
                         )
                         .frame(maxWidth: .infinity)
@@ -961,6 +1017,10 @@ private struct DashboardOpeningTargetsEditorView: View {
                             targetRow(target, at: index)
                         }
                     }
+                } header: {
+                    Text("Saved Resources")
+                } footer: {
+                    Text("Files, folders, and websites to reopen with this window.")
                 }
 
                 if localTargetSelection != .none {
@@ -1056,7 +1116,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                         _ = commitURLEdit()
                     }
             )
-            .navigationTitle("Opening Targets")
+            .navigationTitle("Saved Resources")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: cancel)
@@ -1107,7 +1167,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                             validationMessage = nil
                             return .handled
                         }
-                        .accessibilityLabel("Opening target URL")
+                        .accessibilityLabel("Saved resource URL")
                 } else {
                     Text(targetDisplayName(for: target))
                         .lineLimit(1)
@@ -1136,8 +1196,8 @@ private struct DashboardOpeningTargetsEditorView: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == 0)
-            .help("Move target earlier")
-            .accessibilityLabel("Move Target Earlier")
+            .help("Move resource earlier")
+            .accessibilityLabel("Move Resource Earlier")
 
             Button {
                 moveTarget(at: index, offset: 1)
@@ -1146,8 +1206,8 @@ private struct DashboardOpeningTargetsEditorView: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == draftTargets.count - 1)
-            .help("Move target later")
-            .accessibilityLabel("Move Target Later")
+            .help("Move resource later")
+            .accessibilityLabel("Move Resource Later")
 
             Button {
                 editTarget(target)
@@ -1168,8 +1228,8 @@ private struct DashboardOpeningTargetsEditorView: View {
                 Image(systemName: "minus.circle")
             }
             .buttonStyle(.borderless)
-            .help("Remove target")
-            .accessibilityLabel("Remove Target")
+            .help("Remove resource")
+            .accessibilityLabel("Remove Resource")
         }
     }
 
@@ -1243,7 +1303,7 @@ private struct DashboardOpeningTargetsEditorView: View {
                         )
                         .accessibilityHint(
                             suggestion.isSelectable
-                                ? "Complete this opening target path"
+                                ? "Complete this resource path"
                                 : "Open this folder to continue browsing"
                         )
                     }
@@ -1412,6 +1472,7 @@ private struct DashboardOpeningTargetsEditorView: View {
         }
 
         let panel = NSOpenPanel()
+        panel.worksWhenModal = true
         panel.canChooseFiles = localTargetSelection.canChooseFiles
         panel.canChooseDirectories = localTargetSelection.canChooseDirectories
         panel.allowsMultipleSelection = true
@@ -1457,6 +1518,7 @@ private struct DashboardOpeningTargetsEditorView: View {
         }
 
         let panel = NSOpenPanel()
+        panel.worksWhenModal = true
         panel.canChooseFiles = target.kind == .file
         panel.canChooseDirectories = target.kind == .folder
         panel.allowsMultipleSelection = false
@@ -2139,7 +2201,7 @@ private struct DashboardDetailView: View {
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(isPrivilegedActionDisabled)
-            .help("Restore")
+            .help("Restore the saved windows, apps, and resources in this layout")
 
             Button {
                 updateSnapshot()
@@ -2147,7 +2209,7 @@ private struct DashboardDetailView: View {
                 Label("Update", systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(isPrivilegedActionDisabled)
-            .help("Update")
+            .help("Replace this saved layout with your current windows")
 
             Button {
                 beginInlineRename(snapshot)
@@ -2304,6 +2366,17 @@ private struct DashboardDetailView: View {
     private var issueSection: some View {
         if hasDashboardIssues {
             VStack(alignment: .leading, spacing: 8) {
+                if let progress = snapshotMenuController.restoreProgressMessage {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(progress)
+                            .font(.callout)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .dashboardCardSurface(cornerRadius: 10)
+                }
                 if let bootstrapErrorMessage {
                     DashboardIssueBanner(
                         title: "Storage Setup Failed",
@@ -2326,9 +2399,9 @@ private struct DashboardDetailView: View {
                 }
 
                 if let status = snapshotMenuController.status,
-                   status.isError || status.isWarning {
+                   (status.isError || status.isWarning) && snapshotMenuController.restoreProgressMessage == nil {
                     DashboardIssueBanner(
-                        title: status.isWarning ? "Layout Saved with Warnings" : "Layout Action Failed",
+                        title: status.isWarning ? "Layout Needs Attention" : "Layout Action Failed",
                         message: status.message,
                         systemImage: "exclamationmark.triangle.fill",
                         tint: status.isWarning ? .orange : .red
@@ -2340,6 +2413,7 @@ private struct DashboardDetailView: View {
 
     private var hasDashboardIssues: Bool {
         bootstrapErrorMessage != nil
+            || snapshotMenuController.restoreProgressMessage != nil
             || showsAccessibilityIssueBanner
             || snapshotMenuController.status?.isError == true
             || snapshotMenuController.status?.isWarning == true

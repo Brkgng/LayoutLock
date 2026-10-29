@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E902668BC27940C4A7F801D1 /* UnrealProjectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */; };
+		7042E87767044A4C950135E7 /* UnrealProjectResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */; };
+		92D8A3635F734D04AA70D002 /* ProjectProcessInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */; };
+		D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */; };
+		F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */; };
+		CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */; };
+		AC0130000000000000000004 /* RestoreSpacesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000003 /* RestoreSpacesTests.swift */; };
+		AC0130000000000000000002 /* RestoreSpaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0130000000000000000001 /* RestoreSpaces.swift */; };
 		A00000000000000000000002 /* LayoutLockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* LayoutLockApp.swift */; };
 		A0000000000000000000001C /* MenuBarContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* MenuBarContentView.swift */; };
 		A0000000000000000000001E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001F /* SettingsView.swift */; };
@@ -78,6 +86,7 @@
 		E00000000000000000000007 /* EntitlementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000008 /* EntitlementController.swift */; };
 		E00000000000000000000009 /* EntitlementControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000A /* EntitlementControllerTests.swift */; };
 		E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */; };
+		AB15C24CFF874573A7A0E101 /* SnapshotNamePromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */; };
 		E0000000000000000000000F /* EntitlementReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000E /* EntitlementReceipt.swift */; };
 		F00000000000000000000001 /* AppUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* AppUpdateController.swift */; };
 		F00000000000000000000002 /* AppUpdateControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* AppUpdateControllerTests.swift */; };
@@ -132,6 +141,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnrealProjectTests.swift; sourceTree = "<group>"; };
+		439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnrealProjectResolver.swift; sourceTree = "<group>"; };
+		EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectProcessInfo.swift; sourceTree = "<group>"; };
+		04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectOpeningTests.swift; sourceTree = "<group>"; };
+		060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolverTests.swift; sourceTree = "<group>"; };
+		57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnityProjectResolver.swift; sourceTree = "<group>"; };
+		AC0130000000000000000003 /* RestoreSpacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpacesTests.swift; sourceTree = "<group>"; };
+		AC0130000000000000000001 /* RestoreSpaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreSpaces.swift; sourceTree = "<group>"; };
 		A0000000000000000000000A /* LayoutLock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutLock.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000012 /* LayoutLockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLockApp.swift; sourceTree = "<group>"; };
 		A0000000000000000000001D /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
@@ -205,6 +222,7 @@
 		E00000000000000000000008 /* EntitlementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementController.swift; sourceTree = "<group>"; };
 		E0000000000000000000000A /* EntitlementControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementControllerTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotMenuControllerMonetizationTests.swift; sourceTree = "<group>"; };
+		AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotNamePromptTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000E /* EntitlementReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementReceipt.swift; sourceTree = "<group>"; };
 		F00000000000000000000004 /* AppUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateController.swift; sourceTree = "<group>"; };
 		F00000000000000000000005 /* AppUpdateControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateControllerTests.swift; sourceTree = "<group>"; };
@@ -320,14 +338,19 @@
 				A00000000000000000000056 /* PermissionCoordinatorTests.swift */,
 				B00000000000000000000014 /* PermissionInterventionRouterTests.swift */,
 				A00000000000000000000064 /* RestoreWindowMatchPlannerTests.swift */,
+				AC0130000000000000000003 /* RestoreSpacesTests.swift */,
 				A00000000000000000000096 /* SnapshotCaptureServiceTests.swift */,
 				A00000000000000000000073 /* SnapshotMenuControllerHotkeyTests.swift */,
 				E0000000000000000000000C /* SnapshotMenuControllerMonetizationTests.swift */,
+				AB15C24CFF874573A7A0E102 /* SnapshotNamePromptTests.swift */,
 				A0000000000000000000006E /* SnapshotStoreHotkeyTests.swift */,
 				F5C2972A00134B8B95E628D1 /* SnapshotPinningTests.swift */,
 				A0000000000000000000007C /* TelemetryLoggerTests.swift */,
 				A00000000000000000000094 /* TestSupport.swift */,
 				A00000000000000000000098 /* WindowDiscoveryEngineTests.swift */,
+				060FC0D3F04A4818996958A1 /* UnityProjectResolverTests.swift */,
+				35EF81CBD88E4984B13C5ED2 /* UnrealProjectTests.swift */,
+				04CE3149E4EE447E8F942FF0 /* UnityProjectOpeningTests.swift */,
 			);
 			path = LayoutLockTests;
 			sourceTree = "<group>";
@@ -392,6 +415,9 @@
 				A00000000000000000000033 /* AXAttributeReader.swift */,
 				A00000000000000000000037 /* CGWindowMetadataReader.swift */,
 				A00000000000000000000035 /* WindowDiscoveryEngine.swift */,
+				57015BE6BC12465CB3DC5AA0 /* UnityProjectResolver.swift */,
+				439DF6EAF75C4F75B3A0ADF6 /* UnrealProjectResolver.swift */,
+				EE1C547DCC154B30A0119CA0 /* ProjectProcessInfo.swift */,
 			);
 			path = WindowDiscovery;
 			sourceTree = "<group>";
@@ -420,6 +446,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000062 /* RestoreEngine.swift */,
+				AC0130000000000000000001 /* RestoreSpaces.swift */,
 				A0000000000000000000003D /* RestoreResult.swift */,
 			);
 			path = Restore;
@@ -719,6 +746,7 @@
 				A00000000000000000000026 /* PermissionCoordinator.swift in Sources */,
 				B00000000000000000000005 /* PermissionInterventionRouter.swift in Sources */,
 				A00000000000000000000061 /* RestoreEngine.swift in Sources */,
+				AC0130000000000000000002 /* RestoreSpaces.swift in Sources */,
 				A0000000000000000000003C /* RestoreResult.swift in Sources */,
 				A0000000000000000000001E /* SettingsView.swift in Sources */,
 				A00000000000000000000042 /* SnapshotCaptureService.swift in Sources */,
@@ -729,6 +757,9 @@
 				A00000000000000000000079 /* TelemetryLogger.swift in Sources */,
 				A00000000000000000000091 /* ValueExtensions.swift in Sources */,
 				A00000000000000000000034 /* WindowDiscoveryEngine.swift in Sources */,
+				CAC46269B9424A3BAB68E564 /* UnityProjectResolver.swift in Sources */,
+				7042E87767044A4C950135E7 /* UnrealProjectResolver.swift in Sources */,
+				92D8A3635F734D04AA70D002 /* ProjectProcessInfo.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -755,14 +786,19 @@
 				A00000000000000000000055 /* PermissionCoordinatorTests.swift in Sources */,
 				B00000000000000000000013 /* PermissionInterventionRouterTests.swift in Sources */,
 				A00000000000000000000063 /* RestoreWindowMatchPlannerTests.swift in Sources */,
+				AC0130000000000000000004 /* RestoreSpacesTests.swift in Sources */,
 				A00000000000000000000095 /* SnapshotCaptureServiceTests.swift in Sources */,
 				A00000000000000000000072 /* SnapshotMenuControllerHotkeyTests.swift in Sources */,
 				E0000000000000000000000B /* SnapshotMenuControllerMonetizationTests.swift in Sources */,
+				AB15C24CFF874573A7A0E101 /* SnapshotNamePromptTests.swift in Sources */,
 				A0000000000000000000006D /* SnapshotStoreHotkeyTests.swift in Sources */,
 				F5C2972A00134B8B95E628D0 /* SnapshotPinningTests.swift in Sources */,
 				A0000000000000000000007B /* TelemetryLoggerTests.swift in Sources */,
 				A00000000000000000000093 /* TestSupport.swift in Sources */,
 				A00000000000000000000097 /* WindowDiscoveryEngineTests.swift in Sources */,
+				F8146515F3DC4D79B65AF0AB /* UnityProjectResolverTests.swift in Sources */,
+				E902668BC27940C4A7F801D1 /* UnrealProjectTests.swift in Sources */,
+				D4ABA26074A343A4BAA65AD7 /* UnityProjectOpeningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -841,7 +877,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -860,7 +896,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -877,7 +913,7 @@
 				CODE_SIGN_ENTITLEMENTS = LayoutLock/LayoutLock.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -896,7 +932,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -912,11 +948,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -932,11 +968,11 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.layoutlock.appTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -951,13 +987,13 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.dev.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -972,13 +1008,13 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 894AUNHU54;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.berkergungor.layoutlock.login-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;

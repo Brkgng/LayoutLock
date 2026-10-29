@@ -4,6 +4,169 @@ import XCTest
 @testable import LayoutLock
 
 final class SnapshotCaptureServiceTests: XCTestCase {
+    func testCaptureExcludesUnrealUntitledUnknownPanels() throws {
+        let windows = [
+            makeDiscoveredWindow(title: "Project - Unreal Editor", cgWindowID: 100),
+            makeDiscoveredWindow(title: "", subrole: "AXUnknown", cgWindowID: 101),
+            makeDiscoveredWindow(title: "Output Log", subrole: "AXUnknown", cgWindowID: 102)
+        ]
+        let snapshot = try captureActiveWindows(windows, bundleIdentifier: "com.epicgames.UnrealEditor")
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100, 102])
+        XCTAssertEqual(try captureActiveWindows(windows).windows.count, 3,
+            "Other apps can use AXUnknown for real windows.")
+    }
+
+    func testCaptureDoesNotSaveOnlyAnUnrealLoadingPanel() throws {
+        XCTAssertThrowsError(try captureActiveWindows(
+            [makeDiscoveredWindow(title: nil, subrole: "AXUnknown", cgWindowID: 100)],
+            bundleIdentifier: "com.epicgames.UnrealEditor")) {
+            guard case SnapshotCaptureServiceError.noWindowsAvailable = $0 else {
+                return XCTFail("Expected no project windows, got \($0)")
+            }
+        }
+    }
+
+    func testCaptureKeepsMinimizedAndHiddenWindowsOnActiveSpace() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(isMinimized: true, isVisible: false, cgWindowID: 100, isOnScreen: false),
+             makeDiscoveredWindow(isVisible: false, cgWindowID: 101, isOnScreen: false)],
+            memberships: [100: [1], 101: [1]]
+        )
+
+        XCTAssertEqual(snapshot.windows.count, 2)
+        XCTAssertTrue(snapshot.windows[0].isMinimized)
+        XCTAssertTrue(snapshot.windows.allSatisfy { !$0.isVisible })
+    }
+
+    func testCaptureIncludesActiveSpacesAcrossDisplaysAndAllSpacesWindows() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(cgWindowID: 100),
+             makeDiscoveredWindow(cgWindowID: 101),
+             makeDiscoveredWindow(cgWindowID: 102),
+             makeDiscoveredWindow(cgWindowID: 103)],
+            memberships: [100: [1], 101: [3], 102: [1, 2, 3], 103: [2, 4]]
+        )
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100, 101, 102])
+    }
+
+    func testCaptureUsesSpaceMembershipOverVisibilityHint() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(cgWindowID: 100, isOnScreen: false),
+             makeDiscoveredWindow(cgWindowID: 101, isOnScreen: true)],
+            memberships: [100: [1], 101: [2]]
+        )
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100])
+    }
+
+    func testCaptureWithoutSpaceInventoryIncludesOnlyOnscreenWindows() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(title: "Onscreen", cgWindowID: 100, isOnScreen: true),
+             makeDiscoveredWindow(title: "Offscreen", cgWindowID: 101, isOnScreen: false),
+             makeDiscoveredWindow(title: "Unknown", cgWindowID: 102, isOnScreen: nil)],
+            inventory: nil
+        )
+
+        XCTAssertEqual(snapshot.windows.map(\.windowTitle), ["Onscreen"])
+    }
+
+    func testCaptureWithUnknownMembershipIncludesOnlyOnscreenWindows() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(cgWindowID: 100, isOnScreen: true),
+             makeDiscoveredWindow(cgWindowID: 101, isOnScreen: false),
+             makeDiscoveredWindow(cgWindowID: 102, isOnScreen: nil),
+             makeDiscoveredWindow(cgWindowID: 103, isOnScreen: true)],
+            memberships: [103: []]
+        )
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100, 103])
+    }
+
+    func testCaptureDoesNotAppendUnexposedInactiveWindows() throws {
+        let snapshot = try captureActiveWindows(
+            [makeDiscoveredWindow(cgWindowID: 100)],
+            memberships: [100: [1], 201: [2]],
+            unexposedWindows: [cgCandidate(id: 201)]
+        )
+
+        XCTAssertEqual(snapshot.windows.map(\.captureSignature.cgWindowID), [100])
+    }
+
+    func testCaptureWithOnlyInactiveWindowsDoesNotSave() throws {
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        let service = activeSpaceCaptureService(
+            store: store,
+            windows: [makeDiscoveredWindow(cgWindowID: 100)],
+            memberships: [100: [2]]
+        )
+
+        XCTAssertThrowsError(try service.captureSnapshot(named: "Inactive")) {
+            guard case SnapshotCaptureServiceError.noWindowsAvailable = $0 else {
+                return XCTFail("Expected no capturable windows, got \($0)")
+            }
+        }
+        XCTAssertTrue(try store.listSummaries().isEmpty)
+    }
+
+    func testUpdateRemovesWindowsOnInactiveSpaces() throws {
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        let original = makeSnapshot(windows: [makeWindowRecord(), makeWindowRecord()])
+        try store.save(original)
+        let service = activeSpaceCaptureService(
+            store: store,
+            windows: [makeDiscoveredWindow(cgWindowID: 100), makeDiscoveredWindow(cgWindowID: 101)],
+            memberships: [100: [1], 101: [2]]
+        )
+
+        let result = try service.updateSnapshot(id: original.id)
+
+        XCTAssertEqual(result.snapshot.windows.map(\.captureSignature.cgWindowID), [100])
+        XCTAssertEqual(try store.loadSnapshot(id: original.id).windows.count, 1)
+    }
+
+    func testLegacyWindowSignatureDecodesWithoutCaptureSource() throws {
+        let original = makeWindowRecord().captureSignature
+        let encoded = try JSONEncoder().encode(original)
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        fields.removeValue(forKey: "source")
+        let legacy = try JSONDecoder().decode(WindowSignature.self, from: JSONSerialization.data(withJSONObject: fields))
+
+        XCTAssertNil(legacy.source)
+        XCTAssertEqual(legacy.cgWindowID, original.cgWindowID)
+        XCTAssertEqual(legacy.capturedFrame, original.capturedFrame)
+    }
+
+    func testLegacyWindowRecordDecodesWithoutApplicationBundleURL() throws {
+        let original = makeWindowRecord(applicationBundleURL: URL(fileURLWithPath: "/Applications/Saved.app"))
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        fields.removeValue(forKey: "applicationBundleURL")
+
+        let decoded = try JSONDecoder().decode(WindowRecord.self,
+            from: JSONSerialization.data(withJSONObject: fields))
+
+        XCTAssertNil(decoded.applicationBundleURL)
+        XCTAssertEqual(decoded.id, original.id)
+        XCTAssertEqual(decoded.captureSignature, original.captureSignature)
+    }
+
+    func testWindowRecordCopiesAndUpdatesPreserveCapturedApplicationBundleURL() throws {
+        let previous = makeWindowRecord(applicationBundleURL: URL(fileURLWithPath: "/Applications/Old.app"))
+        let capturedURL = URL(fileURLWithPath: "/Custom Apps/Editor.app")
+        let captured = makeWindowRecord(applicationBundleURL: capturedURL)
+
+        XCTAssertEqual(captured.withZOrderHint(5).applicationBundleURL, capturedURL)
+        XCTAssertEqual(captured.withOpeningConfiguration(WindowOpeningConfiguration()).applicationBundleURL, capturedURL)
+        let updated = captured.preservingIdentityAndManualTargets(from: previous)
+        XCTAssertEqual(updated.id, previous.id)
+        XCTAssertEqual(updated.applicationBundleURL, capturedURL)
+        let decoded = try JSONDecoder().decode(WindowRecord.self, from: JSONEncoder().encode(updated))
+        XCTAssertEqual(decoded.applicationBundleURL, capturedURL)
+    }
+
     func testDefaultSnapshotNameUsesLayoutTimestampFallback() throws {
         let date = try makeNamingDate()
         let service = SnapshotCaptureService(
@@ -81,7 +244,10 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertTrue(record.isMinimized)
         XCTAssertEqual(record.captureSignature.cgWindowID, 123)
         XCTAssertEqual(telemetryLogger.events.map(\.name), ["capture.completed"])
-        XCTAssertEqual(telemetryLogger.events.first?.details.first?.reason, WindowDiscoveryDiagnosticReason.transientRole)
+        XCTAssertEqual(
+            telemetryLogger.events.first?.details.first(where: { $0.kind == diagnostic.kind.rawValue })?.reason,
+            WindowDiscoveryDiagnosticReason.transientRole
+        )
     }
 
     func testCaptureSnapshotWithContextUsesContextScreens() throws {
@@ -89,7 +255,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         let store = SnapshotStore(snapshotsDirectoryURL: temporaryDirectory.url)
         let display = makeDisplayRecord()
         let window = makeDiscoveredWindow(
-            frame: CGRect(x: 20, y: 30, width: 400, height: 300)
+            frame: CGRect(x: 20, y: 30, width: 400, height: 300),
+            cgWindowID: 123
         )
         let application = DiscoveredApplication(
             bundleIdentifier: TestFixtures.bundleIdentifier,
@@ -182,7 +349,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.createFile(atPath: unavailableDirectory.path, contents: Data()))
         let telemetryLogger = RecordingTelemetryLogger()
         let display = makeDisplayRecord()
-        let window = makeDiscoveredWindow()
+        let window = makeDiscoveredWindow(cgWindowID: 123)
         let application = DiscoveredApplication(
             bundleIdentifier: TestFixtures.bundleIdentifier,
             pid: 42,
@@ -392,6 +559,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         )
         let application = DiscoveredApplication(
             bundleIdentifier: "com.example.app",
+            applicationBundleURL: URL(fileURLWithPath: "/Custom Apps/Captured.app"),
             pid: 88,
             localizedName: "App",
             windows: [window]
@@ -404,6 +572,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(record.bundleIdentifier, "com.example.app")
+        XCTAssertEqual(record.applicationBundleURL, application.applicationBundleURL)
         XCTAssertEqual(record.pidAtCapture, 88)
         XCTAssertEqual(record.windowTitle, "Window A")
         XCTAssertEqual(record.displayID, display.id)
@@ -413,36 +582,10 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertEqual(record.captureSignature.cgWindowID, 999)
     }
 
-    func testMakeWindowRecordCapturesExistingDocumentFile() throws {
+    func testMakeWindowRecordCapturesExistingDocumentFilesAndFolders() throws {
         let temporaryDirectory = try TestTemporaryDirectory()
         let documentURL = temporaryDirectory.url.appendingPathComponent("Notes.txt")
         try Data().write(to: documentURL)
-        let service = SnapshotCaptureService(
-            snapshotStore: SnapshotStore(snapshotsDirectoryURL: temporaryDirectory.url)
-        )
-        let display = makeDisplayRecord()
-        let window = makeDiscoveredWindow(documentURL: documentURL)
-        let application = DiscoveredApplication(
-            bundleIdentifier: "com.example.editor",
-            pid: 88,
-            localizedName: "Editor",
-            windows: [window]
-        )
-
-        let record = try service.makeWindowRecord(
-            application: application,
-            window: window,
-            displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
-        )
-
-        let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
-        XCTAssertEqual(target.kind, .file)
-        XCTAssertEqual(target.url, documentURL.standardizedFileURL)
-        XCTAssertNil(record.openingConfiguration.manualTargets)
-    }
-
-    func testMakeWindowRecordCapturesExistingDocumentFolder() throws {
-        let temporaryDirectory = try TestTemporaryDirectory()
         let folderURL = temporaryDirectory.url.appendingPathComponent(
             "Project",
             isDirectory: true
@@ -455,23 +598,27 @@ final class SnapshotCaptureServiceTests: XCTestCase {
             snapshotStore: SnapshotStore(snapshotsDirectoryURL: temporaryDirectory.url)
         )
         let display = makeDisplayRecord()
-        let window = makeDiscoveredWindow(documentURL: folderURL)
-        let application = DiscoveredApplication(
-            bundleIdentifier: "com.example.editor",
-            pid: 88,
-            localizedName: "Editor",
-            windows: [window]
-        )
+        let cases: [(URL, WindowOpenTargetKind)] = [(documentURL, .file), (folderURL, .folder)]
+        for (url, kind) in cases {
+            let window = makeDiscoveredWindow(documentURL: url)
+            let application = DiscoveredApplication(
+                bundleIdentifier: "com.example.editor",
+                pid: 88,
+                localizedName: "Editor",
+                windows: [window]
+            )
 
-        let record = try service.makeWindowRecord(
-            application: application,
-            window: window,
-            displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
-        )
+            let record = try service.makeWindowRecord(
+                application: application,
+                window: window,
+                displayState: DisplayState(displays: [display], primaryDisplayID: display.id)
+            )
 
-        let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
-        XCTAssertEqual(target.kind, .folder)
-        XCTAssertEqual(target.url, folderURL.standardizedFileURL)
+            let target = try XCTUnwrap(record.openingConfiguration.automaticallyCapturedTargets.first)
+            XCTAssertEqual(target.kind, kind)
+            XCTAssertEqual(target.url, url.standardizedFileURL)
+            XCTAssertNil(record.openingConfiguration.manualTargets)
+        }
     }
 
     func testMakeWindowRecordCapturesExistingPathsFromInactiveTabTitles() throws {
@@ -574,6 +721,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         let browserWindow = makeDiscoveredWindow(
             title: "Browser",
             frame: frame,
+            cgWindowID: 123,
             zOrderHint: 0
         )
         let service = SnapshotCaptureService(
@@ -658,6 +806,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                                 makeDiscoveredWindow(
                                     title: "Downloads",
                                     frame: frame,
+                                    cgWindowID: 122,
                                     zOrderHint: 0
                                 )
                             ]
@@ -670,6 +819,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                                 makeDiscoveredWindow(
                                     title: "Document",
                                     frame: frame,
+                                    cgWindowID: 123,
                                     zOrderHint: 1
                                 )
                             ]
@@ -677,7 +827,8 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                     ],
                     diagnostics: []
                 )
-            }
+            },
+            restoreSpaceAccess: .unavailable
         )
         let context = SnapshotCaptureService.CaptureContext(
             runningApplications: [
@@ -720,7 +871,7 @@ final class SnapshotCaptureServiceTests: XCTestCase {
                             bundleIdentifier: "com.example.editor",
                             pid: 42,
                             localizedName: "Editor",
-                            windows: [makeDiscoveredWindow()]
+                            windows: [makeDiscoveredWindow(cgWindowID: 123)]
                         )
                     ],
                     diagnostics: []
@@ -816,6 +967,115 @@ final class SnapshotCaptureServiceTests: XCTestCase {
         XCTAssertEqual(result.unmatchedManualConfigurationCount, 0)
     }
 
+    func testUpdatePreservesCoreGraphicsManualTargetsWhenRecapturedThroughAXAfterRestart() throws {
+        let captured = makeSnapshot(windows: [
+            makeRecaptureWindow(source: .coreGraphics, subrole: nil),
+            makeRecaptureWindow(source: .coreGraphics, subrole: nil, cgWindowID: 202, title: "Companion")
+        ])
+        let previousWindow = try XCTUnwrap(captured.windows.first)
+        let manualTarget = WindowOpenTarget(
+            kind: .webURL,
+            url: try XCTUnwrap(URL(string: "https://example.com/project"))
+        )
+        let directory = try TestTemporaryDirectory()
+        let store = SnapshotStore(snapshotsDirectoryURL: directory.url)
+        try store.save(captured)
+        XCTAssertTrue(try store.setOpeningConfiguration(
+            snapshotID: captured.id,
+            windowID: previousWindow.id,
+            manualTargets: [manualTarget]
+        ))
+        let display = makeDisplayRecord()
+        let service = SnapshotCaptureService(
+            displayResolver: DisplayResolver(screenProvider: { [Self.screenSnapshot(from: display)] }),
+            snapshotStore: store,
+            discoveryResultProvider: {
+                WindowDiscoveryResult(applications: [DiscoveredApplication(
+                    bundleIdentifier: TestFixtures.bundleIdentifier,
+                    pid: 77,
+                    localizedName: "Editor",
+                    windows: [
+                        makeDiscoveredWindow(title: "Companion", cgWindowID: 302),
+                        makeDiscoveredWindow(title: "Editor", cgWindowID: 301)
+                    ]
+                )], diagnostics: [])
+            },
+            restoreSpaceAccess: .unavailable
+        )
+
+        let result = try service.updateSnapshot(id: captured.id)
+        let saved = try store.loadSnapshot(id: captured.id)
+        let updatedWindow = try XCTUnwrap(saved.windows.last)
+
+        XCTAssertEqual(saved.windows.map(\.id), captured.windows.reversed().map(\.id))
+        XCTAssertEqual(updatedWindow.id, previousWindow.id)
+        XCTAssertEqual(updatedWindow.openingConfiguration.manualTargets, [manualTarget])
+        XCTAssertEqual(updatedWindow.captureSignature.source, .accessibility)
+        XCTAssertEqual(updatedWindow.pidAtCapture, 77)
+        XCTAssertEqual(updatedWindow.captureSignature.cgWindowID, 301)
+        XCTAssertEqual(updatedWindow.subrole, "AXStandardWindow")
+        XCTAssertEqual(result.unmatchedManualConfigurationCount, 0)
+    }
+
+    func testUpdateDoesNotTransferCoreGraphicsManualTargetsAcrossDuplicateTitles() throws {
+        let manualTarget = WindowOpenTarget(
+            kind: .webURL,
+            url: try XCTUnwrap(URL(string: "https://example.com/"))
+        )
+        let previousWindow = makeRecaptureWindow(source: .coreGraphics, subrole: nil)
+            .withOpeningConfiguration(WindowOpeningConfiguration(manualTargets: [manualTarget]))
+        let capturedWindow = makeRecaptureWindow(source: .accessibility, pid: 77, cgWindowID: 301)
+        let duplicatePrevious = makeRecaptureWindow(source: .coreGraphics, subrole: nil, cgWindowID: 202)
+        let duplicateCaptured = makeRecaptureWindow(source: .accessibility, pid: 77, cgWindowID: 302)
+
+        for (previous, captured) in [
+            ([previousWindow, duplicatePrevious], [capturedWindow]),
+            ([previousWindow], [capturedWindow, duplicateCaptured])
+        ] {
+            let result = SnapshotWindowOpeningConfigurationMerger().merge(
+                previousWindows: previous,
+                capturedWindows: captured
+            )
+
+            XCTAssertEqual(result.windows.map(\.id), captured.map(\.id))
+            XCTAssertTrue(result.windows.allSatisfy { !$0.openingConfiguration.isManual })
+            XCTAssertEqual(result.unmatchedManualConfigurationCount, 1)
+        }
+    }
+
+    func testUpdateDoesNotTreatUnknownAXSubroleAsCoreGraphicsFallback() throws {
+        let sources: [WindowCaptureSource?] = [.accessibility, nil]
+        for source in sources {
+            let previousWindow = makeRecaptureWindow(source: source, subrole: nil)
+                .withOpeningConfiguration(WindowOpeningConfiguration(manualTargets: []))
+            let capturedWindow = makeRecaptureWindow(source: .accessibility, pid: 77, cgWindowID: 301)
+
+            let result = SnapshotWindowOpeningConfigurationMerger().merge(
+                previousWindows: [previousWindow],
+                capturedWindows: [capturedWindow]
+            )
+
+            XCTAssertEqual(result.windows.first?.id, capturedWindow.id)
+            XCTAssertFalse(result.windows.first?.openingConfiguration.isManual ?? true)
+            XCTAssertEqual(result.unmatchedManualConfigurationCount, 1)
+        }
+    }
+
+    func testUpdateRejectsCoreGraphicsToAXTransitionWithConflictingKnownSubrole() throws {
+        let previousWindow = makeRecaptureWindow(source: .coreGraphics, subrole: "AXDialog")
+            .withOpeningConfiguration(WindowOpeningConfiguration(manualTargets: []))
+        let capturedWindow = makeRecaptureWindow(source: .accessibility, pid: 77, cgWindowID: 301)
+
+        let result = SnapshotWindowOpeningConfigurationMerger().merge(
+            previousWindows: [previousWindow],
+            capturedWindows: [capturedWindow]
+        )
+
+        XCTAssertEqual(result.windows.first?.id, capturedWindow.id)
+        XCTAssertFalse(result.windows.first?.openingConfiguration.isManual ?? true)
+        XCTAssertEqual(result.unmatchedManualConfigurationCount, 1)
+    }
+
     func testUpdatePreservesManualAppOnlyConfiguration() throws {
         let previousWindow = makeWindowRecord(
             bundleIdentifier: "com.example.editor",
@@ -873,6 +1133,108 @@ final class SnapshotCaptureServiceTests: XCTestCase {
 
         XCTAssertTrue(result.windows.allSatisfy { !$0.openingConfiguration.isManual })
         XCTAssertEqual(result.unmatchedManualConfigurationCount, 1)
+    }
+
+    private func makeRecaptureWindow(
+        source: WindowCaptureSource?,
+        subrole: String? = "AXStandardWindow",
+        pid: Int32 = 42,
+        cgWindowID: UInt32 = 201,
+        title: String = "Editor"
+    ) -> WindowRecord {
+        WindowRecord(
+            bundleIdentifier: TestFixtures.bundleIdentifier,
+            pidAtCapture: pid,
+            windowTitle: title,
+            role: "AXWindow",
+            subrole: subrole,
+            frame: CGRectCodable(TestFixtures.windowFrame),
+            displayID: 1,
+            normalizedFrame: NormalizedRect(windowFrame: TestFixtures.windowFrame, displayFrame: makeDisplayRecord().frameRect),
+            zOrderHint: nil,
+            isMinimized: false,
+            isFullscreen: false,
+            isVisible: source != .coreGraphics,
+            captureSignature: WindowSignature(
+                bundleIdentifier: TestFixtures.bundleIdentifier,
+                owningPid: pid,
+                windowTitle: title,
+                role: "AXWindow",
+                subrole: subrole,
+                capturedFrame: CGRectCodable(TestFixtures.windowFrame),
+                cgWindowID: cgWindowID,
+                source: source
+            )
+        )
+    }
+
+    private func captureActiveWindows(
+        _ windows: [DiscoveredWindow],
+        bundleIdentifier: String = TestFixtures.bundleIdentifier,
+        memberships: [CGWindowID: Set<UInt64>] = [:],
+        inventory: RestoreSpaceInventory? = RestoreSpaceInventory(
+            activeByDisplay: [1: 1, 2: 3], ordinarySpaceIDs: [1, 2, 3, 4]),
+        unexposedWindows: [CGWindowMetadata] = []
+    ) throws -> Snapshot {
+        let directory = try TestTemporaryDirectory()
+        return try activeSpaceCaptureService(
+            store: SnapshotStore(snapshotsDirectoryURL: directory.url),
+            windows: windows, bundleIdentifier: bundleIdentifier, memberships: memberships, inventory: inventory,
+            unexposedWindows: unexposedWindows
+        ).captureSnapshot(named: "Active Spaces")
+    }
+
+    private func activeSpaceCaptureService(
+        store: SnapshotStore,
+        windows: [DiscoveredWindow],
+        bundleIdentifier: String = TestFixtures.bundleIdentifier,
+        memberships: [CGWindowID: Set<UInt64>],
+        inventory: RestoreSpaceInventory? = RestoreSpaceInventory(
+            activeByDisplay: [1: 1, 2: 3], ordinarySpaceIDs: [1, 2, 3, 4]),
+        unexposedWindows: [CGWindowMetadata] = []
+    ) -> SnapshotCaptureService {
+        let displays = [makeDisplayRecord(), makeDisplayRecord(id: 2)]
+        return SnapshotCaptureService(
+            displayResolver: DisplayResolver(screenProvider: { displays.map(Self.screenSnapshot) }),
+            snapshotStore: store,
+            browserTabCapturer: StubBrowserTabCapturer(result: BrowserTabCaptureResult(windows: [], issues: [])),
+            discoveryResultProvider: {
+                WindowDiscoveryResult(
+                    applications: [DiscoveredApplication(
+                        bundleIdentifier: bundleIdentifier, pid: 42,
+                        localizedName: "Editor", windows: windows)],
+                    diagnostics: [],
+                    unexposedApplications: [UnexposedApplicationWindows(
+                        bundleIdentifier: bundleIdentifier, pid: 42, windows: unexposedWindows)]
+                )
+            },
+            restoreSpaceAccess: RestoreSpaceAccess(
+                inventory: { _ in inventory },
+                membership: { memberships[$0] },
+                submitMove: { _, _ in XCTFail("Capture must never move a window"); return false },
+                windowMetadata: { _, id in unexposedWindows.first { $0.windowID == id } }
+            )
+        )
+    }
+
+    private func cgCandidate(
+        id: CGWindowID,
+        pid: pid_t = 42,
+        title: String? = "Hidden Editor",
+        layer: Int = 0,
+        isOnScreen: Bool = false,
+        bounds: CGRect = CGRect(x: 100, y: 80, width: 600, height: 450)
+    ) -> CGWindowMetadata {
+        CGWindowMetadata(
+            windowID: id,
+            processIdentifier: pid,
+            ownerName: "Editor",
+            layer: layer,
+            bounds: bounds,
+            title: title,
+            isOnScreen: isOnScreen,
+            zOrderHint: nil
+        )
     }
 
     private func makeNamingDate() throws -> Date {

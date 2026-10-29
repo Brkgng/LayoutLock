@@ -291,6 +291,7 @@ struct TelemetryLogEvent: Codable {
     let fullscreenWindowCount: Int?
     let visibleWindowCount: Int?
     let errorReason: String?
+    let timingsMilliseconds: [String: Double]?
     let details: [TelemetryLogDetail]
 
     init(
@@ -309,6 +310,7 @@ struct TelemetryLogEvent: Codable {
         fullscreenWindowCount: Int? = nil,
         visibleWindowCount: Int? = nil,
         errorReason: String? = nil,
+        timingsMilliseconds: [String: Double]? = nil,
         details: [TelemetryLogDetail] = []
     ) {
         self.id = id
@@ -326,6 +328,7 @@ struct TelemetryLogEvent: Codable {
         self.fullscreenWindowCount = fullscreenWindowCount
         self.visibleWindowCount = visibleWindowCount
         self.errorReason = errorReason
+        self.timingsMilliseconds = timingsMilliseconds
         self.details = details
     }
 }
@@ -336,6 +339,7 @@ struct TelemetryLogDetail: Codable, Equatable {
     let processIdentifier: Int32?
     let reason: String?
     let targetKind: String?
+    let targetPaths: [String]?
     let savedDisplayID: UInt32?
     let resolvedDisplayID: UInt32?
     let windowID: UUID?
@@ -356,6 +360,7 @@ struct TelemetryLogDetail: Codable, Equatable {
         processIdentifier: Int32? = nil,
         reason: String? = nil,
         targetKind: String? = nil,
+        targetPaths: [String]? = nil,
         savedDisplayID: UInt32? = nil,
         resolvedDisplayID: UInt32? = nil,
         windowID: UUID? = nil,
@@ -375,6 +380,7 @@ struct TelemetryLogDetail: Codable, Equatable {
         self.processIdentifier = processIdentifier
         self.reason = reason
         self.targetKind = targetKind
+        self.targetPaths = targetPaths
         self.savedDisplayID = savedDisplayID
         self.resolvedDisplayID = resolvedDisplayID
         self.windowID = windowID
@@ -404,7 +410,8 @@ extension TelemetryLogEvent {
             minimizedWindowCount: snapshot.windows.filter(\.isMinimized).count,
             fullscreenWindowCount: snapshot.windows.filter(\.isFullscreen).count,
             visibleWindowCount: snapshot.windows.filter(\.isVisible).count,
-            details: discoveryDiagnostics.map(TelemetryLogDetail.init(discoveryDiagnostic:))
+            details: snapshot.resourceTelemetryDetails +
+                discoveryDiagnostics.map(TelemetryLogDetail.init(discoveryDiagnostic:))
         )
     }
 
@@ -429,7 +436,7 @@ extension TelemetryLogEvent {
             skippedWindowCount: result.skippedItems.count,
             downgradedWindowCount: result.downgradedItems.count,
             displayFallbackCount: result.displayFallbacks.count,
-            details: result.telemetryDetails
+            details: snapshot.resourceTelemetryDetails + result.telemetryDetails
         )
     }
 
@@ -462,10 +469,26 @@ extension TelemetryLogEvent {
 
 }
 
+private extension Snapshot {
+    var resourceTelemetryDetails: [TelemetryLogDetail] {
+        windows.map { window in
+            TelemetryLogDetail(
+                kind: "windowResources",
+                bundleIdentifier: window.bundleIdentifier,
+                processIdentifier: window.pidAtCapture,
+                targetPaths: window.openingConfiguration.effectiveTargets.compactMap {
+                    $0.kind != .webURL && $0.url.isFileURL ? $0.url.path : nil
+                },
+                windowID: window.id
+            )
+        }
+    }
+}
+
 private extension TelemetryLogDetail {
     init(discoveryDiagnostic: WindowDiscoveryDiagnostic) {
         self.init(
-            kind: "windowRejected",
+            kind: discoveryDiagnostic.kind.rawValue,
             bundleIdentifier: discoveryDiagnostic.bundleIdentifier,
             processIdentifier: discoveryDiagnostic.processIdentifier,
             reason: discoveryDiagnostic.reason
@@ -505,7 +528,9 @@ private extension RestoreResult {
                 kind: "restoreTargetIssue",
                 bundleIdentifier: $0.bundleIdentifier,
                 reason: $0.reason.rawValue,
-                targetKind: $0.target.kind.rawValue
+                targetKind: $0.target.kind.rawValue,
+                targetPaths: $0.target.kind != .webURL && $0.target.url.isFileURL ? [$0.target.url.path] : nil,
+                windowID: $0.windowID
             )
         } +
         windowDiagnostics.map {

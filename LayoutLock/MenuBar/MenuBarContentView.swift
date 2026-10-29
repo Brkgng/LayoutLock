@@ -9,6 +9,7 @@ struct MenuBarContentView: View {
     @Environment(\.openURL) private var openURL
 
     let bootstrapErrorMessage: String?
+    let diagnosticLogController: DiagnosticLogController?
     @ObservedObject var permissionCoordinator: PermissionCoordinator
     @ObservedObject var permissionRouter: PermissionInterventionRouter
     @ObservedObject var onboardingController: OnboardingController
@@ -34,30 +35,12 @@ struct MenuBarContentView: View {
                 }
 
                 Divider()
-            } else if planStatusPresentation.isLimitReached {
-                Button {
-                    performPlanStatusAction()
-                } label: {
-                    Label("Upgrade to Pro to Save Layouts", systemImage: "lock")
-                }
-                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
-            } else {
-                Button("Save Current Layout") {
-                    handleSaveSnapshot()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
             }
 
-            if !planStatusPresentation.isProUnlocked && !planStatusPresentation.isLimitReached {
-                PlanStatusView(
-                    presentation: planStatusPresentation,
-                    style: .menuBar,
-                    action: performPlanStatusAction
-                )
-            }
-
-            if let status = snapshotMenuController.status, status.kind != .info {
+            if let progress = snapshotMenuController.restoreProgressMessage {
+                Text(progress)
+                    .font(.caption)
+            } else if let status = snapshotMenuController.status, status.kind != .info {
                 Text(status.message)
                     .font(.caption)
                     .foregroundStyle(
@@ -67,9 +50,40 @@ struct MenuBarContentView: View {
                     )
             }
 
-            Divider()
-
             snapshotSection
+
+            if !permissionCoordinator.shouldShowLimitedMode || !snapshotMenuController.snapshotSummaries.isEmpty {
+                Divider()
+            }
+
+            if !permissionCoordinator.shouldShowLimitedMode {
+                Button {
+                    if planStatusPresentation.isLimitReached {
+                        performUpgradeAction()
+                    } else {
+                        handleSaveSnapshot()
+                    }
+                } label: {
+                    if planStatusPresentation.isLimitReached {
+                        Label("Save Layout…", systemImage: "lock")
+                    } else {
+                        Text("Save Layout…")
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
+            }
+
+            if !snapshotMenuController.snapshotSummaries.isEmpty {
+                Menu("Update Layout") {
+                    ForEach(snapshotMenuController.snapshotSummaries) { snapshot in
+                        Button(shortMenuTitle(snapshot.name)) {
+                            handleUpdateSnapshot(snapshot)
+                        }
+                    }
+                }
+                .disabled(bootstrapErrorMessage != nil || snapshotMenuController.isOperating)
+            }
 
             Divider()
 
@@ -77,15 +91,27 @@ struct MenuBarContentView: View {
                 openDashboardWindow()
             }
 
-            Button("Settings") {
+            Button("Settings…") {
                 openSettingsWindow()
             }
             .keyboardShortcut(",", modifiers: .command)
 
-            Button(updateController.actionTitle) {
+            Divider()
+
+            if !planStatusPresentation.isProUnlocked {
+                Button("Upgrade to Pro…") {
+                    performUpgradeAction()
+                }
+            }
+
+            Button("\(updateController.actionTitle)…") {
                 updateController.checkForUpdates()
             }
             .disabled(!updateController.canCheckForUpdates)
+
+            Button("Send Feedback…") {
+                LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
+            }
 
             Divider()
 
@@ -114,11 +140,8 @@ struct MenuBarContentView: View {
     }
 
     @MainActor
-    private func performPlanStatusAction() {
-        switch PlanStatusActionResolver.action(
-            for: planStatusPresentation,
-            purchaseURL: LayoutLockProConfiguration.purchaseURL
-        ) {
+    private func performUpgradeAction() {
+        switch PlanStatusActionResolver.upgradeAction(purchaseURL: LayoutLockProConfiguration.purchaseURL) {
         case let .purchase(url):
             openURL(url)
         case .proSettings:
@@ -139,7 +162,7 @@ struct MenuBarContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Text("Layouts")
+            Text("Restore Layout")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -195,6 +218,22 @@ struct MenuBarContentView: View {
     }
 
     @MainActor
+    private func handleUpdateSnapshot(_ snapshot: SnapshotSummary) {
+        guard bootstrapErrorMessage == nil, !snapshotMenuController.isOperating else {
+            return
+        }
+
+        SnapshotNamePrompt.confirmUpdate(currentName: snapshot.name) { confirmed in
+            guard confirmed, bootstrapErrorMessage == nil, !snapshotMenuController.isOperating,
+                  requestMenuBarAuthorization(kind: .saveLayout) else {
+                return
+            }
+
+            snapshotMenuController.updateSnapshot(id: snapshot.id)
+        }
+    }
+
+    @MainActor
     private func handleRestoreSnapshot(id: UUID) {
         guard requestMenuBarAuthorization(kind: .restoreLayout) else {
             return
@@ -243,6 +282,7 @@ struct MenuBarContentView: View {
 #Preview {
         MenuBarContentView(
             bootstrapErrorMessage: nil,
+            diagnosticLogController: nil,
             permissionCoordinator: PermissionCoordinator(
                 trustChecker: AccessibilityTrustChecker { true }
             ),

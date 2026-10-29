@@ -17,9 +17,19 @@ private let transientWindowSubroles: Set<String> = [
 
 struct DiscoveredApplication {
     let bundleIdentifier: String
+    let applicationBundleURL: URL?
     let pid: pid_t
     let localizedName: String?
     let windows: [DiscoveredWindow]
+
+    init(bundleIdentifier: String, applicationBundleURL: URL? = nil, pid: pid_t,
+        localizedName: String?, windows: [DiscoveredWindow]) {
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationBundleURL = applicationBundleURL
+        self.pid = pid
+        self.localizedName = localizedName
+        self.windows = windows
+    }
 }
 
 struct DiscoveredWindow {
@@ -37,11 +47,13 @@ struct DiscoveredWindow {
     let isFullscreen: Bool
     let isMain: Bool
     let isVisible: Bool
+    // Only a direct AX identity confirmed against the owning process's CG metadata.
     let cgWindowID: CGWindowID?
     let ownerName: String?
     let cgLayer: Int?
     let zOrderHint: Int?
     let isOnScreen: Bool?
+    let isModal: Bool?
 
     init(
         axElement: AXUIElement,
@@ -62,7 +74,8 @@ struct DiscoveredWindow {
         ownerName: String?,
         cgLayer: Int?,
         zOrderHint: Int?,
-        isOnScreen: Bool?
+        isOnScreen: Bool?,
+        isModal: Bool? = nil
     ) {
         var resolvedDocumentURLs = documentURLs
         if let documentURL, !resolvedDocumentURLs.contains(documentURL) {
@@ -88,22 +101,35 @@ struct DiscoveredWindow {
         self.cgLayer = cgLayer
         self.zOrderHint = zOrderHint
         self.isOnScreen = isOnScreen
+        self.isModal = isModal
     }
+}
+
+struct UnexposedApplicationWindows {
+    let bundleIdentifier: String
+    let pid: pid_t
+    let windows: [CGWindowMetadata]
+    var documentURLs: [URL] = []
 }
 
 struct WindowDiscoveryResult {
     let applications: [DiscoveredApplication]
     let diagnostics: [WindowDiscoveryDiagnostic]
+    var unexposedApplications: [UnexposedApplicationWindows] = []
 }
 
 struct WindowDiscoveryDiagnostic: Equatable {
+    enum Kind: String { case windowRejected, applicationEnumeration }
+
     let bundleIdentifier: String?
     let processIdentifier: Int32?
     let reason: String
+    var kind: Kind = .windowRejected
 }
 
 struct RunningApplicationSnapshot {
     let bundleIdentifier: String?
+    let applicationBundleURL: URL?
     let processIdentifier: pid_t
     let localizedName: String?
     let isTerminated: Bool
@@ -111,12 +137,14 @@ struct RunningApplicationSnapshot {
 
     init(
         bundleIdentifier: String?,
+        applicationBundleURL: URL? = nil,
         processIdentifier: pid_t,
         localizedName: String?,
         isTerminated: Bool = false,
         activationPolicy: NSApplication.ActivationPolicy = .regular
     ) {
         self.bundleIdentifier = bundleIdentifier
+        self.applicationBundleURL = applicationBundleURL
         self.processIdentifier = processIdentifier
         self.localizedName = localizedName
         self.isTerminated = isTerminated
@@ -126,6 +154,7 @@ struct RunningApplicationSnapshot {
     init(application: NSRunningApplication) {
         self.init(
             bundleIdentifier: application.bundleIdentifier,
+            applicationBundleURL: application.bundleURL,
             processIdentifier: application.processIdentifier,
             localizedName: application.localizedName,
             isTerminated: application.isTerminated,
@@ -153,7 +182,10 @@ struct WindowDiscoveryEngine {
     private let runningApplicationsProvider: () -> [RunningApplicationSnapshot]
     private let appElementProvider: (pid_t) -> AXUIElement
     private let cgWindowMetadataProvider: (Set<pid_t>) -> [pid_t: [CGWindowMetadata]]
+    private let windowIDProvider: (AXUIElement) -> CGWindowID?
     private let applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
+    private let unityProjectURLProvider: (pid_t, URL?) -> URL?
+    private let unrealProjectURLProvider: (pid_t, URL?) -> URL?
     private let currentProcessIdentifier: pid_t
 
     init(
@@ -166,7 +198,14 @@ struct WindowDiscoveryEngine {
         currentProcessIdentifier: pid_t = ProcessInfo.processInfo.processIdentifier,
         runningApplicationsProvider: (() -> [RunningApplicationSnapshot])? = nil,
         appElementProvider: @escaping (pid_t) -> AXUIElement = AXUIElementCreateApplication,
-        cgWindowMetadataProvider: ((Set<pid_t>) -> [pid_t: [CGWindowMetadata]])? = nil
+        cgWindowMetadataProvider: ((Set<pid_t>) -> [pid_t: [CGWindowMetadata]])? = nil,
+        windowIDProvider: @escaping (AXUIElement) -> CGWindowID? = AXAttributeReader.windowID,
+        unityProjectURLProvider: @escaping (pid_t, URL?) -> URL? = {
+            UnityProjectResolver().resolve(processIdentifier: $0, documentURL: $1)
+        },
+        unrealProjectURLProvider: @escaping (pid_t, URL?) -> URL? = {
+            UnrealProjectResolver().resolve(processIdentifier: $0, documentURL: $1)
+        }
     ) {
         self.trustChecker = trustChecker
         self.attributeReader = attributeReader
@@ -179,6 +218,9 @@ struct WindowDiscoveryEngine {
             cgWindowMetadataReader.readWindowMetadata(processIdentifiers: $0)
         }
         self.currentProcessIdentifier = currentProcessIdentifier
+        self.unityProjectURLProvider = unityProjectURLProvider
+        self.unrealProjectURLProvider = unrealProjectURLProvider
+        self.windowIDProvider = windowIDProvider
     }
 
     func discoverRunningWindows() throws -> [DiscoveredApplication] {
@@ -188,6 +230,18 @@ struct WindowDiscoveryEngine {
     func discoverRunningWindowsWithDiagnostics() throws -> WindowDiscoveryResult {
         try discoverRunningWindowsWithDiagnostics(
             runningApplications: runningApplicationsProvider()
+        )
+    }
+
+    func discoverRunningWindowsWithDiagnostics(
+        bundleIdentifiers: Set<String>?,
+        processIdentifier: pid_t? = nil
+    ) throws -> WindowDiscoveryResult {
+        try discoverRunningWindowsWithDiagnostics(
+            runningApplications: runningApplicationsProvider().filter { application in
+                (bundleIdentifiers.map { $0.contains(application.bundleIdentifier ?? "") } ?? true) &&
+                    (processIdentifier == nil || application.processIdentifier == processIdentifier)
+            }
         )
     }
 
@@ -206,16 +260,39 @@ struct WindowDiscoveryEngine {
         )
 
         var diagnostics: [WindowDiscoveryDiagnostic] = []
+        var unexposedCGWindows = cgWindowMetadataByProcessIdentifier
         let applications = candidateApplications.compactMap { application in
             discoveredApplication(
                 from: application,
                 cgWindowMetadata: cgWindowMetadataByProcessIdentifier[application.processIdentifier] ?? [],
                 applicationDocumentURLResolver: preparedDocumentURLResolver,
-                diagnostics: &diagnostics
+                diagnostics: &diagnostics,
+                unexposedCGWindows: &unexposedCGWindows[application.processIdentifier, default: []]
             )
         }
 
-        return WindowDiscoveryResult(applications: applications, diagnostics: diagnostics)
+        let unexposedApplications = candidateApplications.compactMap { application -> UnexposedApplicationWindows? in
+            guard let bundleIdentifier = application.bundleIdentifier else { return nil }
+            let exposed = applications.first { $0.pid == application.processIdentifier }?.windows ?? []
+            // Without AX identities, a CG record could describe an already captured window.
+            guard !exposed.contains(where: { $0.cgWindowID == nil }) else { return nil }
+            let remaining = unexposedCGWindows[application.processIdentifier] ?? []
+            guard exposed.isEmpty || !remaining.isEmpty else { return nil }
+            var project = UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier) &&
+                remaining.contains(where: { $0.layer == 0 && $0.bounds.width > 0 && $0.bounds.height > 0 })
+                ? unityProjectURLProvider(application.processIdentifier, nil) : nil
+            if UnrealProjectResolver.isUnreal(bundleIdentifier: bundleIdentifier) {
+                // A starting Editor may have its project argument before it has any windows.
+                project = unrealProjectURLProvider(application.processIdentifier, nil)
+            }
+            return UnexposedApplicationWindows(
+                bundleIdentifier: bundleIdentifier,
+                pid: application.processIdentifier,
+                windows: remaining,
+                documentURLs: project.map { [$0] } ?? []
+            )
+        }
+        return WindowDiscoveryResult(applications: applications, diagnostics: diagnostics, unexposedApplications: unexposedApplications)
     }
 
     private func candidateApplications(
@@ -237,7 +314,8 @@ struct WindowDiscoveryEngine {
         from application: RunningApplicationSnapshot,
         cgWindowMetadata: [CGWindowMetadata],
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver,
-        diagnostics: inout [WindowDiscoveryDiagnostic]
+        diagnostics: inout [WindowDiscoveryDiagnostic],
+        unexposedCGWindows: inout [CGWindowMetadata]
     ) -> DiscoveredApplication? {
         guard let bundleIdentifier = application.bundleIdentifier else {
             return nil
@@ -259,7 +337,8 @@ struct WindowDiscoveryEngine {
             appIsHidden: appIsHidden,
             cgWindowMetadata: cgWindowMetadata,
             applicationDocumentURLResolver: applicationDocumentURLResolver,
-            diagnostics: &diagnostics
+            diagnostics: &diagnostics,
+            unexposedCGWindows: &unexposedCGWindows
         )
 
         guard !windows.isEmpty else {
@@ -268,6 +347,7 @@ struct WindowDiscoveryEngine {
 
         return DiscoveredApplication(
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: application.applicationBundleURL,
             pid: application.processIdentifier,
             localizedName: application.localizedName,
             windows: windows
@@ -281,20 +361,53 @@ struct WindowDiscoveryEngine {
         appIsHidden: Bool,
         cgWindowMetadata: [CGWindowMetadata],
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver,
-        diagnostics: inout [WindowDiscoveryDiagnostic]
+        diagnostics: inout [WindowDiscoveryDiagnostic],
+        unexposedCGWindows: inout [CGWindowMetadata]
     ) -> [DiscoveredWindow] {
-        let windows = attributeReader.elementArray(
-            from: appElement,
-            attribute: kAXWindowsAttribute as CFString
-        ) ?? []
+        let windowRead = attributeReader.windows(from: appElement)
+        var windows = windowRead.elements
+        if windows.isEmpty {
+            diagnostics.append(WindowDiscoveryDiagnostic(
+                bundleIdentifier: bundleIdentifier,
+                processIdentifier: Int32(processIdentifier),
+                reason: windowRead.error == .success
+                    ? "AXWindows returned no windows"
+                    : "AXWindows failed (\(windowRead.error.rawValue))",
+                kind: .applicationEnumeration
+            ))
+        }
+
+        // Some apps omit off-Space windows from AXWindows while exposing their main/focused handle.
+        for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            guard let window = attributeReader.element(from: appElement, attribute: attribute as CFString),
+                !windows.contains(where: { CFEqual($0, window) }),
+                let windowID = windowIDProvider(window),
+                cgWindowMetadata.contains(where: {
+                    $0.windowID == windowID && $0.processIdentifier == processIdentifier
+                }),
+                !windows.contains(where: { windowIDProvider($0) == windowID }) else { continue }
+            windows.append(window)
+        }
 
         var remainingCGWindowMetadata = cgWindowMetadata
         var discoveredWindows: [DiscoveredWindow] = []
 
         for window in windows {
+            let resolvedWindowID = windowIDProvider(window)
+            let identifiedMetadata = cgWindowMetadata.first {
+                $0.windowID != 0 && $0.windowID == resolvedWindowID && $0.processIdentifier == processIdentifier
+            }
+            // AX-observed windows must not re-enter through CG fallback after rejection.
+            if let identifiedMetadata {
+                unexposedCGWindows.removeAll { $0.windowID == identifiedMetadata.windowID }
+            } else {
+                // An unresolved AX identity makes this owner's remaining CG records ambiguous.
+                unexposedCGWindows.removeAll()
+            }
             guard let axWindowSnapshot = axWindowSnapshot(
                 from: window,
                 bundleIdentifier: bundleIdentifier,
+                processIdentifier: processIdentifier,
                 appIsHidden: appIsHidden,
                 applicationDocumentURLResolver: applicationDocumentURLResolver
             ) else {
@@ -308,19 +421,20 @@ struct WindowDiscoveryEngine {
                 continue
             }
 
-            let cgWindowMatch = bestCGWindowMatch(
+            // Geometry can supply presentation hints, but never an identity for Space operations.
+            let cgWindowMatch = identifiedMetadata ?? bestCGWindowMatch(
                 for: axWindowSnapshot,
                 candidates: remainingCGWindowMetadata
-            )
+            )?.metadata
 
             if let cgWindowMatch {
-                remainingCGWindowMetadata.remove(at: cgWindowMatch.index)
+                remainingCGWindowMetadata.removeAll { $0.windowID == cgWindowMatch.windowID }
             }
 
             if let rejectionReason = unmanageableWindowRejectionReason(
                 role: axWindowSnapshot.role,
                 subrole: axWindowSnapshot.subrole,
-                cgWindowMetadata: cgWindowMatch?.metadata
+                cgWindowMetadata: cgWindowMatch
             ) {
                 diagnostics.append(
                     WindowDiscoveryDiagnostic(
@@ -335,7 +449,8 @@ struct WindowDiscoveryEngine {
             discoveredWindows.append(discoveredWindow(
                 axElement: window,
                 from: axWindowSnapshot,
-                cgWindowMetadata: cgWindowMatch?.metadata
+                cgWindowMetadata: cgWindowMatch,
+                confirmedWindowID: identifiedMetadata?.windowID
             ))
         }
 
@@ -345,6 +460,7 @@ struct WindowDiscoveryEngine {
     private func axWindowSnapshot(
         from window: AXUIElement,
         bundleIdentifier: String,
+        processIdentifier: pid_t,
         appIsHidden: Bool,
         applicationDocumentURLResolver: ApplicationWindowDocumentURLResolver
     ) -> AXWindowSnapshot? {
@@ -380,7 +496,17 @@ struct WindowDiscoveryEngine {
             bundleIdentifier: bundleIdentifier,
             windowTitle: title
         )
-        let documentURLs = applicationDocumentURL.map { [$0] } ?? documentMetadata.urls
+        var documentURLs = applicationDocumentURL.map { [$0] } ?? documentMetadata.urls
+        if UnityProjectResolver.isUnity(bundleIdentifier: bundleIdentifier),
+            let project = unityProjectURLProvider(processIdentifier, documentURLs.first),
+            !documentURLs.contains(project) {
+            documentURLs.append(project)
+        }
+        if UnrealProjectResolver.isUnreal(bundleIdentifier: bundleIdentifier),
+            let project = unrealProjectURLProvider(processIdentifier, documentURLs.first),
+            !documentURLs.contains(project) {
+            documentURLs.append(project)
+        }
 
         return AXWindowSnapshot(
             documentURL: documentURLs.first,
@@ -408,7 +534,8 @@ struct WindowDiscoveryEngine {
                 from: window,
                 attribute: kAXMainAttribute as CFString
             ) ?? false,
-            isHidden: isHidden
+            isHidden: isHidden,
+            isModal: attributeReader.bool(from: window, attribute: kAXModalAttribute as CFString)
         )
     }
 
@@ -465,7 +592,8 @@ struct WindowDiscoveryEngine {
     private func discoveredWindow(
         axElement: AXUIElement,
         from axWindow: AXWindowSnapshot,
-        cgWindowMetadata: CGWindowMetadata?
+        cgWindowMetadata: CGWindowMetadata?,
+        confirmedWindowID: CGWindowID?
     ) -> DiscoveredWindow {
         let isVisible = cgWindowMetadata?.isOnScreen ?? !axWindow.isHidden
 
@@ -482,11 +610,12 @@ struct WindowDiscoveryEngine {
             isFullscreen: axWindow.isFullscreen,
             isMain: axWindow.isMain,
             isVisible: isVisible,
-            cgWindowID: cgWindowMetadata?.windowID,
+            cgWindowID: confirmedWindowID,
             ownerName: cgWindowMetadata?.ownerName,
             cgLayer: cgWindowMetadata?.layer,
             zOrderHint: cgWindowMetadata?.zOrderHint,
-            isOnScreen: cgWindowMetadata?.isOnScreen
+            isOnScreen: cgWindowMetadata?.isOnScreen,
+            isModal: axWindow.isModal
         )
     }
 
@@ -535,6 +664,7 @@ private struct AXWindowSnapshot {
     let isFullscreen: Bool
     let isMain: Bool
     let isHidden: Bool
+    let isModal: Bool?
 }
 
 struct WindowDocumentURLResolver {

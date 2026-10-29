@@ -65,17 +65,20 @@ struct WindowOpenTarget: Codable, Hashable, Identifiable {
     let kind: WindowOpenTargetKind
     let url: URL
     let title: String?
+    let isSelectedBrowserTab: Bool?
 
     init(
         id: UUID = UUID(),
         kind: WindowOpenTargetKind,
         url: URL,
-        title: String? = nil
+        title: String? = nil,
+        isSelectedBrowserTab: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
         self.url = url
         self.title = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue
+        self.isSelectedBrowserTab = isSelectedBrowserTab
     }
 
     var displayName: String {
@@ -116,7 +119,8 @@ struct WindowOpenTarget: Codable, Hashable, Identifiable {
             id: id,
             kind: kind,
             url: url,
-            title: kind == .webURL && url != self.url ? nil : title
+            title: kind == .webURL && url != self.url ? nil : title,
+            isSelectedBrowserTab: isSelectedBrowserTab
         )
     }
 }
@@ -288,6 +292,7 @@ struct WindowOpenTargetValidator {
 struct WindowRecord: Codable, Identifiable {
     let id: UUID
     let bundleIdentifier: String
+    let applicationBundleURL: URL?
     let pidAtCapture: Int32
     let windowTitle: String?
     let role: String
@@ -305,6 +310,7 @@ struct WindowRecord: Codable, Identifiable {
     init(
         id: UUID = UUID(),
         bundleIdentifier: String,
+        applicationBundleURL: URL? = nil,
         pidAtCapture: Int32,
         windowTitle: String?,
         role: String,
@@ -321,6 +327,7 @@ struct WindowRecord: Codable, Identifiable {
     ) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
+        self.applicationBundleURL = applicationBundleURL
         self.pidAtCapture = pidAtCapture
         self.windowTitle = windowTitle
         self.role = role
@@ -342,6 +349,7 @@ extension WindowRecord {
         WindowRecord(
             id: id,
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: applicationBundleURL,
             pidAtCapture: pidAtCapture,
             windowTitle: windowTitle,
             role: role,
@@ -362,6 +370,7 @@ extension WindowRecord {
         WindowRecord(
             id: id,
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: applicationBundleURL,
             pidAtCapture: pidAtCapture,
             windowTitle: windowTitle,
             role: role,
@@ -382,6 +391,7 @@ extension WindowRecord {
         WindowRecord(
             id: previousWindow.id,
             bundleIdentifier: bundleIdentifier,
+            applicationBundleURL: applicationBundleURL,
             pidAtCapture: pidAtCapture,
             windowTitle: windowTitle,
             role: role,
@@ -402,6 +412,11 @@ extension WindowRecord {
     }
 }
 
+enum WindowCaptureSource: String, Codable {
+    case accessibility
+    case coreGraphics
+}
+
 struct WindowSignature: Codable, Hashable {
     let bundleIdentifier: String
     let owningPid: Int32?
@@ -410,6 +425,7 @@ struct WindowSignature: Codable, Hashable {
     let subrole: String?
     let capturedFrame: CGRectCodable
     let cgWindowID: UInt32?
+    let source: WindowCaptureSource?
 
     init(
         bundleIdentifier: String,
@@ -418,7 +434,8 @@ struct WindowSignature: Codable, Hashable {
         role: String,
         subrole: String?,
         capturedFrame: CGRectCodable,
-        cgWindowID: UInt32?
+        cgWindowID: UInt32?,
+        source: WindowCaptureSource? = nil
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.owningPid = owningPid
@@ -427,6 +444,7 @@ struct WindowSignature: Codable, Hashable {
         self.subrole = subrole
         self.capturedFrame = capturedFrame
         self.cgWindowID = cgWindowID
+        self.source = source
     }
 
     init(application: DiscoveredApplication, window: DiscoveredWindow) {
@@ -437,7 +455,8 @@ struct WindowSignature: Codable, Hashable {
             role: window.role,
             subrole: window.subrole,
             capturedFrame: CGRectCodable(window.frame),
-            cgWindowID: window.cgWindowID
+            cgWindowID: window.cgWindowID,
+            source: .accessibility
         )
     }
 }

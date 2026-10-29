@@ -10,6 +10,27 @@ enum LayoutLockSupport {
     static let refundEmailSubject = "LayoutLock Refund Request"
     static let refundEmailBody = "Purchase email or Creem order ID:\n\n"
 
+    static func feedbackSubject(version: String?) -> String {
+        guard let version else { return "LayoutLock Feedback" }
+        return "LayoutLock Feedback (v\(version))"
+    }
+
+    @MainActor
+    static func openFeedbackEmail(diagnosticLogController: DiagnosticLogController?) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let subject = feedbackSubject(version: version)
+        if diagnosticLogController?.composeSupportEmail(
+            to: emailAddress,
+            subject: subject,
+            body: supportEmailBody
+        ) == true {
+            return
+        }
+
+        guard let url = mailtoURL(subject: subject, body: supportEmailBody) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     static func mailtoURL(subject: String, body: String) -> URL? {
         var components = URLComponents()
         components.scheme = "mailto"
@@ -205,18 +226,6 @@ struct SettingsView: View {
 
             Section {
                 SettingsValueRow(
-                    title: "Automatically Check for Updates:",
-                    systemImage: "arrow.triangle.2.circlepath",
-                    value: nil
-                ) {
-                    Toggle("", isOn: automaticallyChecksForUpdatesBinding)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-            }
-
-            Section {
-                SettingsValueRow(
                     title: "Suggest Layouts When Displays Change:",
                     systemImage: "display.2",
                     value: nil
@@ -259,7 +268,7 @@ struct SettingsView: View {
     private var integrationsTab: some View {
         Form {
             Section {
-                Text("Save Safari and Chrome tabs with layouts.")
+                Text("Save Safari, Chrome, and Brave tabs with layouts.")
                     .foregroundStyle(.secondary)
             }
 
@@ -427,8 +436,8 @@ struct SettingsView: View {
         switch browser {
         case .safari:
             return "Safari may include private tabs because it cannot reliably identify private windows."
-        case .chrome:
-            return "Chrome incognito windows are not captured."
+        case .chrome, .brave:
+            return "Private and incognito windows are not captured."
         }
     }
 
@@ -466,6 +475,12 @@ struct SettingsView: View {
                     value: entitlementController.isProUnlocked ? "Pro" : "Free",
                     valueTint: entitlementController.isProUnlocked ? .green : .secondary
                 )
+
+                if !entitlementController.isProUnlocked {
+                    Text("The Free plan includes up to \(LayoutLockProConfiguration.freeLayoutLimit) layouts. Upgrade to Pro to save more.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 if entitlementController.isProUnlocked,
                    let lastValidatedAt = entitlementController.entitlementState.lastValidatedAt {
@@ -638,11 +653,12 @@ struct SettingsView: View {
                 )
 
                 SettingsActionRow(
-                    title: LayoutLockSupport.emailAddress,
+                    title: "Contact Support",
                     systemImage: "arrow.up.forward",
                     leadingSystemImage: "envelope",
                     action: openSupportEmail
                 )
+                .help(LayoutLockSupport.emailAddress)
 
                 Text("A local diagnostic log is attached when available.")
                     .font(.caption)
@@ -672,7 +688,7 @@ struct SettingsView: View {
         Form {
             Section {
                 Text(
-                    "LayoutLock stores diagnostic logs locally on this Mac to help troubleshoot layout capture and restore issues. Logs are never uploaded automatically. Entries older than 7 days are removed, and the log file is capped at 5 MiB."
+                    "LayoutLock stores diagnostic logs locally on this Mac to help troubleshoot layout capture and restore issues. Logs include saved file and folder paths and are never uploaded automatically. Entries older than 7 days are removed, and the log file is capped at 5 MiB."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -738,13 +754,6 @@ struct SettingsView: View {
         Binding(
             get: { launchAtLoginController.isEnabled },
             set: { launchAtLoginController.setEnabled($0) }
-        )
-    }
-
-    private var automaticallyChecksForUpdatesBinding: Binding<Bool> {
-        Binding(
-            get: { updateController.automaticallyChecksForUpdates },
-            set: { updateController.setAutomaticallyChecksForUpdates($0) }
         )
     }
 
@@ -841,28 +850,8 @@ struct SettingsView: View {
         return "Version \(versionNumber) (\(buildNumber))"
     }
 
-    private var supportSubject: String {
-        guard let versionNumber else {
-            return "LayoutLock Feedback"
-        }
-
-        return "LayoutLock Feedback (v\(versionNumber))"
-    }
-
     private func openSupportEmail() {
-        if diagnosticLogController?.composeSupportEmail(
-            to: LayoutLockSupport.emailAddress,
-            subject: supportSubject,
-            body: LayoutLockSupport.supportEmailBody
-        ) == true {
-            return
-        }
-
-        guard let url = LayoutLockSupport.mailtoURL(
-            subject: supportSubject,
-            body: LayoutLockSupport.supportEmailBody
-        ) else { return }
-        NSWorkspace.shared.open(url)
+        LayoutLockSupport.openFeedbackEmail(diagnosticLogController: diagnosticLogController)
     }
 
     private func openRefundEmail() {

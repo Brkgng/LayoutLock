@@ -32,6 +32,24 @@ final class TestTemporaryDirectory {
     }
 }
 
+func makeApplicationBundle(in directory: URL, named name: String,
+    bundleIdentifier: String = TestFixtures.bundleIdentifier, executable: Bool = true) throws -> URL {
+    let application = directory.appendingPathComponent(name, isDirectory: true)
+    let contents = application.appendingPathComponent("Contents", isDirectory: true)
+    try FileManager.default.createDirectory(at: contents.appendingPathComponent("MacOS"),
+        withIntermediateDirectories: true)
+    let info = ["CFBundleIdentifier": bundleIdentifier, "CFBundlePackageType": "APPL",
+        "CFBundleExecutable": "Fixture"]
+    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        .write(to: contents.appendingPathComponent("Info.plist"))
+    if executable {
+        let executableURL = contents.appendingPathComponent("MacOS/Fixture")
+        try Data().write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+    }
+    return application
+}
+
 func makeDisplayRecord(
     id: UInt32 = 1,
     localizedName: String? = "Display",
@@ -58,6 +76,7 @@ func makeDisplayRecord(
 func makeWindowRecord(
     id: UUID = UUID(),
     bundleIdentifier: String = TestFixtures.bundleIdentifier,
+    applicationBundleURL: URL? = nil,
     pidAtCapture: Int32 = 42,
     windowTitle: String? = TestFixtures.windowTitle,
     role: String = TestFixtures.windowRole,
@@ -80,6 +99,7 @@ func makeWindowRecord(
     WindowRecord(
         id: id,
         bundleIdentifier: bundleIdentifier,
+        applicationBundleURL: applicationBundleURL,
         pidAtCapture: pidAtCapture,
         windowTitle: windowTitle,
         role: role,
@@ -159,7 +179,7 @@ func makeDiscoveredWindow(
     ownerName: String? = nil,
     cgLayer: Int? = nil,
     zOrderHint: Int? = nil,
-    isOnScreen: Bool? = nil
+    isOnScreen: Bool? = true
 ) -> DiscoveredWindow {
     DiscoveredWindow(
         axElement: axElement,

@@ -66,7 +66,8 @@ struct LayoutLockApp: App {
                 ),
                 restoreEngine: RestoreEngine(
                     snapshotStore: snapshotStore,
-                    telemetryLogger: telemetryLogger
+                    telemetryLogger: telemetryLogger,
+                    spaces: RestoreSpaceCoordinator(access: .live)
                 ),
                 operationOverlayPresenter: operationOverlayController,
                 entitlementProvider: entitlementController
@@ -192,6 +193,7 @@ struct LayoutLockApp: App {
         Window("LayoutLock", id: DashboardWindowSupport.sceneID) {
             DashboardView(
                 bootstrapErrorMessage: bootstrapErrorMessage,
+                diagnosticLogController: diagnosticLogController,
                 permissionCoordinator: permissionCoordinator,
                 permissionRouter: permissionRouter,
                 snapshotMenuController: snapshotMenuController,
@@ -218,6 +220,7 @@ struct LayoutLockApp: App {
         MenuBarExtra("LayoutLock", systemImage: "rectangle.3.group") {
             MenuBarContentView(
                 bootstrapErrorMessage: bootstrapErrorMessage,
+                diagnosticLogController: diagnosticLogController,
                 permissionCoordinator: permissionCoordinator,
                 permissionRouter: permissionRouter,
                 onboardingController: onboardingController,

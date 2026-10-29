@@ -57,6 +57,11 @@ struct DashboardAppSummary: Identifiable {
 
 struct DashboardInactiveAppSummary: Identifiable {
     let appSummary: DashboardAppSummary
+    let isAvailable: Bool
+
+    var statusText: String {
+        isAvailable ? "Not Running" : "App Not Found"
+    }
 
     var id: String {
         appSummary.id
@@ -138,6 +143,17 @@ enum DashboardSidebarSearch {
 enum DashboardSnapshotPresentation {
     static let windowOverlapThreshold = 0.35
 
+    static func windowListTitles(for snapshot: Snapshot) -> [UUID: String] {
+        let windowsByApp = Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier)
+        var titles: [UUID: String] = [:]
+        for windows in windowsByApp.values where windows.count > 1 {
+            for window in windows where window.openingConfiguration.effectiveTargets.isEmpty {
+                titles[window.id] = window.windowTitle?.nonEmptyValue
+            }
+        }
+        return titles
+    }
+
     static func displayPreviewModels(for snapshot: Snapshot) -> [DashboardDisplayPreviewModel] {
         let windowsByDisplayID = Dictionary(grouping: assignedWindows(in: snapshot)) { window in
             window.displayID ?? 0
@@ -207,11 +223,13 @@ enum DashboardSnapshotPresentation {
     static func inactiveAppSummaries(
         for snapshot: Snapshot,
         runningBundleIdentifiers: Set<String>,
+        unavailableBundleIdentifiers: Set<String> = [],
         identityResolver: (String) -> DashboardAppIdentity
     ) -> [DashboardInactiveAppSummary] {
         appSummaries(for: snapshot, identityResolver: identityResolver)
             .filter { !runningBundleIdentifiers.contains($0.bundleIdentifier) }
-            .map { DashboardInactiveAppSummary(appSummary: $0) }
+            .map { DashboardInactiveAppSummary(appSummary: $0,
+                isAvailable: !unavailableBundleIdentifiers.contains($0.bundleIdentifier)) }
     }
 
     static func windowPreviewGroups(
@@ -685,9 +703,10 @@ struct DashboardOpeningTargetCapabilities: Equatable {
         } else if fileBundleIdentifiers.contains(bundleIdentifier) {
             supportedKinds = [.file]
         } else {
-            supportedKinds = Set(
-                window.openingConfiguration.automaticallyCapturedTargets.map(\.kind)
-            )
+            let configuration = window.openingConfiguration
+            supportedKinds = Set<WindowOpenTargetKind>([.file, .folder])
+                .union(configuration.automaticallyCapturedTargets.map(\.kind))
+                .union((configuration.manualTargets ?? []).map(\.kind))
         }
 
         return DashboardOpeningTargetCapabilities(

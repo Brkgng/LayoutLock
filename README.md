@@ -14,10 +14,15 @@ repositioning windows across your displays.
 - **Display-relative positioning** — frames are stored as ratios per display, so
   layouts survive resolution and DPI changes and re-flow onto the right screen.
 - **Relaunches inactive apps** automatically when a layout is restored.
+- **macOS Spaces** (macOS 26 or newer) — save windows from the currently active
+  desktops and bring saved windows onto the active desktop on each display
+  during restore. Earlier macOS versions retain window positioning without
+  cross-Space movement.
 - **Per-layout global hotkeys** to restore a layout from anywhere.
 - **Pin layouts** to keep them at the top of the dashboard and menu bar lists.
-- **Browser tab capture** for Safari and Chrome (tabs are saved and reopened
-  alongside the rest of the layout).
+- **Browser tab capture** for Safari, Chrome, and Brave (tabs are saved and reopened
+  alongside the rest of the layout, with separate window groups and the selected
+  tab preserved).
 - **Opening targets** — reopen the documents, folders, and URLs a window had
   open.
 - **Dashboard preview** with a mini visual representation of each saved layout.
@@ -35,7 +40,7 @@ repositioning windows across your displays.
 - macOS 14.0 (Sonoma) or newer.
 - **Accessibility** permission (required to inspect and move windows).
 - **Automation (Apple Events)** permission (only required to save and restore
-  Safari/Chrome browser tabs).
+  Safari/Chrome/Brave browser tabs).
 
 ## Development
 
@@ -63,7 +68,7 @@ LayoutLock uses two distinct macOS permissions, requested independently:
 - **Accessibility** — needed to read window state and move/resize windows. Until
   it is granted, the app runs in a limited mode and prompts from the menu bar
   and onboarding window.
-- **Automation (Apple Events)** — needed only when you connect Safari or Chrome
+- **Automation (Apple Events)** — needed only when you connect Safari, Chrome, or Brave
   so LayoutLock can save and restore browser tabs.
 
 ## Free vs Pro
@@ -99,9 +104,10 @@ use the official Pro build. See
   directory.
 - **Diagnostic logs** are local records used to troubleshoot capture and restore
   issues. They are never uploaded automatically, window titles are filtered out,
-  entries older than 7 days are removed, and the file is capped at 5 MiB. Use the
-  Diagnostics Settings tab to export, reveal, or delete the log. Contact Support
-  attaches the local log when one is available.
+  and saved file and folder paths are included. Entries older than 7 days are
+  removed, and the file is capped at 5 MiB. Use the Diagnostics Settings tab to
+  export, reveal, or delete the log. Contact Support attaches the local log when
+  one is available.
 - **License data** — the entitlement receipt and a per-device credential are kept
   in the macOS Keychain.
 
@@ -109,10 +115,9 @@ LayoutLock contains no remote analytics or usage tracking.
 
 ## Updates
 
-When automatic checking is enabled, LayoutLock checks for updates on launch and
-periodically while it is running. Downloading and installing an update always
-requires your confirmation. Automatic checks can be turned off in General
-Settings.
+LayoutLock automatically checks for updates on launch and every three hours
+while it is running. Downloading and installing an update always requires your
+confirmation.
 
 ## Support
 

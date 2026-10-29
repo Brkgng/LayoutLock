@@ -29,7 +29,8 @@ struct DashboardSnapshotPreviewView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let windowTitles = DashboardSnapshotPresentation.windowListTitles(for: snapshot)
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Layout Preview")
                 .font(.headline)
 
@@ -41,6 +42,7 @@ struct DashboardSnapshotPreviewView: View {
                     ForEach(displayModels) { model in
                         DashboardDisplayPreviewColumn(
                             model: model,
+                            windowTitles: windowTitles,
                             appIdentityResolver: appIdentityResolver,
                             removeWindow: removeWindow,
                             editOpeningTargets: editOpeningTargets,
@@ -57,6 +59,7 @@ struct DashboardSnapshotPreviewView: View {
 
                 DashboardUnassignedWindowsView(
                     windows: unassignedWindows,
+                    windowTitles: windowTitles,
                     appIdentityResolver: appIdentityResolver,
                     removeWindow: removeWindow,
                     editOpeningTargets: editOpeningTargets
@@ -71,6 +74,7 @@ struct DashboardSnapshotPreviewView: View {
 
 private struct DashboardDisplayPreviewColumn: View {
     let model: DashboardDisplayPreviewModel
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -121,6 +125,7 @@ private struct DashboardDisplayPreviewColumn: View {
                 DashboardDisplayWindowList(
                     displayID: model.display.id,
                     windows: model.windows,
+                    windowTitles: windowTitles,
                     appIdentityResolver: appIdentityResolver,
                     removeWindow: removeWindow,
                     editOpeningTargets: editOpeningTargets,
@@ -301,6 +306,7 @@ private struct DashboardWindowLabel: View {
 private struct DashboardDisplayWindowList: View {
     let displayID: UInt32
     let windows: [WindowRecord]
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -325,6 +331,7 @@ private struct DashboardDisplayWindowList: View {
             ForEach(displayOrderedWindows) { window in
                 DashboardDisplayWindowRow(
                     window: window,
+                    savedWindowTitle: windowTitles[window.id],
                     identity: appIdentityResolver.identity(for: window.bundleIdentifier),
                     removeWindow: {
                         removeWindow(window)
@@ -413,6 +420,7 @@ private struct DashboardDisplayWindowList: View {
 
 private struct DashboardDisplayWindowRow: View {
     let window: WindowRecord
+    let savedWindowTitle: String?
     let identity: DashboardAppIdentity
     let removeWindow: () -> Void
     let editOpeningTargets: () -> Void
@@ -457,23 +465,20 @@ private struct DashboardDisplayWindowRow: View {
                     }
                 }
 
+                if let savedWindowTitle {
+                    Text(savedWindowTitle)
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(savedWindowTitle)
+                }
+
                 ForEach(window.openingConfiguration.effectiveTargets) { target in
                     DashboardOpeningTargetLabel(
                         target: target,
                         editOpeningTargets: editOpeningTargets
                     )
-                }
-
-                if openingTargetDescriptions.isEmpty,
-                   let description = DashboardSnapshotPresentation.primaryWindowDescription(
-                       for: window,
-                       applicationName: identity.name
-                   ) {
-                    Text(description)
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
             }
 
@@ -505,16 +510,12 @@ private struct DashboardDisplayWindowRow: View {
         }
     }
 
-    private var openingTargetDescriptions: [String] {
-        DashboardSnapshotPresentation.openingTargetDescriptions(for: window)
-    }
-
     private var openingTargetCapabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
     }
 
     private var rowAlignment: VerticalAlignment {
-        openingTargetDescriptions.isEmpty ? .center : .top
+        window.openingConfiguration.effectiveTargets.isEmpty ? .center : .top
     }
 
     private var showsActions: Bool {
@@ -540,6 +541,7 @@ private struct DashboardDisplayWindowRow: View {
 
 private struct DashboardUnassignedWindowsView: View {
     let windows: [WindowRecord]
+    let windowTitles: [UUID: String]
     let appIdentityResolver: DashboardAppIdentityResolver
     let removeWindow: (WindowRecord) -> Void
     let editOpeningTargets: (WindowRecord) -> Void
@@ -552,6 +554,7 @@ private struct DashboardUnassignedWindowsView: View {
             ForEach(windows) { window in
                 DashboardUnassignedWindowRow(
                     window: window,
+                    savedWindowTitle: windowTitles[window.id],
                     identity: appIdentityResolver.identity(for: window.bundleIdentifier),
                     editOpeningTargets: {
                         editOpeningTargets(window)
@@ -568,6 +571,7 @@ private struct DashboardUnassignedWindowsView: View {
 
 private struct DashboardUnassignedWindowRow: View {
     let window: WindowRecord
+    let savedWindowTitle: String?
     let identity: DashboardAppIdentity
     let editOpeningTargets: () -> Void
     let removeWindow: () -> Void
@@ -577,7 +581,7 @@ private struct DashboardUnassignedWindowRow: View {
     @FocusState private var isRemoveButtonFocused: Bool
 
     var body: some View {
-        HStack(alignment: openingTargetDescriptions.isEmpty ? .center : .top, spacing: 8) {
+        HStack(alignment: window.openingConfiguration.effectiveTargets.isEmpty ? .center : .top, spacing: 8) {
             Image(nsImage: identity.icon)
                 .resizable()
                 .frame(width: 18, height: 18)
@@ -588,23 +592,20 @@ private struct DashboardUnassignedWindowRow: View {
                     .font(.caption)
                     .lineLimit(1)
 
+                if let savedWindowTitle {
+                    Text(savedWindowTitle)
+                        .font(.caption2)
+                        .foregroundStyle(DashboardVisualStyle.supportingText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(savedWindowTitle)
+                }
+
                 ForEach(window.openingConfiguration.effectiveTargets) { target in
                     DashboardOpeningTargetLabel(
                         target: target,
                         editOpeningTargets: editOpeningTargets
                     )
-                }
-
-                if openingTargetDescriptions.isEmpty,
-                   let description = DashboardSnapshotPresentation.primaryWindowDescription(
-                       for: window,
-                       applicationName: identity.name
-                   ) {
-                    Text(description)
-                        .font(.caption2)
-                        .foregroundStyle(DashboardVisualStyle.supportingText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
             }
 
@@ -632,10 +633,6 @@ private struct DashboardUnassignedWindowRow: View {
         isHovered || isOpeningTargetsButtonFocused || isRemoveButtonFocused
     }
 
-    private var openingTargetDescriptions: [String] {
-        DashboardSnapshotPresentation.openingTargetDescriptions(for: window)
-    }
-
     private var openingTargetCapabilities: DashboardOpeningTargetCapabilities {
         DashboardOpeningTargetCapabilities.resolve(for: window)
     }
@@ -657,9 +654,9 @@ private struct DashboardOpeningTargetLabel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Edit opening targets to locate this missing \(target.kind == .folder ? "folder" : "file")")
+            .help("Edit saved resources to locate this missing \(target.kind == .folder ? "folder" : "file")")
             .accessibilityLabel("Missing \(target.compactDisplayName)")
-            .accessibilityHint("Edit opening targets for this saved window")
+            .accessibilityHint("Edit saved resources for this saved window")
         } else {
             targetName
                 .foregroundStyle(DashboardVisualStyle.supportingText)
@@ -679,7 +676,7 @@ private struct DashboardEditOpeningTargetsButton: View {
     let editOpeningTargets: () -> Void
 
     private var label: String {
-        hasTargets ? "Edit Opening Targets" : "Add Opening Targets"
+        hasTargets ? "Edit Saved Resources" : "Add Saved Resources"
     }
 
     var body: some View {

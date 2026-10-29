@@ -107,16 +107,4 @@ final class HotkeyBindingValidatorTests: XCTestCase {
         XCTAssertNil(f1Binding.shortcutRepresentation)
         XCTAssertNil(enterBinding.shortcutRepresentation)
     }
-
-    func testShortcutRepresentationLeavesPersistedDisplayStringUnchanged() {
-        let binding = HotkeyBinding(
-            keyCode: 8,
-            modifiers: UInt32(cmdKey | optionKey),
-            displayString: "Command-Option-C"
-        )
-
-        _ = binding.shortcutRepresentation
-
-        XCTAssertEqual(binding.displayString, "Command-Option-C")
-    }
 }

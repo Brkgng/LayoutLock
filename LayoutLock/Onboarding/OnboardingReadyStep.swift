@@ -81,7 +81,7 @@ struct OnboardingBrowserTabsCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Browser Tabs (Optional)")
                     .fontWeight(.medium)
-                Text("Save Safari or Chrome tabs with layouts.")
+                Text("Save Safari, Chrome, or Brave tabs with layouts.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

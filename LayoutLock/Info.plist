@@ -52,7 +52,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>LayoutLock uses Automation access only when you connect Safari or Chrome, so it can save browser tabs with your layouts.</string>
+	<string>LayoutLock uses Automation access only when you connect Safari, Chrome, or Brave, so it can save browser tabs with your layouts.</string>
 	<key>SUFeedURL</key>
 	<string>https://layoutlock.app/appcast.xml</string>
 	<key>SUPublicEDKey</key>
@@ -62,7 +62,7 @@
 	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>
-	<integer>86400</integer>
+	<integer>10800</integer>
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
 	<key>SUAutomaticallyUpdate</key>

@@ -3,6 +3,10 @@ on run arguments
     set appName to item 2 of arguments
 
     tell application "Finder"
+        repeat 50 times
+            if exists disk volumeName then exit repeat
+            delay 0.2
+        end repeat
         tell disk volumeName
             open
             set installerWindow to container window

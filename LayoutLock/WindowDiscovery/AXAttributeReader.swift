@@ -1,14 +1,53 @@
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 
 struct AXAttributeReader {
     typealias AttributeValueProvider = (AXUIElement, CFString) -> CFTypeRef?
+    private typealias WindowIDFunction = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
 
-    private let attributeValueProvider: AttributeValueProvider
+    // ApplicationServices is already linked. The private symbol remains optional at runtime.
+    private static let windowIDFunction: WindowIDFunction? = {
+        guard let handle = dlopen(nil, RTLD_LAZY) else { return nil }
+        defer { dlclose(handle) }
+        guard let symbol = dlsym(handle, "_AXUIElementGetWindow") else { return nil }
+        return unsafeBitCast(symbol, to: WindowIDFunction.self)
+    }()
 
-    init(attributeValueProvider: @escaping AttributeValueProvider = AXAttributeReader.copyAttributeValue) {
-        self.attributeValueProvider = attributeValueProvider
+    static func windowID(from element: AXUIElement) -> CGWindowID? {
+        guard let resolve = windowIDFunction else { return nil }
+        var windowID: CGWindowID = 0
+        guard resolve(element, &windowID) == .success, windowID != 0 else { return nil }
+        return windowID
+    }
+
+    struct AttributeResult {
+        let value: CFTypeRef?
+        let error: AXError
+    }
+
+    private let attributeResultProvider: (AXUIElement, CFString) -> AttributeResult
+
+    init(attributeValueProvider: AttributeValueProvider? = nil) {
+        if let attributeValueProvider {
+            self.attributeResultProvider = {
+                AttributeResult(value: attributeValueProvider($0, $1), error: .success)
+            }
+        } else {
+            self.attributeResultProvider = Self.copyAttributeResult
+        }
+    }
+
+    init(attributeResultProvider: @escaping (AXUIElement, CFString) -> AttributeResult) {
+        self.attributeResultProvider = attributeResultProvider
+    }
+
+    func windows(from element: AXUIElement) -> (elements: [AXUIElement], error: AXError) {
+        let result = attributeResultProvider(element, kAXWindowsAttribute as CFString)
+        guard result.error == .success else { return ([], result.error) }
+        guard let elements = result.value as? [AXUIElement] else { return ([], result.error) }
+        return (elements, .success)
     }
 
     func elementArray(
@@ -20,6 +59,12 @@ struct AXAttributeReader {
         }
 
         return value as? [AXUIElement]
+    }
+
+    func element(from element: AXUIElement, attribute: CFString) -> AXUIElement? {
+        guard let value = copyAttributeValue(from: element, attribute: attribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
     }
 
     func string(
@@ -144,24 +189,17 @@ struct AXAttributeReader {
         from element: AXUIElement,
         attribute: CFString
     ) -> CFTypeRef? {
-        attributeValueProvider(element, attribute)
+        let result = attributeResultProvider(element, attribute)
+        return result.error == .success ? result.value : nil
     }
 
-    private static func copyAttributeValue(
+    private static func copyAttributeResult(
         from element: AXUIElement,
         attribute: CFString
-    ) -> CFTypeRef? {
+    ) -> AttributeResult {
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, attribute, &value)
-
-        switch error {
-        case .success:
-            return value
-        case .attributeUnsupported, .noValue:
-            return nil
-        default:
-            return nil
-        }
+        return AttributeResult(value: value, error: error)
     }
 
     private func value<T>(

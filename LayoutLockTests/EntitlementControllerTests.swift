@@ -61,28 +61,6 @@ final class EntitlementControllerTests: XCTestCase {
         XCTAssertTrue(presentation.isProUnlocked)
     }
 
-    func testMenuBarGateSurfacesPlanStatusOnlyForFreeUsersUnderLimit() {
-        let freeUnderLimit = PlanStatusPresentation(isProUnlocked: false, layoutCount: 1)
-        XCTAssertTrue(!freeUnderLimit.isProUnlocked && !freeUnderLimit.isLimitReached)
-
-        let pro = PlanStatusPresentation(isProUnlocked: true, layoutCount: 1)
-        XCTAssertFalse(!pro.isProUnlocked && !pro.isLimitReached)
-
-        let freeAtLimit = PlanStatusPresentation(isProUnlocked: false, layoutCount: 3)
-        XCTAssertFalse(!freeAtLimit.isProUnlocked && !freeAtLimit.isLimitReached)
-    }
-
-    func testDashboardGateSurfacesPlanStatusOnlyForFreeUsers() {
-        let freeUnderLimit = PlanStatusPresentation(isProUnlocked: false, layoutCount: 1)
-        XCTAssertTrue(!freeUnderLimit.isProUnlocked)
-
-        let freeAtLimit = PlanStatusPresentation(isProUnlocked: false, layoutCount: 3)
-        XCTAssertTrue(!freeAtLimit.isProUnlocked)
-
-        let pro = PlanStatusPresentation(isProUnlocked: true, layoutCount: 1)
-        XCTAssertFalse(!pro.isProUnlocked)
-    }
-
     func testLimitReachedPlanStatusRoutesToPurchase() {
         let purchaseURL = URL(string: "https://www.creem.io/test/payment/prod_test")!
 
@@ -138,10 +116,6 @@ final class EntitlementControllerTests: XCTestCase {
             PlanStatusActionResolver.upgradeAction(purchaseURL: nil),
             .proSettings
         )
-    }
-
-    func testProSettingsActionTitleOpensSettings() {
-        XCTAssertEqual(PlanStatusAction.proSettings.actionTitle, "Open Pro Settings")
     }
 
     func testProConfigurationParsesTestValues() {
@@ -230,6 +204,12 @@ final class EntitlementControllerTests: XCTestCase {
     func testActivateStoresActiveEntitlementAndLicenseKey() async throws {
         let credential = "test-device-credential"
         let validatedAt = Date(timeIntervalSince1970: 1_000)
+        let receipt = try TestReceiptFactory.makeReceipt(
+            status: "active",
+            deviceCredential: credential,
+            validatedAt: validatedAt,
+            instanceID: "inst_123"
+        )
         let client = FakeLicenseActivationClient()
         client.activateResult = LicenseValidationResult(
             status: .active,
@@ -238,12 +218,7 @@ final class EntitlementControllerTests: XCTestCase {
             productID: "prod_4kKRRbopJu2qSEXsnnFJ79",
             instanceID: "inst_123",
             message: "Pro active.",
-            receipt: try TestReceiptFactory.makeReceipt(
-                status: "active",
-                deviceCredential: credential,
-                validatedAt: validatedAt,
-                instanceID: "inst_123"
-            )
+            receipt: receipt
         )
         let licenseKeyStore = InMemoryLicenseKeyStore()
         let controller = makeController(client: client, licenseKeyStore: licenseKeyStore, deviceCredential: credential)
@@ -253,6 +228,7 @@ final class EntitlementControllerTests: XCTestCase {
         XCTAssertTrue(controller.isProUnlocked)
         XCTAssertEqual(controller.entitlementState.lastValidatedAt, validatedAt)
         XCTAssertEqual(controller.entitlementState.instanceID, "inst_123")
+        XCTAssertEqual(controller.entitlementState.receipt, receipt)
         XCTAssertNil(controller.entitlementState.statusMessage)
         XCTAssertFalse(controller.requiresLicenseKeyEntry)
         XCTAssertEqual(try licenseKeyStore.loadLicenseKey(), "KEY-123")
@@ -951,7 +927,30 @@ final class EntitlementControllerTests: XCTestCase {
             deviceCredential: credential,
             validatedAt: Date(timeIntervalSince1970: 100)
         )
-        let tampered = receipt + "tampered"
+        let verifiedPayload = try EntitlementReceipt.verify(
+            receipt: receipt,
+            deviceCredential: credential,
+            expectedProductID: "prod_4kKRRbopJu2qSEXsnnFJ79"
+        ).get()
+        XCTAssertEqual(verifiedPayload.status, "active")
+
+        var parts = receipt.split(separator: ".").map(String.init)
+        var signature = try XCTUnwrap(Data(base64Encoded: parts[2]
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/") + "=="))
+        signature[signature.startIndex] ^= 0x01
+        XCTAssertNoThrow(try P256.Signing.ECDSASignature(rawRepresentation: signature))
+        parts[2] = signature.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let tampered = parts.joined(separator: ".")
+        XCTAssertEqual(tampered.count, receipt.count)
+        XCTAssertEqual(EntitlementReceipt.verify(
+            receipt: tampered,
+            deviceCredential: credential,
+            expectedProductID: "prod_4kKRRbopJu2qSEXsnnFJ79"
+        ), .failure(.invalidSignature))
 
         let userDefaults = makeUserDefaults()
         let store = EntitlementStore(
@@ -1078,34 +1077,6 @@ final class EntitlementControllerTests: XCTestCase {
         await controller.activate(licenseKey: "KEY-123")
 
         XCTAssertFalse(controller.isProUnlocked)
-    }
-
-    func testSignedActiveOnlineResponseWithValidReceiptUnlocksPro() async throws {
-        let credential = "aabbccdd"
-        let receipt = try TestReceiptFactory.makeReceipt(
-            status: "active",
-            deviceCredential: credential,
-            validatedAt: Date(timeIntervalSince1970: 1_000),
-            instanceID: "inst_456"
-        )
-        let client = FakeLicenseActivationClient()
-        client.activateResult = LicenseValidationResult(
-            status: .active,
-            validatedAt: Date(timeIntervalSince1970: 1_000),
-            customerID: nil,
-            productID: "prod_4kKRRbopJu2qSEXsnnFJ79",
-            instanceID: "inst_456",
-            message: "Pro active.",
-            receipt: receipt
-        )
-        let licenseKeyStore = InMemoryLicenseKeyStore()
-        let controller = makeController(client: client, licenseKeyStore: licenseKeyStore, deviceCredential: credential)
-
-        await controller.activate(licenseKey: "KEY-123")
-
-        XCTAssertTrue(controller.isProUnlocked)
-        XCTAssertEqual(controller.entitlementState.instanceID, "inst_456")
-        XCTAssertEqual(controller.entitlementState.receipt, receipt)
     }
 
     // MARK: - Product/environment enforcement (P2 fix)

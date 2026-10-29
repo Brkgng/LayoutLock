@@ -50,6 +50,7 @@ struct SnapshotCaptureService {
     let telemetryLogger: TelemetryLogging
     private let browserTabCapturer: BrowserTabCapturing
     private let discoveryResultProvider: (() throws -> WindowDiscoveryResult)?
+    private let restoreSpaceAccess: RestoreSpaceAccess
 
     init(
         windowDiscoveryEngine: WindowDiscoveryEngine = WindowDiscoveryEngine(),
@@ -57,7 +58,8 @@ struct SnapshotCaptureService {
         snapshotStore: SnapshotStore,
         telemetryLogger: TelemetryLogging = NoOpTelemetryLogger(),
         browserTabCapturer: BrowserTabCapturing = BrowserTabCaptureService(),
-        discoveryResultProvider: (() throws -> WindowDiscoveryResult)? = nil
+        discoveryResultProvider: (() throws -> WindowDiscoveryResult)? = nil,
+        restoreSpaceAccess: RestoreSpaceAccess = .live
     ) {
         self.windowDiscoveryEngine = windowDiscoveryEngine
         self.displayResolver = displayResolver
@@ -65,6 +67,7 @@ struct SnapshotCaptureService {
         self.telemetryLogger = telemetryLogger
         self.browserTabCapturer = browserTabCapturer
         self.discoveryResultProvider = discoveryResultProvider
+        self.restoreSpaceAccess = restoreSpaceAccess
     }
 
     func defaultSnapshotName(now: Date = Date()) -> String {
@@ -246,6 +249,7 @@ struct SnapshotCaptureService {
 
         return WindowRecord(
             bundleIdentifier: application.bundleIdentifier,
+            applicationBundleURL: application.applicationBundleURL,
             pidAtCapture: application.pid,
             windowTitle: window.title,
             role: window.role,
@@ -325,7 +329,10 @@ struct SnapshotCaptureService {
             applications: rawDiscoveryResult.applications.filter {
                 !excludedSnapshotBundleIdentifiers.contains($0.bundleIdentifier)
             },
-            diagnostics: rawDiscoveryResult.diagnostics
+            diagnostics: rawDiscoveryResult.diagnostics,
+            unexposedApplications: rawDiscoveryResult.unexposedApplications.filter {
+                !excludedSnapshotBundleIdentifiers.contains($0.bundleIdentifier)
+            }
         )
         let browserCaptureResult = browserTabCapturer.captureTabs(
             runningApplications: runningApplications
@@ -341,8 +348,23 @@ struct SnapshotCaptureService {
             throw SnapshotCaptureServiceError.noDisplaysAvailable
         }
 
+        let activeSpaces = restoreSpaceAccess.inventory(displayState.displays.map(\.id))
+            .map { Set($0.activeByDisplay.values) }
         let windows = try discoveryResult.applications.flatMap { application in
-            try application.windows.map { window in
+            try application.windows.filter { window in
+                // Unreal exposes loading/helper panels as untitled AXUnknown windows.
+                // Keep discovery intact so restore can still recognize an Editor that is loading.
+                if UnrealProjectResolver.isUntitledHelperWindow(window, bundleIdentifier: application.bundleIdentifier) {
+                    return false
+                }
+                guard let windowID = window.cgWindowID else { return false }
+                if let activeSpaces, !activeSpaces.isEmpty,
+                   let membership = restoreSpaceAccess.membership(windowID), !membership.isEmpty {
+                    return !membership.isDisjoint(with: activeSpaces)
+                }
+                // Only trust the on-screen hint when discovery confirmed this window's CG identity.
+                return window.isOnScreen == true
+            }.map { window in
                 try makeWindowRecord(
                     application: application,
                     window: window,
@@ -436,6 +458,20 @@ struct SnapshotWindowOpeningConfigurationMerger {
             previousIndexByCapturedIndex: &previousIndexByCapturedIndex,
             key: descriptiveWindowKey
         )
+        matchUniqueWindows(
+            previousWindows: previousWindows,
+            capturedWindows: capturedWindows,
+            unmatchedPreviousIndices: &unmatchedPreviousIndices,
+            unmatchedCapturedIndices: &unmatchedCapturedIndices,
+            previousIndexByCapturedIndex: &previousIndexByCapturedIndex,
+            key: windowTitleKey,
+            canMatch: { previous, captured in
+                previous.captureSignature.source == .coreGraphics &&
+                    previous.role == "AXWindow" && previous.subrole == nil &&
+                    captured.captureSignature.source == .accessibility &&
+                    captured.subrole == "AXStandardWindow"
+            }
+        )
         matchSingletonApplications(
             previousWindows: previousWindows,
             capturedWindows: capturedWindows,
@@ -467,7 +503,8 @@ struct SnapshotWindowOpeningConfigurationMerger {
         unmatchedPreviousIndices: inout Set<Int>,
         unmatchedCapturedIndices: inout Set<Int>,
         previousIndexByCapturedIndex: inout [Int: Int],
-        key: (WindowRecord) -> Key?
+        key: (WindowRecord) -> Key?,
+        canMatch: (WindowRecord, WindowRecord) -> Bool = { _, _ in true }
     ) {
         let previousGroups = Dictionary(grouping: unmatchedPreviousIndices) {
             key(previousWindows[$0])
@@ -482,7 +519,8 @@ struct SnapshotWindowOpeningConfigurationMerger {
                   let capturedIndices = capturedGroups[matchKey],
                   capturedIndices.count == 1,
                   let previousIndex = previousIndices.first,
-                  let capturedIndex = capturedIndices.first else {
+                  let capturedIndex = capturedIndices.first,
+                  canMatch(previousWindows[previousIndex], capturedWindows[capturedIndex]) else {
                 continue
             }
 
@@ -549,6 +587,18 @@ struct SnapshotWindowOpeningConfigurationMerger {
         )
     }
 
+    private func windowTitleKey(_ window: WindowRecord) -> WindowTitleKey? {
+        guard let title = window.windowTitle?.nonEmptyValue else {
+            return nil
+        }
+
+        return WindowTitleKey(
+            bundleIdentifier: window.bundleIdentifier,
+            title: title,
+            role: window.role
+        )
+    }
+
     private struct ProcessWindowKey: Hashable {
         let bundleIdentifier: String
         let owningPid: Int32
@@ -560,5 +610,11 @@ struct SnapshotWindowOpeningConfigurationMerger {
         let title: String
         let role: String
         let subrole: String?
+    }
+
+    private struct WindowTitleKey: Hashable {
+        let bundleIdentifier: String
+        let title: String
+        let role: String
     }
 }

@@ -1,6 +1,9 @@
 import AppKit
 
 struct SnapshotNamePrompt {
+    @MainActor
+    private static var updateConfirmation: UpdateConfirmation?
+
     static func prompt(defaultName: String) -> String? {
         prompt(
             title: "Save Current Layout",
@@ -19,6 +22,74 @@ struct SnapshotNamePrompt {
             confirmButtonTitle: "Rename",
             emptyNameFallback: nil
         )
+    }
+
+    @MainActor
+    static func confirmUpdate(currentName: String, completion: @escaping (Bool) -> Void) {
+        let confirmation = updateConfirmation ?? UpdateConfirmation()
+        confirmation.update(currentName: currentName, completion: completion)
+        updateConfirmation = confirmation
+
+        // Let menu tracking end before bringing the confirmation forward.
+        DispatchQueue.main.async {
+            guard updateConfirmation === confirmation else { return }
+            confirmation.show()
+        }
+    }
+
+    @MainActor
+    private final class UpdateConfirmation: NSObject, NSWindowDelegate {
+        private let alert: NSAlert
+        private let cancelButton: NSButton
+        private var completion: ((Bool) -> Void)?
+
+        override init() {
+            let alert = NSAlert()
+            self.alert = alert
+            alert.alertStyle = .warning
+            let updateButton = alert.addButton(withTitle: "Update")
+            updateButton.hasDestructiveAction = true
+            updateButton.keyEquivalent = ""
+            cancelButton = alert.addButton(withTitle: "Cancel")
+            cancelButton.keyEquivalent = "\u{1b}"
+            super.init()
+            updateButton.target = self
+            updateButton.action = #selector(confirm)
+            cancelButton.target = self
+            cancelButton.action = #selector(cancel)
+            alert.window.delegate = self
+        }
+
+        func update(currentName: String, completion: @escaping (Bool) -> Void) {
+            alert.messageText = "Update \"\(currentName)\"?"
+            alert.informativeText = "Replace the saved windows with your current setup. The name and hotkey will be kept."
+            self.completion = completion
+        }
+
+        func show() {
+            NSApp.activate(ignoringOtherApps: true)
+            centerAlertOnPointerScreen(alert)
+            alert.window.defaultButtonCell = cancelButton.cell as? NSButtonCell
+            alert.window.makeKeyAndOrderFront(nil)
+            alert.window.orderFrontRegardless()
+        }
+
+        @objc private func confirm() { finish(confirmed: true) }
+        @objc private func cancel() { finish(confirmed: false) }
+
+        func windowWillClose(_ notification: Notification) {
+            finish(confirmed: false)
+        }
+
+        private func finish(confirmed: Bool) {
+            guard let completion else { return }
+            self.completion = nil
+            alert.window.orderOut(nil)
+            if updateConfirmation === self {
+                updateConfirmation = nil
+            }
+            completion(confirmed)
+        }
     }
 
     private static func prompt(

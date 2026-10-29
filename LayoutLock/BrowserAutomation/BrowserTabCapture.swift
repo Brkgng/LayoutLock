@@ -112,8 +112,8 @@ struct BrowserTabCaptureService: BrowserTabCapturing {
         switch browser {
         case .safari:
             return safariScript
-        case .chrome:
-            return chromeScript
+        case .chrome, .brave:
+            return chromiumScript(for: browser)
         }
     }
 
@@ -131,14 +131,15 @@ struct BrowserTabCaptureService: BrowserTabCapturing {
             end repeat
             set windowBounds to bounds of browserWindow
             set normalizedBounds to {item 1 of windowBounds, item 2 of windowBounds, item 3 of windowBounds, item 4 of windowBounds}
-            set end of capturedWindows to {(id of browserWindow) as text, (name of browserWindow) as text, normalizedBounds, capturedTabs}
+            set end of capturedWindows to {(id of browserWindow) as text, (name of browserWindow) as text, normalizedBounds, capturedTabs, index of current tab of browserWindow}
         end repeat
         return capturedWindows
     end tell
     """
 
-    private static let chromeScript = """
-    tell application id "com.google.Chrome"
+    private static func chromiumScript(for browser: BrowserAutomationBrowser) -> String {
+    """
+    tell application id "\(browser.bundleIdentifier)"
         set capturedWindows to {}
         repeat with browserWindow in windows
             if mode of browserWindow is "normal" then
@@ -152,12 +153,13 @@ struct BrowserTabCaptureService: BrowserTabCapturing {
                 end repeat
                 set windowBounds to bounds of browserWindow
                 set normalizedBounds to {item 1 of windowBounds, item 2 of windowBounds, item 3 of windowBounds, item 4 of windowBounds}
-                set end of capturedWindows to {(id of browserWindow) as text, (name of browserWindow) as text, normalizedBounds, capturedTabs}
+                set end of capturedWindows to {(id of browserWindow) as text, (name of browserWindow) as text, normalizedBounds, capturedTabs, active tab index of browserWindow}
             end if
         end repeat
         return capturedWindows
     end tell
     """
+    }
 }
 
 struct BrowserScriptResultParser {
@@ -180,17 +182,21 @@ struct BrowserScriptResultParser {
             }
 
             let title = row.atIndex(2)?.stringValue?.nonEmptyValue
-            let capturedTabs = tabs.itemIndices.compactMap { tabIndex -> CapturedBrowserTab? in
+            var selectedTabIndex: Int?
+            let selectedSourceIndex = row.atIndex(5)?.int32Value
+            var capturedTabs: [CapturedBrowserTab] = []
+            for tabIndex in tabs.itemIndices {
                 guard let tab = tabs.atIndex(tabIndex),
                       let value = tab.atIndex(2)?.stringValue,
                       let URL = URL(string: value),
                       WindowOpenTargetValidator().webTarget(url: URL) != nil else {
-                    return nil
+                    continue
                 }
-                return CapturedBrowserTab(
+                if selectedSourceIndex == Int32(tabIndex) { selectedTabIndex = capturedTabs.count }
+                capturedTabs.append(CapturedBrowserTab(
                     title: tab.atIndex(1)?.stringValue?.nonEmptyValue,
                     URL: URL
-                )
+                ))
             }
 
             windows.append(
@@ -200,7 +206,8 @@ struct BrowserScriptResultParser {
                     title: title,
                     frame: frame,
                     frontToBackIndex: index - 1,
-                    tabs: capturedTabs
+                    tabs: capturedTabs,
+                    selectedTabIndex: selectedTabIndex
                 )
             )
         }

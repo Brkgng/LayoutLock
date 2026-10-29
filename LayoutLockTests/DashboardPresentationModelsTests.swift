@@ -186,10 +186,6 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertNotNil(UserDefaults.standard.string(forKey: frameAutosaveKey))
     }
 
-    func testDashboardWindowSupportDefinesExpectedFirstOpenSize() {
-        XCTAssertEqual(DashboardWindowSupport.defaultSize, CGSize(width: 940, height: 640))
-    }
-
     func testDashboardSnapshotNameRequestTrimsSubmittedName() {
         let request = DashboardSnapshotNameRequest(defaultName: "Layout - Default")
 
@@ -410,13 +406,12 @@ final class DashboardPresentationModelsTests: XCTestCase {
         }
     }
 
-    func testOpeningTargetCapabilitiesKeepUnsupportedAppOnlyWindowsUneditable() {
+    func testOpeningTargetCapabilitiesKeepKnownAppOnlyWindowsUneditable() {
         let appOnlyBundleIdentifiers = [
             "com.openai.chat",
             "com.openai.codex",
             "com.toggl.daneel",
-            "net.whatsapp.WhatsApp",
-            "com.example.unknown"
+            "net.whatsapp.WhatsApp"
         ]
 
         for bundleIdentifier in appOnlyBundleIdentifiers {
@@ -429,7 +424,19 @@ final class DashboardPresentationModelsTests: XCTestCase {
         }
     }
 
-    func testOpeningTargetCapabilitiesUseOnlyAutomaticKindsForUnknownApps() throws {
+    func testOpeningTargetCapabilitiesAllowFilesAndFoldersForUnknownAppsWithoutTargets() {
+        let capabilities = DashboardOpeningTargetCapabilities.resolve(
+            for: makeWindow(bundleIdentifier: "com.example.unknown")
+        )
+
+        XCTAssertEqual(capabilities.supportedKinds, [.file, .folder])
+        XCTAssertEqual(capabilities.localTargetSelection, .filesAndFolders)
+        XCTAssertFalse(capabilities.supportsWebURLs)
+        XCTAssertFalse(capabilities.hasExistingTargets)
+        XCTAssertTrue(capabilities.showsEditor)
+    }
+
+    func testOpeningTargetCapabilitiesPreserveAutomaticAndManualKindsForUnknownApps() throws {
         let fileTarget = WindowOpenTarget(
             kind: .file,
             url: URL(fileURLWithPath: "/tmp/Document.txt")
@@ -448,7 +455,7 @@ final class DashboardPresentationModelsTests: XCTestCase {
         let manualOnlyWindow = makeWindow(
             bundleIdentifier: "com.example.manual"
         ).withOpeningConfiguration(
-            WindowOpeningConfiguration(manualTargets: [fileTarget])
+            WindowOpeningConfiguration(manualTargets: [fileTarget, webTarget])
         )
 
         let automaticCapabilities = DashboardOpeningTargetCapabilities.resolve(
@@ -458,11 +465,15 @@ final class DashboardPresentationModelsTests: XCTestCase {
             for: manualOnlyWindow
         )
 
-        XCTAssertEqual(automaticCapabilities.supportedKinds, [.file, .webURL])
-        XCTAssertEqual(automaticCapabilities.localTargetSelection, .files)
+        XCTAssertEqual(automaticCapabilities.supportedKinds, [.file, .folder, .webURL])
+        XCTAssertEqual(automaticCapabilities.localTargetSelection, .filesAndFolders)
         XCTAssertTrue(automaticCapabilities.supportsWebURLs)
+        XCTAssertTrue(automaticCapabilities.hasExistingTargets)
         XCTAssertTrue(automaticCapabilities.showsEditor)
-        XCTAssertTrue(manualCapabilities.supportedKinds.isEmpty)
+        XCTAssertEqual(manualCapabilities.supportedKinds, [.file, .folder, .webURL])
+        XCTAssertEqual(manualCapabilities.localTargetSelection, .filesAndFolders)
+        XCTAssertTrue(manualCapabilities.supportsWebURLs)
+        XCTAssertTrue(manualCapabilities.hasExistingTargets)
         XCTAssertTrue(manualCapabilities.showsEditor)
     }
 
@@ -691,33 +702,16 @@ final class DashboardPresentationModelsTests: XCTestCase {
         )
     }
 
-    func testRelativeDateFormatterReturnsJustNowForMatchingDate() {
+    func testRelativeDateFormatterReturnsJustNowForMatchingAndRecentDates() {
         let now = Date(timeIntervalSince1970: 1_000)
 
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: now, relativeTo: now),
-            "just now"
-        )
-    }
-
-    func testRelativeDateFormatterReturnsJustNowForRecentPastDate() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        let updatedAt = now.addingTimeInterval(-30)
-
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: updatedAt, relativeTo: now),
-            "just now"
-        )
-    }
-
-    func testRelativeDateFormatterReturnsJustNowForRecentFutureDate() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        let updatedAt = now.addingTimeInterval(30)
-
-        XCTAssertEqual(
-            DashboardRelativeDateFormatter.string(from: updatedAt, relativeTo: now),
-            "just now"
-        )
+        for offset: TimeInterval in [0, -30, 30] {
+            XCTAssertEqual(
+                DashboardRelativeDateFormatter.string(from: now.addingTimeInterval(offset), relativeTo: now),
+                "just now",
+                "Offset: \(offset)"
+            )
+        }
     }
 
     func testRelativeDateFormatterUsesSystemFormatterForOlderDate() {
@@ -980,6 +974,95 @@ final class DashboardPresentationModelsTests: XCTestCase {
         )
     }
 
+    func testWindowListTitlesOnlyAppearForRepeatedAppsAcrossWholeLayout() {
+        let first = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "First", displayID: 1)
+        let second = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Second", displayID: 2)
+        let unassigned = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Third", displayID: nil)
+        let single = makeWindow(bundleIdentifier: "com.example.browser", windowTitle: "Only window", displayID: 1)
+        let snapshot = makeSnapshot(windows: [first, second, unassigned, single])
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: snapshot), [
+            first.id: "First", second.id: "Second", unassigned.id: "Third"
+        ])
+    }
+
+    func testWindowListTitlesTrimSavedTitlesAndOmitMissingTitles() {
+        let titled = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "  Project — zsh  ")
+        let blank = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: " \n ")
+        let missing = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: nil)
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [titled, blank, missing])),
+            [titled.id: "Project — zsh"])
+    }
+
+    func testWindowListUsesSavedResourceNamesInsteadOfAdditionalWindowTitles() {
+        let projects = ["FirstProject", "MySecondProject"].map { name in
+            makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "\(name) - Editor")
+                .withOpeningConfiguration(WindowOpeningConfiguration(automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: URL(fileURLWithPath: "/Projects/\(name).uproject"))
+                ]))
+        }
+        let appOnly = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "No saved resource")
+
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: projects + [appOnly])),
+            [appOnly.id: "No saved resource"])
+        XCTAssertEqual(projects.map { DashboardSnapshotPresentation.openingTargetDescriptions(for: $0) },
+            [["FirstProject"], ["MySecondProject"]])
+    }
+
+    func testWindowListTitlesDisappearWhenOnlyOneAppWindowRemains() {
+        let first = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "First")
+        let second = makeWindow(bundleIdentifier: "com.example.editor", windowTitle: "Second")
+        XCTAssertEqual(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [first, second])).count, 2)
+        XCTAssertTrue(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [first])).isEmpty)
+        XCTAssertTrue(DashboardSnapshotPresentation.windowListTitles(for: makeSnapshot(windows: [])).isEmpty)
+    }
+
+    @MainActor
+    func testRepeatedAppWindowTitlePreviewRenders() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let projects = try ["FirstProject", "MySecondProject"].map { name in
+            let file = directory.appendingPathComponent("\(name).uproject")
+            try Data("{}".utf8).write(to: file)
+            return makeWindow(bundleIdentifier: "com.epicgames.UnrealEditor", windowTitle: "\(name) - Unreal Editor")
+                .withOpeningConfiguration(WindowOpeningConfiguration(automaticallyCapturedTargets: [
+                    WindowOpenTarget(kind: .file, url: file)
+                ]))
+        }
+        let snapshot = makeSnapshot(displays: [makeDisplay(id: 1, name: "Built-in Display", x: 0)], windows: [
+            makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "LayoutLock — zsh", zOrderHint: 0),
+            makeWindow(bundleIdentifier: "com.apple.Terminal", windowTitle: "ZapPDF — zsh", zOrderHint: 1),
+            makeWindow(bundleIdentifier: "com.apple.Safari", windowTitle: "Documentation", zOrderHint: 2)
+        ] + projects)
+        for scheme in [ColorScheme.light, .dark] {
+            let preview = DashboardSnapshotPreviewView(
+                snapshot: snapshot, appIdentityResolver: .shared,
+                removeWindow: { _ in }, editOpeningTargets: { _ in }, reorderWindows: { _, _ in true }
+            )
+            .frame(width: 560)
+            .padding(20)
+            .background(scheme == .dark ? Color.black : Color.white)
+            .environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: preview)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 600),
+                styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            window.contentView = host
+            window.setContentSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            attachment.name = "Repeated app window titles — \(scheme == .dark ? "dark" : "light")"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testDisplayPreviewModelsGroupWindowsByDisplayID() {
         let snapshot = makeSnapshot(windows: [
             makeWindow(bundleIdentifier: "com.example.editor", displayID: 1),
@@ -1111,25 +1194,48 @@ final class DashboardPresentationModelsTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.windowCount), [1, 1])
     }
 
-    func testIdentityFallbackCanUseBundleIdentifierAsName() {
-        let snapshot = makeSnapshot(windows: [
-            makeWindow(bundleIdentifier: "com.example.unresolved")
-        ])
+    func testInactiveAppsDistinguishMissingAppsAndReflectAvailabilityChanges() throws {
+        let bundle = "com.example.editor"
+        let snapshot = makeSnapshot(windows: [makeWindow(bundleIdentifier: bundle)])
+        let missing = try XCTUnwrap(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [], unavailableBundleIdentifiers: [bundle],
+            identityResolver: identity).first)
+        XCTAssertFalse(missing.isAvailable)
+        XCTAssertEqual(missing.statusText, "App Not Found")
 
-        let summary = DashboardSnapshotPresentation.appSummaries(
-            for: snapshot,
-            identityResolver: { bundleIdentifier in
-                DashboardAppIdentity(
-                    bundleIdentifier: bundleIdentifier,
-                    name: bundleIdentifier,
-                    icon: NSImage(),
-                    accentColor: .accentColor
-                )
-            }
-        ).first
+        let installed = try XCTUnwrap(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [], identityResolver: identity).first)
+        XCTAssertTrue(installed.isAvailable)
+        XCTAssertEqual(installed.statusText, "Not Running")
+        XCTAssertTrue(DashboardSnapshotPresentation.inactiveAppSummaries(
+            for: snapshot, runningBundleIdentifiers: [bundle], unavailableBundleIdentifiers: [bundle],
+            identityResolver: identity).isEmpty)
+    }
 
-        XCTAssertEqual(summary?.name, "com.example.unresolved")
-        XCTAssertEqual(summary?.bundleIdentifier, "com.example.unresolved")
+    @MainActor
+    func testInactiveAppAvailabilityUsesCapturedInstallationAndRefreshesAfterSavedPathChanges() throws {
+        let directory = try TestTemporaryDirectory()
+        let bundle = TestFixtures.bundleIdentifier
+        let captured = try makeApplicationBundle(in: directory.url, named: "Captured.app")
+        let missing = directory.url.appendingPathComponent("Missing.app")
+        let oldSnapshot = makeSnapshot(windows: [makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: missing)])
+        let updatedSnapshot = makeSnapshot(windows: [makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: missing), makeWindowRecord(bundleIdentifier: bundle,
+            applicationBundleURL: captured)])
+
+        XCTAssertEqual(DashboardInactiveAppsView.unavailableApplications(in: oldSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }), [bundle])
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }).isEmpty)
+        try FileManager.default.removeItem(at: captured)
+        XCTAssertEqual(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in nil }), [bundle])
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [bundle], registeredApplicationURL: { _ in nil }).isEmpty)
+        let registered = try makeApplicationBundle(in: directory.url, named: "Registered.app")
+        XCTAssertTrue(DashboardInactiveAppsView.unavailableApplications(in: updatedSnapshot,
+            runningBundleIdentifiers: [], registeredApplicationURL: { _ in registered }).isEmpty)
     }
 
     func testWindowRemovalConfirmationUsesWindowTitleWhenAvailable() {

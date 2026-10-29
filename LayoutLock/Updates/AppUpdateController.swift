@@ -20,11 +20,8 @@ enum AppUpdateUserChoice {
 struct AppUpdateLaunchCheck {
     private(set) var hasChecked = false
 
-    mutating func performIfEnabled(
-        _ isEnabled: Bool,
-        check: () -> Void
-    ) {
-        guard isEnabled, !hasChecked else {
+    mutating func perform(check: () -> Void) {
+        guard !hasChecked else {
             return
         }
 
@@ -37,7 +34,6 @@ struct AppUpdateLaunchCheck {
 final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var availableUpdate: AvailableAppUpdate?
     @Published private(set) var canCheckForUpdates = false
-    @Published private(set) var automaticallyChecksForUpdates = false
 
     let presentationModel: AppUpdatePresentationModel
 
@@ -66,16 +62,16 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate 
 
         updater.publisher(for: \.canCheckForUpdates)
             .assign(to: &$canCheckForUpdates)
-        updater.publisher(for: \.automaticallyChecksForUpdates)
-            .assign(to: &$automaticallyChecksForUpdates)
 
         guard startingUpdater else {
             return
         }
 
+        enableAutomaticUpdateChecks()
+
         do {
             try updater.start()
-            launchCheck.performIfEnabled(updater.automaticallyChecksForUpdates) {
+            launchCheck.perform {
                 updater.checkForUpdatesInBackground()
             }
         } catch {
@@ -91,9 +87,8 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate 
         updater.checkForUpdates()
     }
 
-    func setAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
-        automaticallyChecksForUpdates = isEnabled
-        updater.automaticallyChecksForUpdates = isEnabled
+    func enableAutomaticUpdateChecks() {
+        updater.automaticallyChecksForUpdates = true
     }
 
     var updaterAutomaticallyChecksForUpdates: Bool {

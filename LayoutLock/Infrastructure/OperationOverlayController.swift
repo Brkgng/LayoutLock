@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import Symbols
 
 @MainActor
 enum OperationOverlayKind {
@@ -16,11 +17,48 @@ enum OperationOverlayKind {
     }
 }
 
+struct RestoreCompletionMessage {
+    let title: String
+    let summary: String
+    let issues: [RestoreCompletionIssue]
+    let hasIssues: Bool
+    var isFailure = false
+
+    var symbolName: String {
+        isFailure ? "xmark.circle.fill" : hasIssues ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+    }
+
+    var tintColor: NSColor {
+        isFailure ? .systemRed : hasIssues ? .systemOrange : .systemGreen
+    }
+}
+
+struct RestoreCompletionIssue {
+    let appName: String
+    let context: String?
+    let reason: String
+    var actions: [RestoreCompletionAction] = []
+}
+
+struct RestoreCompletionAction {
+    let title: String
+    let perform: @MainActor () -> Void
+}
+
 @MainActor
 protocol OperationOverlayPresenting: AnyObject {
     func showOverlay(kind: OperationOverlayKind) async
-    func showRestoreCompletion(summary: String, detail: String?)
+    func updateRestoreProgress(_ message: String, layoutName: String)
+    func showRestoreProgressInBackground(_ message: String, layoutName: String)
+    func showRestoreCompletion(_ completion: RestoreCompletionMessage)
+    func showBusyNotice(message: String)
     func hideOverlay()
+}
+
+extension OperationOverlayPresenting {
+    func showBusyNotice(message _: String) {}
+    func updateRestoreProgress(_: String, layoutName _: String) {}
+    func showRestoreProgressInBackground(_: String, layoutName _: String) {}
 }
 
 @MainActor
@@ -28,7 +66,7 @@ final class NoOpOperationOverlayPresenter: OperationOverlayPresenting {
     nonisolated init() {}
 
     func showOverlay(kind _: OperationOverlayKind) async {}
-    func showRestoreCompletion(summary _: String, detail _: String?) {}
+    func showRestoreCompletion(_: RestoreCompletionMessage) {}
     func hideOverlay() {}
 }
 
@@ -81,7 +119,8 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
 
         let capturedGeneration = generation
         let windows = NSScreen.screens.map { screen in
-            OperationOverlayWindow(screen: screen, message: kind.message)
+            // Saving can request access to a document's folder. Leave system prompts visible.
+            OperationOverlayWindow(screen: screen, message: kind.message, compact: kind == .save)
         }
         overlayWindows = windows
 
@@ -108,13 +147,29 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
         shownAt = Date()
     }
 
-    func showRestoreCompletion(summary: String, detail: String?) {
+    func updateRestoreProgress(_ message: String, layoutName: String) {
+        for window in overlayWindows {
+            (window.contentView as? OperationOverlayContentView)?.updateMessage(message, layoutName: layoutName)
+        }
+    }
+
+    func showRestoreProgressInBackground(_ message: String, layoutName: String) {
+        generation += 1
+        closeOverlayWindows()
+        guard let screen = screenContainingMousePointer() ?? NSScreen.main else { return }
+        let window = OperationOverlayWindow(screen: screen, message: message, layoutName: layoutName, compact: true)
+        overlayWindows = [window]
+        shownAt = Date()
+        window.orderFrontRegardless()
+    }
+
+    func showRestoreCompletion(_ completion: RestoreCompletionMessage) {
         generation += 1
         closeOverlayWindows()
         closeDisplayRestoreSuggestionWindow()
 
         let windows = NSScreen.screens.map { screen in
-            OperationCompletionToastWindow(screen: screen, summary: summary, detail: detail) { [weak self] in
+            OperationCompletionToastWindow(screen: screen, completion: completion) { [weak self] in
                 self?.dismissCompletionToast()
             }
         }
@@ -146,6 +201,10 @@ final class OperationOverlayController: OperationOverlayPresenting, StatusNotice
                 self.fadeOutAndCloseOverlayWindows()
             }
         }
+    }
+
+    func showBusyNotice(message: String) {
+        showStatusNotice(message: message, duration: 3)
     }
 
     func showStatusNotice(message: String, duration: TimeInterval) {
@@ -427,22 +486,22 @@ private final class StatusNoticeWindow: NSPanel {
     }
 }
 
-private final class OperationCompletionToastWindow: NSPanel {
+final class OperationCompletionToastWindow: NSPanel {
     init(
         screen: NSScreen,
-        summary: String,
-        detail: String?,
+        completion: RestoreCompletionMessage,
         onDismiss: @escaping () -> Void
     ) {
         let visibleFrame = screen.visibleFrame
-        let width = min(460, max(280, visibleFrame.width - 48))
-        let detailLineCount = detail?.split(separator: "\n", omittingEmptySubsequences: false).count ?? 0
-        let height = min(
-            visibleFrame.height - 48,
-            detail == nil ? 76 : 82 + CGFloat(detailLineCount * 18)
+        let width = min(460, visibleFrame.width - 48)
+        let toastContent = OperationCompletionToastContentView(
+            width: width,
+            completion: completion,
+            onDismiss: onDismiss
         )
+        let height = toastContent.fittingSize.height
         let frame = CGRect(
-            x: visibleFrame.midX - (width / 2),
+            x: visibleFrame.midX - width / 2,
             y: visibleFrame.maxY - height - 28,
             width: width,
             height: height
@@ -466,20 +525,12 @@ private final class OperationCompletionToastWindow: NSPanel {
             .stationary,
             .ignoresCycle
         ]
-        contentView = OperationCompletionToastContentView(
-            summary: summary,
-            detail: detail,
-            onDismiss: onDismiss
-        )
+        toastContent.frame = CGRect(origin: .zero, size: frame.size)
+        contentView = toastContent
     }
 
-    override var canBecomeKey: Bool {
-        false
-    }
-
-    override var canBecomeMain: Bool {
-        false
-    }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 private final class DisplayRestoreSuggestionToastWindow: NSPanel {
@@ -584,19 +635,27 @@ private final class DisplayRestoreSuggestionChooserToastWindow: NSPanel {
     }
 }
 
-private final class OperationOverlayWindow: NSPanel {
-    init(screen: NSScreen, message: String) {
+final class OperationOverlayWindow: NSPanel {
+    init(screen: NSScreen, message: String, layoutName: String? = nil, compact: Bool = false) {
+        let visibleFrame = screen.visibleFrame
+        let width = min(460, visibleFrame.width - 48)
+        let frame = compact ? CGRect(
+            x: visibleFrame.midX - width / 2,
+            y: visibleFrame.maxY - 160,
+            width: width,
+            height: 132
+        ) : screen.frame
         super.init(
-            contentRect: screen.frame,
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        setFrame(screen.frame, display: false)
+        setFrame(frame, display: false)
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        hasShadow = compact
         ignoresMouseEvents = true
         level = .statusBar
         collectionBehavior = [
@@ -605,7 +664,7 @@ private final class OperationOverlayWindow: NSPanel {
             .stationary,
             .ignoresCycle
         ]
-        contentView = OperationOverlayContentView(message: message)
+        contentView = OperationOverlayContentView(message: message, layoutName: layoutName, compact: compact, width: width)
     }
 
     override var canBecomeKey: Bool {
@@ -618,58 +677,51 @@ private final class OperationOverlayWindow: NSPanel {
 }
 
 private final class OperationCompletionToastContentView: NSView {
-    private let summary: String
-    private let detail: String?
+    private let completion: RestoreCompletionMessage
     private let onDismiss: () -> Void
 
-    init(summary: String, detail: String?, onDismiss: @escaping () -> Void) {
-        self.summary = summary
-        self.detail = detail
+    init(width: CGFloat, completion: RestoreCompletionMessage, onDismiss: @escaping () -> Void) {
+        self.completion = completion
         self.onDismiss = onDismiss
         super.init(frame: .zero)
-        buildView()
+        buildView(width: width)
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
+    required init?(coder: NSCoder) { nil }
 
-    private func buildView() {
-        let icon = NSImageView(image: NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil) ?? NSImage())
+    private func buildView(width: CGFloat) {
+        let icon = NSImageView(image: NSImage(systemSymbolName: completion.symbolName, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 22, weight: .semibold)
-        icon.contentTintColor = .systemGreen
+        icon.contentTintColor = completion.tintColor
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let closeButton = OperationToastCloseButton(target: self, action: #selector(dismiss))
+        let textWidth = width - 98
+        let titleLabel = NSTextField(wrappingLabelWithString: completion.title)
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.preferredMaxLayoutWidth = textWidth
 
-        let summaryLabel = NSTextField(labelWithString: summary)
-        summaryLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        summaryLabel.textColor = .labelColor
-        summaryLabel.maximumNumberOfLines = 2
-        summaryLabel.lineBreakMode = .byTruncatingTail
+        let summaryLabel = NSTextField(wrappingLabelWithString: completion.summary)
+        summaryLabel.font = .systemFont(ofSize: 12)
+        summaryLabel.textColor = .secondaryLabelColor
+        summaryLabel.preferredMaxLayoutWidth = textWidth
 
-        var labels = [summaryLabel]
-        if let detail {
-            let detailLabel = NSTextField(labelWithString: detail)
-            detailLabel.font = .systemFont(ofSize: 12, weight: .regular)
-            detailLabel.textColor = .secondaryLabelColor
-            detailLabel.maximumNumberOfLines = 6
-            detailLabel.lineBreakMode = .byTruncatingTail
-            labels.append(detailLabel)
-        }
-
-        let textStackView = NSStackView(views: labels)
+        let textStackView = NSStackView(views: [titleLabel, summaryLabel])
         textStackView.orientation = .vertical
         textStackView.alignment = .leading
         textStackView.spacing = 4
         textStackView.translatesAutoresizingMaskIntoConstraints = false
 
-        let stackView = NSStackView(views: [icon, textStackView])
-        stackView.orientation = .horizontal
-        stackView.alignment = .centerY
-        stackView.spacing = 12
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+        if !completion.issues.isEmpty {
+            let detailsButton = NSButton(title: "Details…", target: self, action: #selector(showDetails))
+            detailsButton.bezelStyle = .inline
+            detailsButton.setAccessibilityLabel("Show restore details")
+            textStackView.addArrangedSubview(detailsButton)
+        }
 
         let toastView = NSVisualEffectView()
         toastView.material = .hudWindow
@@ -681,35 +733,259 @@ private final class OperationCompletionToastContentView: NSView {
         toastView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(toastView)
-        toastView.addSubview(stackView)
+        toastView.addSubview(icon)
+        toastView.addSubview(textStackView)
         toastView.addSubview(closeButton)
 
         NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
             toastView.leadingAnchor.constraint(equalTo: leadingAnchor),
             toastView.trailingAnchor.constraint(equalTo: trailingAnchor),
             toastView.topAnchor.constraint(equalTo: topAnchor),
             toastView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 76),
 
             icon.widthAnchor.constraint(equalToConstant: 24),
             icon.heightAnchor.constraint(equalToConstant: 24),
+            icon.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
+            icon.topAnchor.constraint(equalTo: toastView.topAnchor, constant: 16),
             closeButton.widthAnchor.constraint(equalToConstant: OperationToastCloseButton.hitSize),
             closeButton.heightAnchor.constraint(equalToConstant: OperationToastCloseButton.hitSize),
-            closeButton.centerYAnchor.constraint(equalTo: toastView.centerYAnchor),
-            closeButton.trailingAnchor.constraint(
-                equalTo: toastView.trailingAnchor,
-                constant: -OperationToastCloseButton.edgeInset
-            ),
+            closeButton.topAnchor.constraint(equalTo: toastView.topAnchor, constant: 8),
+            closeButton.trailingAnchor.constraint(equalTo: toastView.trailingAnchor, constant: -4),
 
-            stackView.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
-            stackView.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -10),
-            stackView.topAnchor.constraint(greaterThanOrEqualTo: toastView.topAnchor, constant: 14),
-            stackView.bottomAnchor.constraint(lessThanOrEqualTo: toastView.bottomAnchor, constant: -14),
-            stackView.centerYAnchor.constraint(equalTo: toastView.centerYAnchor)
+            titleLabel.widthAnchor.constraint(equalToConstant: textWidth),
+            summaryLabel.widthAnchor.constraint(equalToConstant: textWidth),
+            textStackView.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+            textStackView.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -10),
+            textStackView.topAnchor.constraint(equalTo: toastView.topAnchor, constant: 14),
+            textStackView.bottomAnchor.constraint(equalTo: toastView.bottomAnchor, constant: -14)
         ])
+    }
+
+    @objc private func showDetails() {
+        let detailsWindow = RestoreCompletionDetailsWindow(completion: completion)
+        let screen = window?.screen ?? NSScreen.main
+        onDismiss()
+        NSApp.activate(ignoringOtherApps: true)
+        if let screen {
+            let visibleFrame = screen.visibleFrame
+            detailsWindow.setFrameOrigin(NSPoint(
+                x: visibleFrame.midX - detailsWindow.frame.width / 2,
+                y: visibleFrame.midY - detailsWindow.frame.height / 2
+            ))
+        }
+        detailsWindow.makeKeyAndOrderFront(nil)
+        NSApp.runModal(for: detailsWindow)
+        detailsWindow.close()
+        detailsWindow.selectedAction?.perform()
     }
 
     @objc private func dismiss() {
         onDismiss()
+    }
+}
+
+final class RestoreCompletionDetailsWindow: NSPanel, NSWindowDelegate {
+    private(set) var selectedAction: RestoreCompletionAction?
+
+    init(completion: RestoreCompletionMessage) {
+        let content = RestoreCompletionDetailsContentView(completion: completion)
+        super.init(
+            contentRect: CGRect(origin: .zero, size: content.fittingSize),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        title = "Restore Details"
+        isReleasedWhenClosed = false
+        content.frame = CGRect(origin: .zero, size: content.fittingSize)
+        contentView = content
+        delegate = self
+        content.onDismiss = { NSApp.stopModal() }
+        content.onAction = { [weak self] action in
+            self?.selectedAction = action
+            NSApp.stopModal()
+        }
+    }
+
+    func windowShouldClose(_: NSWindow) -> Bool {
+        NSApp.stopModal()
+        return false
+    }
+
+    override func cancelOperation(_: Any?) {
+        NSApp.stopModal()
+    }
+}
+
+private final class RestoreIssueStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
+private final class RestoreCompletionDetailsContentView: NSView {
+    var onDismiss: (() -> Void)?
+    var onAction: ((RestoreCompletionAction) -> Void)?
+
+    init(completion: RestoreCompletionMessage) {
+        super.init(frame: .zero)
+        let width: CGFloat = 560
+        let contentWidth = width - 48
+        let icon = NSImageView(image: NSImage(systemSymbolName: completion.symbolName, accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = .init(pointSize: 28, weight: .medium)
+        icon.contentTintColor = completion.tintColor
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = Self.label(completion.title, width: contentWidth - 48, size: 19, weight: .semibold)
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.toolTip = completion.title
+        let summaryLabel = Self.label(completion.summary, width: contentWidth - 48, size: 14)
+        summaryLabel.textColor = .secondaryLabelColor
+        let headings = NSStackView(views: [titleLabel, summaryLabel])
+        headings.orientation = .vertical
+        headings.alignment = .leading
+        headings.spacing = 6
+        let header = NSStackView(views: [icon, headings])
+        header.alignment = .top
+        header.spacing = 16
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let rows = RestoreIssueStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 12
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        rows.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        for issue in completion.issues {
+            let cardBorderWidth: CGFloat = 0.5
+            let textWidth = contentWidth - 32 - 2 * cardBorderWidth
+            let appLabel = Self.label(issue.appName, width: textWidth, size: 14, weight: .semibold)
+            let reasonLabel = Self.label(issue.reason, width: textWidth, size: 14)
+            var labels = [appLabel, reasonLabel]
+            if let context = issue.context {
+                let contextLabel = Self.label(context, width: textWidth, size: 12)
+                contextLabel.textColor = .secondaryLabelColor
+                contextLabel.setAccessibilityLabel("Saved window or target: \(context)")
+                labels.append(contextLabel)
+            }
+            let text = NSStackView(views: labels)
+            text.orientation = .vertical
+            text.alignment = .leading
+            text.spacing = 6
+            text.translatesAutoresizingMaskIntoConstraints = false
+            if !issue.actions.isEmpty {
+                let buttons = issue.actions.map { action in
+                    RestoreIssueActionButton(action: action, appName: issue.appName) { [weak self] in
+                        self?.onAction?(action)
+                    }
+                }
+                let actions = NSStackView(views: buttons)
+                actions.orientation = .horizontal
+                actions.spacing = 8
+                text.addArrangedSubview(actions)
+            }
+
+            let card = NSBox()
+            card.boxType = .custom
+            card.titlePosition = .noTitle
+            card.fillColor = .controlBackgroundColor
+            card.borderColor = .separatorColor
+            card.borderWidth = cardBorderWidth
+            card.cornerRadius = 10
+            card.contentViewMargins = .zero
+            card.translatesAutoresizingMaskIntoConstraints = false
+            let cardContent = card.contentView!
+            cardContent.addSubview(text)
+            NSLayoutConstraint.activate([
+                card.widthAnchor.constraint(equalToConstant: contentWidth),
+                text.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor, constant: 16),
+                text.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor, constant: -16),
+                text.topAnchor.constraint(equalTo: cardContent.topAnchor, constant: 14),
+                text.bottomAnchor.constraint(equalTo: cardContent.bottomAnchor, constant: -14)
+            ])
+            rows.addArrangedSubview(card)
+        }
+
+        rows.layoutSubtreeIfNeeded()
+        let rowsHeight = ceil(rows.fittingSize.height)
+        rows.frame = CGRect(x: 0, y: 0, width: contentWidth, height: rowsHeight)
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.documentView = rows
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        let doneButton = NSButton(title: "Done", target: self, action: #selector(dismiss))
+        doneButton.bezelStyle = .rounded
+        doneButton.controlSize = .large
+        doneButton.keyEquivalent = "\r"
+        doneButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(header)
+        addSubview(scrollView)
+        addSubview(doneButton)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            icon.widthAnchor.constraint(equalToConstant: 32),
+            icon.heightAnchor.constraint(equalToConstant: 32),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 24),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 24),
+            scrollView.heightAnchor.constraint(equalToConstant: min(rowsHeight, 320)),
+            doneButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 20),
+            doneButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            doneButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            doneButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 88)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    private static func label(
+        _ text: String,
+        width: CGFloat,
+        size: CGFloat,
+        weight: NSFont.Weight = .regular
+    ) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: size, weight: weight)
+        label.textColor = .labelColor
+        label.isSelectable = true
+        label.preferredMaxLayoutWidth = width
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return label
+    }
+
+    @objc private func dismiss() {
+        onDismiss?()
+    }
+}
+
+private final class RestoreIssueActionButton: NSButton {
+    private let onPerform: () -> Void
+
+    init(action: RestoreCompletionAction, appName: String, onPerform: @escaping () -> Void) {
+        self.onPerform = onPerform
+        super.init(frame: .zero)
+        title = action.title
+        bezelStyle = .rounded
+        target = self
+        self.action = #selector(performAction)
+        setAccessibilityLabel("\(action.title) for \(appName)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func performAction() {
+        onPerform()
     }
 }
 
@@ -1098,13 +1374,23 @@ private final class OperationToastCloseButton: NSButton {
     }
 }
 
-private final class OperationOverlayContentView: NSView {
-    private let message: String
+final class OperationOverlayContentView: NSView {
+    private let label: NSTextField
+    private let layoutLabel = NSTextField(labelWithString: "")
+    private let progressIndicator = NSImageView()
 
-    init(message: String) {
-        self.message = message
+    init(message: String, layoutName: String? = nil, compact: Bool = false, width: CGFloat) {
+        label = NSTextField(wrappingLabelWithString: message)
         super.init(frame: .zero)
-        buildView()
+        layoutLabel.stringValue = layoutName ?? ""
+        layoutLabel.isHidden = layoutName == nil
+        buildView(compact: compact, width: width)
+    }
+
+    func updateMessage(_ message: String, layoutName: String) {
+        label.stringValue = message
+        layoutLabel.stringValue = layoutName
+        layoutLabel.isHidden = false
     }
 
     @available(*, unavailable)
@@ -1112,7 +1398,7 @@ private final class OperationOverlayContentView: NSView {
         nil
     }
 
-    private func buildView() {
+    private func buildView(compact: Bool, width: CGFloat) {
         let backgroundEffectView = NSVisualEffectView()
         backgroundEffectView.material = .underWindowBackground
         backgroundEffectView.blendingMode = .behindWindow
@@ -1124,18 +1410,33 @@ private final class OperationOverlayContentView: NSView {
         dimView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
         dimView.translatesAutoresizingMaskIntoConstraints = false
 
-        let progressIndicator = NSProgressIndicator()
-        progressIndicator.style = .spinning
-        progressIndicator.controlSize = .regular
-        progressIndicator.startAnimation(nil)
+        progressIndicator.image = NSImage(systemSymbolName: "progress.indicator", accessibilityDescription: "In progress")
+        progressIndicator.symbolConfiguration = .init(pointSize: 24, weight: .medium)
+        progressIndicator.contentTintColor = compact ? .labelColor : .white
+        progressIndicator.addSymbolEffect(.variableColor.iterative, options: .repeating)
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
 
-        let label = NSTextField(labelWithString: message)
         label.font = .systemFont(ofSize: 15, weight: .semibold)
-        label.textColor = .white
+        label.textColor = compact ? .labelColor : .white
         label.alignment = .center
+        label.maximumNumberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.preferredMaxLayoutWidth = width - 48
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let stackView = NSStackView(views: [progressIndicator, label])
+        layoutLabel.font = .systemFont(ofSize: 12)
+        layoutLabel.textColor = compact ? .secondaryLabelColor : NSColor.white.withAlphaComponent(0.75)
+        layoutLabel.alignment = .center
+        layoutLabel.lineBreakMode = .byTruncatingMiddle
+        layoutLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let textStack = NSStackView(views: [label, layoutLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .centerX
+        textStack.spacing = 4
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let stackView = NSStackView(views: [progressIndicator, textStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
         stackView.spacing = 12
@@ -1150,26 +1451,34 @@ private final class OperationOverlayContentView: NSView {
         hudView.layer?.masksToBounds = true
         hudView.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(backgroundEffectView)
-        addSubview(dimView)
+        if !compact {
+            addSubview(backgroundEffectView)
+            addSubview(dimView)
+            NSLayoutConstraint.activate([
+                backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
+                backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                dimView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                dimView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                dimView.topAnchor.constraint(equalTo: topAnchor),
+                dimView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+        }
         addSubview(hudView)
         hudView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
-            backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            dimView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            dimView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            dimView.topAnchor.constraint(equalTo: topAnchor),
-            dimView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
             hudView.centerXAnchor.constraint(equalTo: centerXAnchor),
             hudView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            hudView.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
+            hudView.widthAnchor.constraint(equalToConstant: width),
+            hudView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor),
             hudView.heightAnchor.constraint(greaterThanOrEqualToConstant: 112),
+            progressIndicator.widthAnchor.constraint(equalToConstant: 24),
+            progressIndicator.heightAnchor.constraint(equalToConstant: 24),
+            label.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            layoutLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            textStack.widthAnchor.constraint(equalTo: stackView.widthAnchor),
 
             stackView.leadingAnchor.constraint(equalTo: hudView.leadingAnchor, constant: 24),
             stackView.trailingAnchor.constraint(equalTo: hudView.trailingAnchor, constant: -24),

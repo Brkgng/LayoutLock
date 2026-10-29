@@ -203,9 +203,19 @@ final class SnapshotMenuControllerMonetizationTests: XCTestCase {
         XCTAssertTrue(controller.renameSnapshotInline(id: snapshotID, newName: "Renamed"))
 
         let updateTask = controller.updateSnapshot(id: snapshotID)
+        XCTAssertNotNil(updateTask)
         await updateTask?.value
 
+        let updatedSnapshot = try store.loadSnapshot(id: snapshotID)
+        XCTAssertEqual(updatedSnapshot.id, snapshotID)
+        XCTAssertEqual(updatedSnapshot.name, "Renamed")
+        XCTAssertEqual(updatedSnapshot.windows.count, 1)
+        XCTAssertEqual(controller.status?.message, "Updated \"Renamed\" with 1 window.")
+        XCTAssertEqual(try store.listSummaries().count, 4)
+
         let restoreTask = controller.restoreSnapshot(id: snapshotID)
+        XCTAssertNotNil(restoreTask)
+        XCTAssertTrue(controller.isOperating)
         await restoreTask?.value
 
         controller.deleteSnapshot(id: snapshotID)
@@ -301,7 +311,7 @@ final class SnapshotMenuControllerMonetizationTests: XCTestCase {
                             bundleIdentifier: "com.example.editor",
                             pid: 42,
                             localizedName: "Editor",
-                            windows: [makeDiscoveredWindow()]
+                            windows: [makeDiscoveredWindow(cgWindowID: 123)]
                         )
                     ],
                     diagnostics: []
@@ -337,8 +347,10 @@ private final class MonetizationHotkeyRegistrar: HotkeyRegistering {
 }
 
 private struct NoOpRestoreApplicationLauncher: RestoreApplicationLaunching {
-    func requestLaunch(bundleIdentifier _: String) -> Bool {
-        false
+    func isAvailable(bundleIdentifier: String) -> Bool { true }
+
+    func requestLaunch(bundleIdentifier _: String, preferredApplicationURL: URL?) async -> pid_t? {
+        nil
     }
 }
 

@@ -5,11 +5,13 @@ struct DashboardInactiveAppsView: View {
     let snapshot: Snapshot
     let appIdentityResolver: DashboardAppIdentityResolver
     let runningBundleIdentifiers: Set<String>
+    @State private var unavailableBundleIdentifiers: Set<String> = []
 
     private var inactiveApps: [DashboardInactiveAppSummary] {
         DashboardSnapshotPresentation.inactiveAppSummaries(
             for: snapshot,
             runningBundleIdentifiers: runningBundleIdentifiers,
+            unavailableBundleIdentifiers: unavailableBundleIdentifiers,
             identityResolver: { appIdentityResolver.identity(for: $0) }
         )
     }
@@ -31,7 +33,7 @@ struct DashboardInactiveAppsView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("LayoutLock will try to open these apps before restoring. If an app does not open, its saved windows may be skipped.")
+                    Text("LayoutLock will try to open installed apps before restoring. Apps that cannot be found are skipped; their saved windows stay in this layout.")
                         .font(.footnote)
                         .foregroundStyle(DashboardVisualStyle.supportingText)
 
@@ -44,6 +46,35 @@ struct DashboardInactiveAppsView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .dashboardCardSurface(cornerRadius: 14)
+        .onAppear(perform: refreshAvailability)
+        .onChange(of: snapshot.windows.map(\.bundleIdentifier)) { _, _ in
+            refreshAvailability()
+        }
+        .onChange(of: snapshot.windows.map(\.applicationBundleURL)) { _, _ in
+            refreshAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshAvailability()
+        }
+        .onChange(of: runningBundleIdentifiers) { _, _ in
+            refreshAvailability()
+        }
+    }
+
+    private func refreshAvailability() {
+        unavailableBundleIdentifiers = Self.unavailableApplications(in: snapshot,
+            runningBundleIdentifiers: runningBundleIdentifiers,
+            registeredApplicationURL: { NSWorkspace.shared.existingApplicationURL(withBundleIdentifier: $0) })
+    }
+
+    static func unavailableApplications(in snapshot: Snapshot, runningBundleIdentifiers: Set<String>,
+        registeredApplicationURL: (String) -> URL?) -> Set<String> {
+        Set(Dictionary(grouping: snapshot.windows, by: \.bundleIdentifier).filter { bundle, windows in
+            !runningBundleIdentifiers.contains(bundle) &&
+                !windows.contains(where: {
+                    $0.applicationBundleURL?.validatedApplicationBundleURL(withBundleIdentifier: bundle) != nil
+                }) && registeredApplicationURL(bundle) == nil
+        }.keys)
     }
 }
 
@@ -70,12 +101,13 @@ private struct DashboardInactiveAppRow: View {
 
             Spacer(minLength: 12)
 
-            Text("Not Running")
+            Text(app.statusText)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(DashboardVisualStyle.supportingText)
+                .foregroundStyle(app.isAvailable ? DashboardVisualStyle.supportingText : .orange)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(.quaternary, in: Capsule())
+                .help(app.isAvailable ? "LayoutLock will try to open this app." : "Saved windows will be skipped until this app becomes available.")
         }
         .padding(.vertical, 4)
     }
